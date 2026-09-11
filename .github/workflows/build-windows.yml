@@ -1,0 +1,47 @@
+name: Build Windows Installer
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build Windows x64 Installer (.exe)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build dependencies & Rust host-core
+        run: |
+          pnpm --filter '@pi-desktop/desktop^...' build
+          cargo build --release --manifest-path Cargo.toml -p host-core
+          pnpm -C packages/agent-runtime bundle
+
+      - name: Build Electron Windows App
+        run: |
+          pnpm --filter @pi-desktop/desktop exec electron-vite build
+          pnpm --filter @pi-desktop/desktop exec electron-builder --win --publish never
+
+      - name: Upload Windows Installer (.exe)
+        uses: actions/upload-artifact@v4
+        with:
+          name: PI-Desktop-Windows-x64-Setup
+          path: apps/desktop/release/*.exe
+          if-no-files-found: error
