@@ -65,10 +65,9 @@ destination, chat as the home surface, tools and permissions inline.
   the right outside the traffic-light safety area; no logo/title is rendered
   there, including in fullscreen. When the work panel is open, native window
   controls stay viewport-fixed at the window's right edge and the panel header
-  reserves that band plus the work-panel toggle. The panel header is a
-  horizontally scrollable tab strip followed by a fixed `+` add trigger; tab
-  close actions stay in the tabs, so the Windows native close control is not
-  visually duplicated by a second header `×`.
+  reserves that band plus the work-panel toggle. Resource switching and close
+  actions stay together in the panel menu, so the Windows native close control
+  is not visually duplicated by a second header `×`.
   Windows/Linux use a menu-free frameless 46px row with sidebar actions on the
   left and accessible minimize / maximize-or-restore / close controls at the
   right edge of the conversation pane when the panel is closed (D129). When
@@ -78,21 +77,19 @@ destination, chat as the home surface, tools and permissions inline.
   notification action; the durable local inbox opens from the sidebar footer
   bell instead (D130/D117).
 - **Work panel**: docked right column (not an overlay) opened by an artifact,
-  the viewport-fixed toggle, or `Cmd/Ctrl + J`. File, URL, browser-preview, and
-  successful workspace-edit artifacts create their resources atomically. The
-  46px content header exposes a tablist and a fixed `+` trigger. Its tokenized
-  60px right-side safe lane plus separated action rail keep the trigger distinct
-  from the viewport-fixed work-panel toggle. Clicking `+` creates and activates
-  a unique New launcher tab; its body presents the same data-driven Review and
-  plugin-view rows as buttons, so the user chooses a destination in the page
-  instead of opening a dropdown. Selecting a row replaces that launcher tab with
-  the destination or activates an existing singleton. File paths stay distinct
-  while plugin views deduplicate by view reference. The viewport-fixed toggle
-  and `Cmd/Ctrl + J` both toggle the active session's retained panel context —
+  the viewport-fixed toggle, or `Cmd/Ctrl + J`. File, URL, browser-preview, and successful workspace-edit
+  artifacts create their resources atomically. A combined panel entry keeps
+  Browser and in-scope plugin views available while
+  the panel is visible; opened-but-inactive views show a quiet dot and the active
+  resource has a restrained edge marker. The 46px content header names the
+  current resource and opens a compact switcher for all current session
+  resources. Resource close actions live on the switcher's menu rows. File
+  paths stay distinct in that switcher while
+  plugin views deduplicate by view reference. The viewport-fixed toggle and
+  `Cmd/Ctrl + J` both toggle the active session's retained panel context —
   revealing it without creating a resource tab and collapsing it without
   discarding one; the create trigger remains unavailable while the panel is
-  closed. Closing the final tab keeps the panel open and shows the New launcher.
-  A
+  closed. A
   successful active-session workspace Write/Edit artifact opens Review;
   scratch, failed, and background-session writes never steal focus. The outer
   inner divider resizes the panel from 244px to 720px; moving it left takes
@@ -107,14 +104,12 @@ destination, chat as the home surface, tools and permissions inline.
   retained session contexts, and only the preferred panel width persists across
   launches.
   The work panel remains a fixed-width in-flow column beside MainChat inside
-  the existing client area (ADR 0151). MainChat reserves a 515px minimum for
-  the composer, and neither side dock may consume or paint over that width.
-  Opening and collapsing change only the shell's internal flex allocation and
-  never expand or shrink native window bounds. The renderer-measured panel
-  rectangle continues to position the native Browser view. Native window edges
-  resize the app window only; they do not change the panel target. The outer
-  window remains natively resizable from all OS edges and corners, with a
-  minimum supported size of 1040×700. Replaces
+  the existing client area (ADR 0151). Opening and collapsing change only the
+  shell's internal flex allocation and never expand or shrink native window
+  bounds. The renderer-measured panel rectangle continues to position the
+  native Browser view. Native window edges resize the app window only; they do
+  not change the panel target. The outer window remains natively resizable from
+  all OS edges and corners, with a minimum supported size of 1040×700. Replaces
   the former context-panel overlay; workspace/model/status info lives in the
   composer chips and Settings instead.
 - **Composer**: workspace-agnostic floating pill anchored to the conversation

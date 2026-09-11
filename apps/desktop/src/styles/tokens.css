@@ -115,11 +115,6 @@
    * surface tone from the window top edge down. */
   --ds-settings-nav-width: 275px;
   --ds-toolbar-height: 46px;
-  /* Work-panel controls share these geometry tokens so the header's safe lane
-     cannot drift away from the viewport-fixed toggle. */
-  --ds-work-panel-toggle-size: 28px;
-  --ds-work-panel-toggle-inset: 12px;
-  --ds-work-panel-toggle-gap: 20px;
   /* Keep an 8px visual buffer between work-panel actions and window chrome. */
   --ds-window-controls-width: 120px;
   --ds-composer-radius: var(--radius-xl);

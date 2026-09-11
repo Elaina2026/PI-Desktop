@@ -241,6 +241,3 @@ Each ADR includes:
 | 0221 | Render canonical thinking-level values without translation | Accepted (amends D369 / ADR 0202) |
 | 0222 | Native file and folder drops in the Composer | Accepted (amends ADR 0101 / D397) |
 | 0223 | Context Usage Display Preference | Accepted (amends 0184) |
-| 0224 | Right panel tab strip and data-driven add menu | Accepted (issue #229) |
-| 0225 | Restore deferred tools from effective session context | Accepted (issue #225) |
-| 0226 | Reserve chat width for composer controls | Accepted |

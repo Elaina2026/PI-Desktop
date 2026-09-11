@@ -13,7 +13,7 @@ test("Composer uses one model × reasoning popover with a root and in-place subm
   assert.match(composerSource, /useState<ComposerMenuView>\("root"\)/);
   assert.match(composerSource, /showModelThinkingView\("model"\)/);
   assert.match(composerSource, /showModelThinkingView\("thinking"\)/);
-  assert.match(composerSource, /menuClassName="composer-model-menu composer-model-thinking-menu"/);
+  assert.match(composerSource, /className="composer-model-menu composer-model-thinking-menu"/);
   assert.match(composerSource, /role="menuitem"[\s\S]*?aria-haspopup="menu"/);
   assert.match(composerSource, /className="composer-menu-back"/);
   assert.match(composerSource, /IconChevronLeft/);
@@ -46,8 +46,7 @@ test("the combined chip and menu meet the compact accessible visual contract", (
   assert.match(composerSource, /aria-checked=\{thinkingLevel === level\}/);
   assert.match(composerSource, /e\.key === "ArrowLeft"/);
   assert.match(composerSource, /e\.key === "Escape"/);
-  assert.match(stylesSource, /\.composer-model-thinking-menu\s*\{[\s\S]*?position:\s*fixed;/);
-  assert.match(stylesSource, /\.composer-model-thinking-menu\s*\{[\s\S]*?top:\s*0;/);
+  assert.match(stylesSource, /\.composer-model-thinking-menu\s*\{[\s\S]*?bottom:\s*calc\(100% \+ 8px\)/);
   assert.match(stylesSource, /\.composer-model-thinking-menu\s*\{[\s\S]*?width:\s*min\(300px,\s*calc\(100vw - 24px\)\)/);
   assert.match(composerSource, /className="composer-model-thinking-icon"[\s\S]*?<IconBot size=\{14\} \/>/);
   assert.doesNotMatch(stylesSource, /\.composer-model-thinking-icon\.is-off/);

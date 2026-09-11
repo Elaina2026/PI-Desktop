@@ -1633,11 +1633,9 @@
 }
 
 .agent-capability-menu {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: auto;
-  bottom: auto;
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
   z-index: 30;
   display: flex;
   min-width: 168px;
@@ -1649,15 +1647,6 @@
   box-shadow:
     0 0 0 0.5px var(--ds-border-default),
     0 12px 32px rgb(0 0 0 / 20%);
-  opacity: 0;
-  pointer-events: none;
-  visibility: hidden;
-}
-
-.agent-capability-menu.is-open {
-  opacity: 1;
-  pointer-events: auto;
-  visibility: visible;
 }
 
 /*

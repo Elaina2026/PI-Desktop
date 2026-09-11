@@ -489,3 +489,95 @@ export function createProviderRetryStream(
 
   return outer;
 }
+
+export type FallbackTarget = {
+  model: Model<Api>;
+  createStream: StreamFactory;
+  controller: ProviderRetryController;
+  name?: string;
+};
+
+/**
+ * Creates an assistant stream that falls back to secondary provider targets
+ * if the primary provider experiences terminal pre-stream failure (e.g. 429 quota exhaustion).
+ */
+export function createProviderFallbackStream(
+  targets: FallbackTarget[],
+  context: Context,
+  options: SimpleStreamOptions,
+  onFallback?: (fromIndex: number, toIndex: number, error: unknown) => void,
+): AssistantMessageEventStream {
+  if (targets.length === 0) {
+    throw new Error("No provider targets supplied to fallback stream");
+  }
+  if (targets.length === 1) {
+    const primary = targets[0];
+    return createProviderRetryStream(
+      primary.model,
+      context,
+      options,
+      primary.createStream,
+      primary.controller,
+    );
+  }
+
+  const outer = createAssistantMessageEventStream();
+
+  void (async () => {
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i];
+      const inner = createProviderRetryStream(
+        target.model,
+        context,
+        options,
+        target.createStream,
+        target.controller,
+      );
+
+      let sawOutput = false;
+
+      for await (const event of inner) {
+        if (
+          event.type === "start" ||
+          event.type === "text_delta" ||
+          event.type === "thinking_delta"
+        ) {
+          sawOutput = true;
+        }
+        if (event.type === "error" && !sawOutput && i + 1 < targets.length) {
+          onFallback?.(i, i + 1, event.error);
+          break;
+        }
+        outer.push(event);
+      }
+
+      const targetResult = await inner.result();
+
+      // If failed before output and a fallback target exists, step to next target
+      if (targetResult.stopReason === "error" && !sawOutput && i + 1 < targets.length) {
+        continue;
+      }
+
+      outer.end(targetResult);
+      return;
+    }
+  })().catch((error) => {
+    const aborted =
+      options.signal?.aborted ||
+      (error instanceof Error && error.name === "AbortError");
+    const message = setupErrorMessage(
+      targets[0].model,
+      error,
+      Boolean(aborted),
+    );
+    outer.push({
+      type: "error",
+      reason: message.stopReason === "aborted" ? "aborted" : "error",
+      error: message,
+    });
+    outer.end(message);
+  });
+
+  return outer;
+}
+

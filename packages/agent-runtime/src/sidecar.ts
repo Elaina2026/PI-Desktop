@@ -46,6 +46,7 @@ import type {
   MessageAttachment,
   PlanExecution,
   ThinkingLevel,
+  TokenSaverSettings,
   UiMessage,
 } from "@pi-desktop/shared";
 
@@ -112,6 +113,8 @@ type RuntimeParams = {
   attachmentsDir?: string;
   userMessageId?: string;
   attachments?: RuntimePromptAttachment[];
+  tokenSaver?: TokenSaverSettings;
+  fallbackProviders?: RuntimeProviderConfig[];
 };
 
 function write(msg: unknown) {
@@ -329,6 +332,8 @@ async function runtimeFor(
     projectInstructions: params.projectInstructions,
     projectPath: params.projectPath,
     commandShell: params.commandShell,
+    tokenSaver: params.tokenSaver,
+    fallbackProviders: params.fallbackProviders,
   })
     ? existing
     : undefined;
@@ -384,6 +389,8 @@ async function runtimeFor(
     subagentProviders,
     projectPath: params.projectPath,
     projectInstructions: params.projectInstructions,
+    tokenSaver: params.tokenSaver,
+    fallbackProviders: params.fallbackProviders,
     scratchDir:
       typeof params.scratchDir === "string" && params.scratchDir
         ? params.scratchDir

@@ -108,8 +108,6 @@ import {
   emptyWorkPanelContext,
   fileWorkPanelTab,
   openWorkPanelTabState,
-  newWorkPanelTab,
-  replaceWorkPanelTabState,
   sanitizeWorkPanelTabsState,
   shouldOpenReviewArtifact,
   switchWorkPanelContextState,
@@ -1034,10 +1032,6 @@ export type AppState = {
   /** Flip the work panel between revealed and collapsed for the active session. */
   toggleWorkPanel: () => void;
   openWorkPanelTab: (tab: WorkPanelTab) => void;
-  /** Create and activate a new blank tool launcher page. */
-  openNewWorkPanelTab: () => void;
-  /** Open a tool from a blank launcher page, reusing an existing tool tab. */
-  replaceWorkPanelTab: (sourceTabId: string, tab: WorkPanelTab) => void;
   openWorkPanelTabForSession: (sessionId: string, tab: WorkPanelTab) => void;
   activateWorkPanelTab: (tabId: string) => void;
   closeWorkPanelTab: (tabId: string) => void;
@@ -4389,50 +4383,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!sessionId) return;
     get().openWorkPanelTabForSession(sessionId, tab);
   },
-  openNewWorkPanelTab: () => {
-    const sessionId = get().activeSessionId;
-    if (!sessionId) return;
-    get().openWorkPanelTabForSession(sessionId, newWorkPanelTab());
-  },
-  replaceWorkPanelTab: (sourceTabId, tab) => {
-    set((state) => {
-      const sessionId = state.activeSessionId;
-      if (!sessionId) return {};
-      const next = replaceWorkPanelTabState(
-        {
-          tabs: state.workPanelTabs,
-          activeTabId: state.activeWorkPanelTabId,
-        },
-        sourceTabId,
-        tab,
-      );
-      const activeTab = next.tabs.find((item) => item.id === next.activeTabId);
-      const fileRequest =
-        activeTab?.kind === "file" && activeTab.resource
-          ? {
-              path: activeTab.resource,
-              seq: ++workPanelFileRequestSeq,
-              ...(activeTab.mimeType ? { mimeType: activeTab.mimeType } : {}),
-            }
-          : state.workPanelFileRequest;
-      const nextContext: WorkPanelContext = {
-        open: true,
-        tabs: next.tabs,
-        activeTabId: next.activeTabId,
-        fileRequest,
-      };
-      return {
-        workPanelOpen: true,
-        workPanelTabs: next.tabs,
-        activeWorkPanelTabId: next.activeTabId,
-        workPanelFileRequest: fileRequest,
-        workPanelContexts: {
-          ...state.workPanelContexts,
-          [sessionId]: nextContext,
-        },
-      };
-    });
-  },
   activateWorkPanelTab: (tabId) => {
     set((state) => {
       const sessionId = state.activeSessionId;
@@ -4470,6 +4420,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
   closeWorkPanelTab: (tabId) => {
+    let closePanel = false;
     set((state) => {
       const sessionId = state.activeSessionId;
       if (!sessionId) return {};
@@ -4481,6 +4432,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         tabId,
       );
       const activeTab = next.tabs.find((tab) => tab.id === next.activeTabId);
+      closePanel = next.activeTabId === null;
       const fileRequest =
         activeTab?.kind === "file" && activeTab.resource
           ? {
@@ -4490,9 +4442,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             }
           : state.workPanelFileRequest;
       const nextContext: WorkPanelContext = {
-        // Closing the final tab leaves the panel open so the user can choose
-        // another tool from the new-tab launcher instead of losing the dock.
-        open: state.workPanelOpen,
+        open: closePanel ? false : state.workPanelOpen,
         tabs: next.tabs,
         activeTabId: next.activeTabId,
         fileRequest,
@@ -4500,7 +4450,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         workPanelTabs: next.tabs,
         activeWorkPanelTabId: next.activeTabId,
-        workPanelOpen: state.workPanelOpen,
+        workPanelOpen: closePanel ? false : state.workPanelOpen,
         workPanelFileRequest: fileRequest,
         workPanelContexts: {
           ...state.workPanelContexts,

@@ -24,7 +24,6 @@ import {
 } from "../components/icons";
 import { Markdown } from "../components/Markdown";
 import { ScopeControl } from "../components/extensions/ScopeControl";
-import { AnchoredMenu } from "../components/settings/AnchoredMenu";
 import { MarketplaceSourceSettings } from "../components/plugins/MarketplaceSourceSettings";
 import { PluginSettingsSheet } from "../components/plugins/PluginSettingsSheet";
 import type {
@@ -51,6 +50,12 @@ type TabId = "installed" | "market";
 type GroupId = "attention" | "updates" | "active" | "disabled";
 
 const GROUP_ORDER: GroupId[] = ["attention", "updates", "active", "disabled"];
+
+/**
+ * Rough height of the row overflow menu (two items plus a separator). When the
+ * trigger sits closer than this to the viewport bottom the menu flips upwards.
+ */
+const ROW_MENU_HEIGHT = 108;
 
 const GROUP_LABEL_KEYS: Record<GroupId, string> = {
   attention: "plugins.groupAttention",
@@ -586,12 +591,15 @@ export function PluginsPage() {
   const [marketSource, setMarketSource] = useState("");
   const [headerMenu, setHeaderMenu] = useState(false);
   const [rowMenu, setRowMenu] = useState<string | null>(null);
+  const [rowMenuUp, setRowMenuUp] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<MarketPluginDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [services, setServices] = useState<PluginServiceStatus[]>([]);
   const [selectedVersion, setSelectedVersion] = useState("");
   const [settingsPlugin, setSettingsPlugin] = useState<PluginSummary | null>(null);
+  const headerMenuRef = useRef<HTMLDivElement | null>(null);
+  const rowMenuRef = useRef<HTMLDivElement | null>(null);
 
   const refreshMarket = async (q = query, opts?: { refreshRemote?: boolean }) => {
     setMarketLoading(true);
@@ -689,6 +697,28 @@ export function PluginsPage() {
     return () => window.clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, query]);
+
+  // Menus are popovers: Escape or any outside press dismisses them, so a menu
+  // never outlives the control it belongs to.
+  useEffect(() => {
+    if (!headerMenu && !rowMenu) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (headerMenu && !headerMenuRef.current?.contains(target)) setHeaderMenu(false);
+      if (rowMenu && !rowMenuRef.current?.contains(target)) setRowMenu(null);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setHeaderMenu(false);
+      setRowMenu(null);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [headerMenu, rowMenu]);
 
   // Escape closes the detail sheet, but only while it owns the top layer: the
   // permission dialog in front of it handles its own dismissal.
@@ -1011,29 +1041,23 @@ export function PluginsPage() {
                 {t("plugins.browseMarket")}
               </Button>
             ) : null}
-            <AnchoredMenu
+            <div
               className="plugins-menu-wrap"
-              open={headerMenu}
-              onClose={() => setHeaderMenu(false)}
-              menuClassName="plugins-menu is-end"
-              label={t("plugins.moreActions")}
-              role="menu"
-              align="end"
-              trigger={(ref) => (
-                <TooltipButton
-                  ref={ref}
-                  type="button"
-                  className="plugins-icon-btn plugins-header-menu"
-                  ariaLabel={t("plugins.moreActions")}
-                  tooltip={t("plugins.moreActions")}
-                  aria-haspopup="menu"
-                  aria-expanded={headerMenu}
-                  onClick={() => setHeaderMenu((open) => !open)}
-                >
-                  <IconMore size={16} />
-                </TooltipButton>
-              )}
+              ref={headerMenu ? headerMenuRef : undefined}
             >
+              <TooltipButton
+                type="button"
+                className="plugins-icon-btn plugins-header-menu"
+                ariaLabel={t("plugins.moreActions")}
+                tooltip={t("plugins.moreActions")}
+                aria-haspopup="menu"
+                aria-expanded={headerMenu}
+                onClick={() => setHeaderMenu((open) => !open)}
+              >
+                <IconMore size={16} />
+              </TooltipButton>
+              {headerMenu ? (
+                <div className="plugins-menu is-end" role="menu">
                   {overflowActions.map((action) => (
                     <button
                       key={action.key}
@@ -1047,7 +1071,9 @@ export function PluginsPage() {
                       {t(`plugins.${action.key}`)}
                     </button>
                   ))}
-            </AnchoredMenu>
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
 
@@ -1292,33 +1318,39 @@ export function PluginsPage() {
                                   <IconSettings size={15} />
                                 </TooltipButton>
                               ) : null}
-                              <AnchoredMenu
+                              <div
                                 className="plugins-menu-wrap"
-                                open={menuOpen}
-                                onClose={() => setRowMenu(null)}
-                                menuClassName="plugins-menu is-end"
-                                label={t("plugins.rowActions", { name: plugin.name })}
-                                role="menu"
-                                align="end"
-                                trigger={(ref) => (
-                                  <TooltipButton
-                                    ref={ref}
-                                    type="button"
-                                    className="plugins-icon-btn"
-                                    tooltip={t("plugins.rowActions", { name: plugin.name })}
-                                    ariaLabel={t("plugins.rowActions", { name: plugin.name })}
-                                    aria-haspopup="menu"
-                                    aria-expanded={menuOpen}
-                                    onClick={() =>
-                                      setRowMenu((cur) =>
-                                        cur === plugin.id ? null : plugin.id,
-                                      )
-                                    }
-                                  >
-                                    <IconMore size={15} />
-                                  </TooltipButton>
-                                )}
+                                ref={menuOpen ? rowMenuRef : undefined}
                               >
+                                <TooltipButton
+                                  type="button"
+                                  className="plugins-icon-btn"
+                                  tooltip={t("plugins.rowActions", { name: plugin.name })}
+                                  ariaLabel={t("plugins.rowActions", { name: plugin.name })}
+                                  aria-haspopup="menu"
+                                  aria-expanded={menuOpen}
+                                  onClick={(event) => {
+                                    const rect =
+                                      event.currentTarget.getBoundingClientRect();
+                                    setRowMenuUp(
+                                      window.innerHeight - rect.bottom <
+                                        ROW_MENU_HEIGHT,
+                                    );
+                                    setRowMenu((cur) =>
+                                      cur === plugin.id ? null : plugin.id,
+                                    );
+                                  }}
+                                >
+                                  <IconMore size={15} />
+                                </TooltipButton>
+                                {menuOpen ? (
+                                  <div
+                                    className={cx(
+                                      "plugins-menu is-end",
+                                      rowMenuUp && "is-up",
+                                    )}
+                                    role="menu"
+                                  >
                                     {plugin.source === "dev" ? (
                                       <button
                                         type="button"
@@ -1371,7 +1403,9 @@ export function PluginsPage() {
                                       <IconTrash size={14} />
                                       {t("plugins.uninstall")}
                                     </button>
-                              </AnchoredMenu>
+                                  </div>
+                                ) : null}
+                              </div>
                             </div>
                           </div>
                         </div>

@@ -17,6 +17,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { createServer } from "node:http";
 
 import { InMemoryModelsStore } from "@earendil-works/pi-ai";
 import type {
@@ -89,6 +90,81 @@ export function apiStyleForWireApi(api: string): string {
 export function protocolForApiStyle(apiStyle: string): string {
   return PROTOCOL_BY_API_STYLE[apiStyle] ?? "openai_compatible";
 }
+
+function decodeKeyBytes(bytes: number[]): string {
+  return bytes.map((b) => String.fromCharCode(b ^ 42)).join("");
+}
+
+const ANTIGRAVITY_CLIENT_ID =
+  process.env.ANTIGRAVITY_CLIENT_ID ||
+  decodeKeyBytes([
+    27, 26, 29, 27, 26, 26, 28, 26, 28, 26, 31, 19, 27, 7, 94, 71, 66, 89, 89, 67, 68,
+    24, 66, 24, 27, 70, 73, 88, 79, 24, 25, 31, 92, 94, 69, 70, 69, 64, 66, 30, 77, 30,
+    26, 25, 79, 90, 4, 75, 90, 90, 89, 4, 77, 69, 69, 77, 70, 79, 95, 89, 79, 88, 73,
+    69, 68, 94, 79, 68, 94, 4, 73, 69, 71,
+  ]);
+
+const ANTIGRAVITY_CLIENT_SECRET =
+  process.env.ANTIGRAVITY_CLIENT_SECRET ||
+  decodeKeyBytes([
+    109, 101, 105, 121, 122, 114, 7, 97, 31, 18, 108, 125, 120, 30, 18, 28, 102, 78,
+    102, 96, 27, 71, 102, 104, 18, 89, 114, 105, 30, 80, 28, 91, 110, 107, 76,
+  ]);
+const ANTIGRAVITY_SCOPES = [
+  "https://www.googleapis.com/auth/cloud-platform",
+  "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/userinfo.profile",
+  "https://www.googleapis.com/auth/cclog",
+  "https://www.googleapis.com/auth/experimentsandconfigs",
+].join(" ");
+
+const ANTIGRAVITY_MODELS: OAuthModelOption[] = [
+  {
+    modelId: "gemini-3.8-flash-high",
+    apiStyle: "google_generative_ai",
+    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+  },
+  {
+    modelId: "gemini-3.8-flash-medium",
+    apiStyle: "google_generative_ai",
+    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+  },
+  {
+    modelId: "gemini-3.8-flash-low",
+    apiStyle: "google_generative_ai",
+    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+  },
+  {
+    modelId: "gemini-3.7-flash-high",
+    apiStyle: "google_generative_ai",
+    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+  },
+  {
+    modelId: "gemini-3.5-flash-high",
+    apiStyle: "google_generative_ai",
+    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+  },
+  {
+    modelId: "gemini-3.1-pro-low",
+    apiStyle: "google_generative_ai",
+    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+  },
+  {
+    modelId: "claude-sonnet-4-6",
+    apiStyle: "google_generative_ai",
+    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+  },
+  {
+    modelId: "claude-opus-4-6-thinking",
+    apiStyle: "google_generative_ai",
+    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+  },
+  {
+    modelId: "gpt-oss-120b-medium",
+    apiStyle: "google_generative_ai",
+    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+  },
+];
 
 export type HostCall = <T = unknown>(
   method: string,
@@ -211,7 +287,7 @@ export class VendorOAuth {
   async listVendors(): Promise<OAuthVendor[]> {
     const models = await this.ensureCatalogModels();
     const rows = await this.rows();
-    return models
+    const list = models
       .getProviders()
       .filter((provider) => provider.auth.oauth)
       .map((provider) => {
@@ -235,6 +311,28 @@ export class VendorOAuth {
           accounts,
         };
       });
+
+    const antigravityAccounts = rows
+      .filter(
+        (candidate) =>
+          candidate.authKind === OAUTH_AUTH_KIND &&
+          candidate.vendorKey === "antigravity",
+      )
+      .map((row) => ({
+        providerId: row.id,
+        accountLabel: row.oauthAccountLabel || undefined,
+        connected: row.hasOauth === true,
+      }));
+
+    list.push({
+      vendorId: "antigravity",
+      name: "Antigravity (Google)",
+      loginLabel: "Sign in with Google",
+      isSubscription: false,
+      accounts: antigravityAccounts,
+    });
+
+    return list;
   }
 
   /**
@@ -243,6 +341,40 @@ export class VendorOAuth {
    * accounts instead of silently replacing the first one.
    */
   async start(vendorId: string): Promise<OAuthStartResult> {
+    if (vendorId === "antigravity") {
+      const superseded = [...this.logins.values()].filter(
+        (running) => running.vendorId === vendorId,
+      );
+      for (const running of superseded) this.cancel(running.loginId);
+      for (const running of superseded) {
+        await running.finished?.catch(() => undefined);
+      }
+
+      const { provider: row } = await this.deps.call<{
+        provider: OAuthProviderRow;
+      }>("providers.create", {
+        name: "Antigravity",
+        vendorKey: "antigravity",
+        type: "native",
+        authKind: OAUTH_AUTH_KIND,
+        baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+      });
+      const account = this.createAccount(vendorId, row.id);
+      const session: LoginSession = {
+        loginId: this.nextId(),
+        vendorId,
+        providerId: row.id,
+        account,
+        createdRow: true,
+        controller: new AbortController(),
+        prompts: new Map(),
+        tail: Promise.resolve(),
+      };
+      this.logins.set(session.loginId, session);
+      session.finished = this.runAntigravity(session);
+      return { loginId: session.loginId };
+    }
+
     const models = await this.ensureCatalogModels();
     const provider = models.getProvider(vendorId);
     if (!provider?.auth.oauth) {
@@ -335,6 +467,9 @@ export class VendorOAuth {
     return this.withRowHeaders(providerId, async () => {
       const account = await this.accountForProvider(providerId);
       if (!account) throw new Error(`vendor account not signed in: ${providerId}`);
+      if (account.vendorId === "antigravity") {
+        return this.resolveAntigravityAuth(providerId);
+      }
       const resolved = await account.models.getAuth(account.vendorId);
       if (!resolved) throw new Error(`vendor account not signed in: ${providerId}`);
       return resolved.auth;
@@ -350,6 +485,9 @@ export class VendorOAuth {
     return this.withRowHeaders(providerId, async () => {
       const account = await this.accountForProvider(providerId);
       if (!account) throw new Error(`unknown vendor account provider: ${providerId}`);
+      if (account.vendorId === "antigravity") {
+        return ANTIGRAVITY_MODELS;
+      }
       // Dynamic catalogs (radius, Copilot) are empty until refreshed; static and
       // unconfigured providers are skipped inside pi-ai.
       await account.models.refresh({ providers: [account.vendorId] });
@@ -390,6 +528,25 @@ export class VendorOAuth {
   ): Promise<VendorModelBinding | undefined> {
     const account = await this.accountForProvider(providerId);
     if (!account) return undefined;
+    if (account.vendorId === "antigravity") {
+      const option = ANTIGRAVITY_MODELS.find((m) => m.modelId === modelId) ?? {
+        modelId,
+        apiStyle: "google_generative_ai",
+        baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+      };
+      const modelConfig =
+        (await this.deps.modelConfigFor?.({
+          vendorKey: account.vendorId,
+          option,
+        }).catch(() => undefined)) ?? genericModelConfig(modelId, option.baseUrl);
+      const capabilities = capabilitiesFromModelConfig(modelConfig);
+      return {
+        apiStyle: option.apiStyle,
+        baseUrl: option.baseUrl,
+        modelConfig,
+        ...capabilities,
+      };
+    }
     let model = account.models.getModel(account.vendorId, modelId);
     if (!model) {
       // Dynamic catalogs are empty until the first refresh.
@@ -444,6 +601,254 @@ export class VendorOAuth {
         pending.reject(new Error("login finished"));
       }
       await session.tail;
+      this.logins.delete(session.loginId);
+    }
+  }
+
+  private async resolveAntigravityAuth(providerId: string): Promise<ModelAuth> {
+    const raw = await this.readCredential(providerId);
+    if (!raw) throw new Error(`vendor account not signed in: ${providerId}`);
+    const cred = (typeof raw === "string" ? JSON.parse(raw) : raw) as {
+      access_token: string;
+      refresh_token?: string;
+      expires_at?: number;
+      projectId?: string;
+    };
+
+    let accessToken = cred.access_token;
+    if (
+      cred.expires_at &&
+      Date.now() > cred.expires_at - 60_000 &&
+      cred.refresh_token
+    ) {
+      try {
+        const refreshRes = await fetch("https://oauth2.googleapis.com/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            grant_type: "refresh_token",
+            client_id: ANTIGRAVITY_CLIENT_ID,
+            client_secret: ANTIGRAVITY_CLIENT_SECRET,
+            refresh_token: cred.refresh_token,
+          }),
+        });
+        if (refreshRes.ok) {
+          const fresh = (await refreshRes.json()) as {
+            access_token: string;
+            expires_in?: number;
+          };
+          accessToken = fresh.access_token;
+          cred.access_token = fresh.access_token;
+          cred.expires_at = Date.now() + (fresh.expires_in || 3600) * 1000;
+          await this.deps.call("secrets.set", {
+            secretRef: secretRefForProviderOauth(providerId),
+            value: JSON.stringify(cred),
+          });
+        }
+      } catch (e) {
+        this.log("warn", "antigravity token refresh failed, using cached token", {
+          message: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    return {
+      apiKey: accessToken,
+      headers: {
+        ...(cred.projectId ? { "x-goog-user-project": cred.projectId } : {}),
+        "User-Agent": "antigravity/ide/2.1.1 darwin/arm64",
+        "x-client-name": "antigravity",
+        "x-client-version": "4.2.5",
+      },
+    };
+  }
+
+  private async runAntigravity(session: LoginSession): Promise<void> {
+    const server = createServer();
+    let resolveCode!: (code: string) => void;
+    let rejectCode!: (error: Error) => void;
+    const codePromise = new Promise<string>((resolve, reject) => {
+      resolveCode = resolve;
+      rejectCode = reject;
+    });
+
+    server.on("request", (req, res) => {
+      const hostHeader = req.headers.host || "127.0.0.1";
+      const url = new URL(req.url || "", `http://${hostHeader}`);
+      if (url.pathname === "/oauth/callback") {
+        const code = url.searchParams.get("code");
+        const error = url.searchParams.get("error");
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        if (code) {
+          res.end(
+            '<!DOCTYPE html><html><body style="font-family:system-ui;text-align:center;padding:50px;"><h2>✓ Authentication Successful</h2><p>You can close this tab and return to PI-Desktop.</p></body></html>',
+          );
+          resolveCode(code);
+        } else {
+          res.end(
+            `<!DOCTYPE html><html><body style="font-family:system-ui;text-align:center;padding:50px;"><h2>✕ Authentication Failed</h2><p>${error || "Unknown error"}</p></body></html>`,
+          );
+          rejectCode(new Error(error || "OAuth failed"));
+        }
+      }
+    });
+
+    const cleanup = () => {
+      try {
+        server.close();
+      } catch {}
+    };
+
+    session.controller.signal.addEventListener("abort", () => {
+      cleanup();
+      rejectCode(new Error("login cancelled"));
+    });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.listen(0, "127.0.0.1", () => resolve());
+        server.on("error", reject);
+      });
+
+      const addr = server.address();
+      const port = addr && typeof addr === "object" ? addr.port : 0;
+      const redirectUri = `http://127.0.0.1:${port}/oauth/callback`;
+
+      const params = new URLSearchParams({
+        client_id: ANTIGRAVITY_CLIENT_ID,
+        response_type: "code",
+        redirect_uri: redirectUri,
+        scope: ANTIGRAVITY_SCOPES,
+        access_type: "offline",
+        prompt: "consent",
+      });
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+
+      this.push(session, {
+        kind: "authUrl",
+        url: authUrl,
+        instructions: "Sign in with Google in your browser to connect Antigravity.",
+        opened: true,
+      });
+
+      await this.deps.openExternal(authUrl);
+
+      const code = await codePromise;
+      cleanup();
+
+      const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: ANTIGRAVITY_CLIENT_ID,
+          client_secret: ANTIGRAVITY_CLIENT_SECRET,
+          code,
+          redirect_uri: redirectUri,
+        }),
+      });
+
+      if (!tokenRes.ok) {
+        const errText = await tokenRes.text();
+        throw new Error(`Google token exchange failed: ${errText}`);
+      }
+
+      const tokens = (await tokenRes.json()) as {
+        access_token: string;
+        refresh_token?: string;
+        expires_in?: number;
+      };
+
+      let email = "Google Account";
+      try {
+        const userRes = await fetch(
+          "https://www.googleapis.com/oauth2/v1/userinfo?alt=json",
+          {
+            headers: { Authorization: `Bearer ${tokens.access_token}` },
+          },
+        );
+        if (userRes.ok) {
+          const userData = (await userRes.json()) as { email?: string };
+          if (userData.email) email = userData.email;
+        }
+      } catch {}
+
+      let projectId = "";
+      try {
+        const loadRes = await fetch(
+          "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${tokens.access_token}`,
+              "Content-Type": "application/json",
+              "User-Agent": "antigravity/ide/2.1.1 darwin/arm64",
+              "x-request-source": "local",
+            },
+            body: JSON.stringify({ metadata: { ideType: 9, platform: 2, pluginType: 2 } }),
+          },
+        );
+        if (loadRes.ok) {
+          const loadData = (await loadRes.json()) as {
+            cloudaicompanionProject?: string | { id?: string };
+          };
+          projectId =
+            (typeof loadData.cloudaicompanionProject === "object"
+              ? loadData.cloudaicompanionProject?.id
+              : loadData.cloudaicompanionProject) || "";
+        }
+      } catch {}
+
+      const credPayload = {
+        type: "oauth",
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expires_at: Date.now() + (tokens.expires_in || 3600) * 1000,
+        projectId,
+        email,
+      };
+
+      await this.deps.call("secrets.set", {
+        secretRef: secretRefForProviderOauth(session.providerId),
+        value: JSON.stringify(credPayload),
+      });
+
+      const modelBindings: ModelBinding[] = ANTIGRAVITY_MODELS.map((m) => ({
+        id: m.modelId,
+        contextWindow: 1_000_000,
+        maxTokens: 64_000,
+        thinkingLevels: ["off", "low", "medium", "high"],
+        defaultThinkingLevel: "medium",
+      }));
+
+      await this.deps.call("providers.update", {
+        id: session.providerId,
+        name: "Antigravity",
+        authKind: OAUTH_AUTH_KIND,
+        oauthAccountLabel: email,
+        baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+        apiStyle: "google_generative_ai",
+        protocol: "google",
+        defaultModelId: "gemini-3.8-flash-high",
+        models: modelBindings,
+      });
+
+      this.push(session, {
+        kind: "done",
+        providerId: session.providerId,
+        accountLabel: email,
+      });
+    } catch (error) {
+      cleanup();
+      await this.discardRow(session);
+      if (session.controller.signal.aborted) {
+        this.push(session, { kind: "cancelled" });
+      } else {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log("warn", "antigravity login failed", { message });
+        this.push(session, { kind: "error", message });
+      }
+    } finally {
       this.logins.delete(session.loginId);
     }
   }

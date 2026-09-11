@@ -886,8 +886,7 @@ grammar and validated against another fails every call.
 
 The sidecar builds one complete tool registry, but it does not serialize every
 registered schema into every provider request. Each new user prompt starts with
-the mode's core set plus any deferred tools that can be restored from successful
-activation evidence still present in the effective session context:
+the mode's core set:
 
 - Agent: `Read`, `Bash`, `Edit`, and `Write` (matching pi's coding-agent core)
 - Agent: `Task`, `TaskWait`, `TaskList`, and `TaskStop` as well, whenever the
@@ -912,18 +911,13 @@ pi-agent-core's `addedToolNames`, and rebuilds the next-turn context with those
 schemas. Providers with native deferred-tool search receive the definitions at
 that load point; other providers receive the active definitions normally.
 
-At the start of each new user prompt, the sidecar clears the in-memory deferred
-activation set and rebuilds it from the effective context. Successful
-`ToolSearch` results contribute their `addedToolNames`; successful results from
-deferred tools contribute that tool's name. Only names still present in the
-current mode's deferred catalog are restored. Failed rows, interrupted or
-missing-result placeholders, and assistant/user prose never activate a tool.
-The tool registry, host permission path, tool timeout, and workspace containment
-rules remain unchanged. `ToolSearch` is local to the sidecar and does not cross
-the host RPC boundary. Its activation marker is retained in the persisted tool
-result, so a runtime restart or a new prompt can reuse an eligible capability
-while that evidence remains in the effective context; a fresh search is still
-required after the evidence is compacted away or otherwise absent.
+Deferred activation is reset before each new user prompt, so a previous task
+cannot make an unrelated first request carry a growing tool set. The tool
+registry, host permission path, tool timeout, and workspace containment rules
+remain unchanged. `ToolSearch` is local to the sidecar and does not cross the
+host RPC boundary. Its activation marker is retained in the persisted tool
+result so a restored transcript remains provider-valid, although a restarted
+runtime still requires a fresh search before reusing a deferred capability.
 
 For user-visible HTML deliverables, the default system prompt asks the agent to
 activate `BrowserPreview` once after creating the page or making its first

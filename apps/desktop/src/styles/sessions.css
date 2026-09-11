@@ -303,11 +303,7 @@
 
 .sidebar-row-menu,
 .sidebar-popover {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: auto;
-  bottom: auto;
+  position: absolute;
   z-index: 60;
   min-width: 172px;
   padding: 5px;
@@ -315,6 +311,11 @@
   border-radius: var(--radius-md-plus);
   background: var(--ds-bg-elevated-opaque, var(--ds-bg-primary));
   box-shadow: var(--ds-shadow-dialog);
+}
+
+.sidebar-row-menu {
+  top: calc(100% + 3px);
+  right: 0;
 }
 
 .sidebar-floating-menu {
@@ -521,6 +522,11 @@
 
 .sidebar-section-menu {
   min-width: min(176px, calc(100vw - 16px));
+}
+
+.sidebar-popover {
+  top: calc(100% + 4px);
+  right: 0;
 }
 
 .sidebar-sort-menu {

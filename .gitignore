@@ -47,4 +47,5 @@ coverage/
 .playwright-mcp/
 .claude/
 .workbuddy
+ag_temp/
 electron.vite.config.*.mjs

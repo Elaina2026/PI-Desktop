@@ -1499,6 +1499,78 @@ export function SettingsPage() {
                   saveSettings={saveSettings}
                 />
               </SettingsCard>
+
+              <SettingsCard title="Token Saver & Compression">
+                <SettingsRow
+                  title="Caveman Mode (Compress LLM Output)"
+                  description="Terse responses, strips filler and pleasantries to save 30-60% output tokens."
+                >
+                  <select
+                    className="field-select"
+                    value={settings.tokenSaver?.caveman ?? "off"}
+                    onChange={(e) =>
+                      void saveSettings({
+                        tokenSaver: {
+                          ...settings.tokenSaver,
+                          caveman: e.target.value as any,
+                        },
+                      })
+                    }
+                  >
+                    <option value="off">Off</option>
+                    <option value="lite">Lite (Terse sentences)</option>
+                    <option value="full">Full (Caveman style)</option>
+                    <option value="ultra">Ultra (Telegraphic)</option>
+                    <option value="wenyan">Wenyan (Classical Chinese)</option>
+                  </select>
+                </SettingsRow>
+                <SettingsRow
+                  title="Lazy Senior Dev (Ponytail Mode)"
+                  description="Enforces YAGNI, standard library first, shortest diffs, minimal boilerplate."
+                >
+                  <select
+                    className="field-select"
+                    value={settings.tokenSaver?.ponytail ?? "off"}
+                    onChange={(e) =>
+                      void saveSettings({
+                        tokenSaver: {
+                          ...settings.tokenSaver,
+                          ponytail: e.target.value as any,
+                        },
+                      })
+                    }
+                  >
+                    <option value="off">Off</option>
+                    <option value="lite">Lite (Suggest lazier alternatives)</option>
+                    <option value="full">Full (Strict ladder & minimal code)</option>
+                    <option value="ultra">Ultra (YAGNI extremist)</option>
+                  </select>
+                </SettingsRow>
+                <SettingsRow
+                  title="RTK Tool Output Compressor"
+                  description="Auto-compress git diff, status, grep, find, and repetitive log outputs in LLM context."
+                >
+                  <button
+                    type="button"
+                    className={cx(
+                      "settings-toggle",
+                      settings.tokenSaver?.rtkCompressor !== false && "on",
+                    )}
+                    role="switch"
+                    aria-checked={settings.tokenSaver?.rtkCompressor !== false}
+                    onClick={() =>
+                      void saveSettings({
+                        tokenSaver: {
+                          ...settings.tokenSaver,
+                          rtkCompressor: settings.tokenSaver?.rtkCompressor === false ? true : false,
+                        },
+                      })
+                    }
+                  >
+                    <span className="settings-toggle-thumb" />
+                  </button>
+                </SettingsRow>
+              </SettingsCard>
             </div>
           )}
 

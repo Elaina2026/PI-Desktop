@@ -326,18 +326,6 @@ may be retained while exactly one workspace supplies the visible shell context.
   capped for narrow viewports. This includes the Sessions sort menu,
   session/project overflow menus, and section create menus.
 
-#### Floating dropdown surfaces
-
-- Every renderer-owned custom dropdown/menu opens as a viewport-fixed floating
-  layer, outside its triggering row or card, so opening it never changes parent
-  height, width, or scroll allocation.
-- Shared anchored menus are measured before reveal, clamp to the viewport,
-  prefer the requested side, and recalculate on anchor movement, scroll, and
-  resize. Outside press and Escape close the surface and restore focus to its
-  trigger unless the pattern explicitly retains input focus.
-- Native `<select>` popups remain platform-owned; this rule covers custom
-  renderer surfaces only.
-
 ### 1.6 Local profile footer
 
 - The `44px` profile trigger toggles the menu; its chevron and
@@ -411,30 +399,32 @@ may be retained while exactly one workspace supplies the visible shell context.
   retained context without creating a resource tab, and collapse the visible
   panel without deleting tabs, retaining tabs, active resource, and committed
   width. They are a no-op without an active session or while Settings is the
-  active page. The panel's `+` trigger can then create a New launcher tab whose
-  body offers Browser or an in-scope plugin view.
+  active page. The panel's context trigger can then create Browser or an
+  in-scope plugin view.
 - An artifact trigger atomically creates or reuses its resource, activates it,
   and opens the panel. Background artifacts never open the visible panel.
 - File resources use normalized paths as identity. Browser and plugin views
   are singletons; repeated triggers preserve resource order and activate the
   existing resource.
-- Once open, the panel header is a `tablist` that scrolls horizontally while a
-  tight `+` trigger stays fixed beside it. Each tab owns its active state and
-  close button; the active tab is scrolled into view. Clicking `+` creates a
-  unique New launcher tab; its data-driven Review, Files, Browser, and plugin
-  view rows are ordinary buttons in the page body.
-- Tab focus uses roving `tabIndex`: ArrowLeft/ArrowRight/Home/End move across
-  tabs and Delete/Backspace closes the focused tab. Middle-click closes a tab;
-  closing an active tab selects the right neighbor, then the left. Selecting a
-  launcher row replaces that New tab with the destination or activates its
-  existing singleton. Shortcut labels appear only for bindings that actually
-  exist.
+- Once open, the panel's unified context trigger anchors the left of the header
+  and opens a single dropdown. Its top section lists Browser and in-scope
+  plugin views, each row carrying its own open state and, once open, its own
+  close control. A second section appears after a divider only when the
+  transcript opened further resources, so no entry is ever listed twice. The
+  right action cluster is pinned to the header's right edge behind a divider
+  and never shifts with the label length (D173).
+- Menu rows own DOM focus. Opening with the trigger's ArrowDown/ArrowUp lands on
+  the active row or the last row respectively; Arrow/Home/End then walk rows
+  only, never their trailing close buttons. Delete/Backspace closes the focused
+  row's resource without dismissing the menu and keeps focus on the neighbor
+  that takes its place. Selecting a row, Escape, or Tab closes the menu and
+  restores focus to the trigger; only a session switch dismisses it implicitly
+  (D173).
 - Activating a tool that is already open activates its existing resource instead
   of replacing it, so Browser keeps its URL and Files its selection (D173).
-- Every resource can be closed from its tab. Closing the active resource selects
-  the right neighbor, then the left; closing the final tab keeps the panel open
-  on the New launcher. The viewport-fixed panel toggle hides the panel without
-  deleting tabs.
+- Every resource can be closed from its menu row. Closing the active resource
+  selects the right neighbor, then the left; closing the final tab hides the
+  panel. The viewport-fixed panel toggle hides the panel without deleting tabs.
 - On every platform, opening and collapsing the visible panel change only the
   internal flex allocation; native window bounds remain unchanged. The inner
   divider updates the renderer-owned panel target between 244px and 720px,
@@ -929,17 +919,15 @@ Work-panel and application-window resizing are implemented in MVP:
 
 - The 10px inner left-edge separator anchors to the press position and
   starting panel width, then follows pointer delta without jumping. Moving it
-  left grows the panel until MainChat's 515px minimum; moving it right gives
-  space back to MainChat.
+  left grows the panel; moving it right gives space back to MainChat.
 - The inner divider's target clamps to the renderer-owned panel range of
   `244px–720px`; pointer movement is frame-coalesced and release commits the
   preferred width. Escape, pointer cancellation, and lost capture restore the
   press-time panel width.
 - Opening and closing animate the dock's `width` and `flex-basis` together with
   the bounded opacity/transform feedback, so MainChat reflows continuously
-  inside the existing client area until its 515px minimum instead of changing
-  width before the first motion frame. The composer toolbar remains a single
-  unsqueezed row throughout.
+  inside the existing client area instead of changing width before the first
+  motion frame.
 - No panel action requests a positive native reservation. The preferred panel
   width is renderer-local, and native window edges resize only the fixed app
   window. Background-session artifacts never update the visible panel or window
@@ -1301,6 +1289,5 @@ This does not prevent state changes — it makes them instant.
     navigation, composer, completed rows, and work-panel content do not rerender
     solely because the current assistant message appended content
 21. The work panel opens and collapses inside the fixed client area; the inner
-    divider changes the renderer-owned panel target within 244px–720px while
-    MainChat keeps its 515px minimum, and divider cancellation restores the
-    prior panel width (ADR 0151 / ADR 0226)
+    divider changes the renderer-owned panel target within 244px–720px, and
+    divider cancellation restores the prior panel width (ADR 0151)

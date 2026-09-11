@@ -1152,6 +1152,23 @@ export type ThemePreference = "system" | "light" | "dark" | `plugin:${string}`;
  */
 export type CloseBehavior = "ask" | "tray" | "quit";
 
+export type CavemanLevel =
+  | "off"
+  | "lite"
+  | "full"
+  | "ultra"
+  | "wenyan-lite"
+  | "wenyan"
+  | "wenyan-ultra";
+
+export type PonytailLevel = "off" | "lite" | "full" | "ultra";
+
+export type TokenSaverSettings = {
+  caveman?: CavemanLevel;
+  ponytail?: PonytailLevel;
+  rtkCompressor?: boolean;
+};
+
 export type AppSettings = {
   defaultProviderId?: string;
   defaultModelId?: string;
@@ -1219,6 +1236,8 @@ export type AppSettings = {
    * does not change meaning with this preference.
    */
   contextUsageDisplay?: ContextUsageDisplay;
+  /** Token-saver optimization preferences (Caveman, Ponytail, RTK). */
+  tokenSaver?: TokenSaverSettings;
   onboardingDismissed: boolean;
 };
 

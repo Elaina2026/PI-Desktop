@@ -36,7 +36,7 @@ test("the service menu portals above the dialog overlay and hides until measured
   assert.match(pickerSource, /initialFocus="input"/);
   assert.match(pickerSource, /restoreFocus=\{restoreFocus\}/);
   assert.match(menuSource, /initialFocus === "input"/);
-  assert.match(menuSource, /anchorRef\?\.current \?\? triggerRef\.current/);
+  assert.match(menuSource, /if \(restoreFocus\) triggerRef/);
 });
 
 test("the service list is a flat vendor menu with custom first", () => {

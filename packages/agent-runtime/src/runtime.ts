@@ -78,6 +78,7 @@ import type {
   SubagentRunStatus,
   SubagentThinkingLevel,
   ThinkingLevel,
+  TokenSaverSettings,
   ToolTokenUsage,
   UiMessage,
 } from "@pi-desktop/shared";
@@ -154,6 +155,7 @@ import {
 import {
   captureProviderResponse,
   classifyProviderError,
+  createProviderFallbackStream,
   createProviderRetryStream,
   delayWithAbort,
   PROVIDER_RATE_LIMIT_MAX_RETRIES,
@@ -162,7 +164,10 @@ import {
   isTransientProviderRetryCode,
   providerRateLimitDelayMs,
   providerSetupRetryDelayMs,
+  type FallbackTarget,
 } from "./provider-retry.js";
+import { buildOutputCompressionPrompt } from "./compression-prompts.js";
+import { compressToolContent } from "./rtk-compressor.js";
 
 export type { RuntimeProviderConfig } from "./provider-binding.js";
 
@@ -771,6 +776,10 @@ export type AgentRuntimeOptions = {
    * silently run on the session's model.
    */
   subagentProviders?: Record<string, RuntimeProviderConfig>;
+  /** Token saver optimization settings (Caveman, Ponytail, RTK). */
+  tokenSaver?: TokenSaverSettings;
+  /** Secondary provider configurations for automatic failover. */
+  fallbackProviders?: RuntimeProviderConfig[];
 };
 
 export type RuntimeMatchConfig = {
@@ -785,6 +794,8 @@ export type RuntimeMatchConfig = {
   commandShell: CommandShellOption;
   subagents?: SubagentDefinition[];
   subagentProviders?: Record<string, RuntimeProviderConfig>;
+  tokenSaver?: TokenSaverSettings;
+  fallbackProviders?: RuntimeProviderConfig[];
 };
 
 /** Tool calls ride in the assistant content array as `type: "toolCall"`. A
@@ -1469,6 +1480,8 @@ export class DesktopAgentRuntime {
   private activeToolProgressCleanups = new Set<(flush: boolean) => void>();
   private hostCloseUnsubscribe?: () => void;
   private turnSubagentUsage?: MessageUsage;
+  private tokenSaverSettings?: TokenSaverSettings;
+  private fallbackProviders: RuntimeProviderConfig[];
 
   constructor(opts: AgentRuntimeOptions) {
     this.sessionId = opts.sessionId;
@@ -1500,6 +1513,8 @@ export class DesktopAgentRuntime {
     this.projectInstructions = opts.projectInstructions;
     this.compactionEnabled = compactionEnabled(opts.compactionSettings);
     this.compactionStrategy = resolveCompactionStrategy(opts.compactionStrategy);
+    this.tokenSaverSettings = opts.tokenSaver;
+    this.fallbackProviders = opts.fallbackProviders ?? [];
 
     this.rebuildToolCatalog();
     const model = buildProviderModel(this.provider);
@@ -1613,12 +1628,10 @@ Delegation rules:
           ),
         );
         const hookedOptions = this.withExtensionProviderHooks(requestOptions, m);
-        return createProviderRetryStream(
-          m,
-          context,
-          hookedOptions,
-          (retryOptions) => models.streamSimple(m, context, retryOptions),
-          {
+        const primaryTarget: FallbackTarget = {
+          model: m,
+          createStream: (retryOptions) => models.streamSimple(m, context, retryOptions),
+          controller: {
             claim: (error, phase) => this.claimProviderRetry(error, phase),
             headers: () => this.providerRetryHeaders,
             status: () => this.providerResponseStatus,
@@ -1631,6 +1644,39 @@ Delegation rules:
                 error: this.retryActivityError(error),
               });
             },
+          },
+        };
+
+        const fallbackTargets: FallbackTarget[] = this.fallbackProviders.map((fallbackProv) => {
+          const fallbackModel = buildProviderModel(fallbackProv);
+          const fallbackModels = createProviderModels(fallbackProv, fallbackModel);
+          return {
+            model: fallbackModel,
+            createStream: (retryOptions) =>
+              fallbackModels.streamSimple(fallbackModel, context, retryOptions),
+            controller: {
+              claim: () => undefined,
+              headers: () => undefined,
+              status: () => undefined,
+            },
+          };
+        });
+
+        return createProviderFallbackStream(
+          [primaryTarget, ...fallbackTargets],
+          context,
+          hookedOptions,
+          (_from, toIndex) => {
+            this.setAgentActivity({
+              phase: "retrying",
+              since: Date.now(),
+              attempt: toIndex,
+              retryDelayMs: 1000,
+              error: {
+                code: "PROVIDER_FALLBACK",
+                message: `Failing over to fallback provider target #${toIndex}`,
+              },
+            });
           },
         );
       },
@@ -1718,12 +1764,14 @@ Delegation rules:
   private composeSystemPrompt(): string {
     const projectPrompt = projectInstructionsPrompt(this.projectInstructions);
     const optionalToolsPrompt = this.optionalToolsPrompt();
+    const compressionPrompt = buildOutputCompressionPrompt(this.tokenSaverSettings);
     return composeModeSystemPrompt(
       this.mode,
       [
         this.baseSystemPrompt,
         ...(optionalToolsPrompt ? [optionalToolsPrompt] : []),
         ...(projectPrompt ? [projectPrompt] : []),
+        ...(compressionPrompt ? [compressionPrompt] : []),
       ].join("\n\n"),
     );
   }
@@ -1750,8 +1798,23 @@ Delegation rules:
   ): Promise<AfterToolCallResult | undefined> {
     const own = this.resolveOwnToolOutcome(context);
     const fromExtensions = await this.extensionToolResult(context, own);
-    if (!fromExtensions) return own;
-    return { ...(own ?? {}), ...fromExtensions };
+    const baseResult = fromExtensions ? { ...(own ?? {}), ...fromExtensions } : own;
+
+    if (
+      this.tokenSaverSettings?.rtkCompressor !== false &&
+      !baseResult?.isError &&
+      !context.isError &&
+      context.result?.content
+    ) {
+      const sourceContent = baseResult?.content ?? context.result.content;
+      const compressedContent = compressToolContent(sourceContent as any);
+      return {
+        ...(baseResult ?? {}),
+        content: compressedContent as any,
+      };
+    }
+
+    return baseResult;
   }
 
   /** `tool_call` hook: an extension may block a call with a reason (spec 16 §6). */
@@ -1949,7 +2012,9 @@ Delegation rules:
       // Enabling or disabling a trusted extension retires the runtime so the
       // next prompt reloads the set (spec 16 §4.3).
       trustedExtensionIds(this.trustedExtensionSpecs) ===
-        trustedExtensionIds(config.trustedExtensions ?? [])
+        trustedExtensionIds(config.trustedExtensions ?? []) &&
+      safeJson(this.tokenSaverSettings ?? null) ===
+        safeJson(config.tokenSaver ?? null)
     );
   }
 

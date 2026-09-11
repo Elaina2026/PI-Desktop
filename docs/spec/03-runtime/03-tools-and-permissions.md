@@ -59,15 +59,10 @@ without sending their full schemas up front:
 These tools appear in a bounded `# On-demand tools` catalog with compact
 descriptions. The model calls the local `ToolSearch` tool with an exact name or
 capability query; the matching schemas become available on the next model turn.
-At the beginning of every new user prompt, the sidecar clears the in-memory
-deferred set and restores only successful activation evidence from the effective
-session context: `addedToolNames` on successful `ToolSearch` results and the
-names of successful deferred-tool results. Failed rows, interrupted or missing
-result placeholders, and assistant/user prose are ignored. Restored names must
-still be in the current mode's deferred catalog. The host permission,
-workspace/scratch containment, timeout, and audit rules do not change when a
-tool is loaded. `ToolSearch` itself never executes a workspace operation and
-never bypasses host-core policy.
+The sidecar resets this deferred set at the beginning of every new user prompt.
+The host permission, workspace/scratch containment, timeout, and audit rules do
+not change when a tool is loaded. `ToolSearch` itself never executes a workspace
+operation and never bypasses host-core policy.
 
 ## 3. Common Tool Constraints
 
@@ -99,11 +94,10 @@ Native file and search tools enforce distinct path shapes (D208, ADR 0069):
   searcher when `rg` is missing or fails (D315). The model-facing contract does
   not change.
 
-Agent mode keeps `Glob`/`Grep` deferred under D185. Each new user prompt clears
-their live activation and restores only eligible successful markers still in
-context; when no such marker exists, directory discovery activates `Glob`
-through `ToolSearch` for that prompt instead of guessing a file name or calling
-`Read` on a directory.
+Agent mode keeps `Glob`/`Grep` deferred under D185. Each new user prompt resets
+their activation, so directory discovery activates `Glob` through `ToolSearch`
+for that prompt instead of guessing a file name or calling `Read` on a
+directory.
 
 The runtime accepts one alias per canonical argument name and folds it away
 before the host sees the call (D273):

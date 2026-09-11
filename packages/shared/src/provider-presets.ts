@@ -221,6 +221,61 @@ export const NAMED_ENDPOINT_PRESETS: readonly NamedEndpointPreset[] = [
     labelKey: "settings.presetKimiCoding",
     aliases: ["kimi-coding", "kimi"],
   },
+  {
+    id: "antigravity",
+    vendorKey: "antigravity",
+    name: "Antigravity",
+    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+    apiStyle: "google_generative_ai",
+    labelKey: "settings.presetAntigravity",
+    aliases: ["ag", "cloudcode", "agy"],
+  },
+  {
+    id: "kiro",
+    vendorKey: "kiro",
+    name: "Kiro AI",
+    baseUrl: "https://api.kiro.ai/v1",
+    apiStyle: "chat_completions",
+    labelKey: "settings.presetKiro",
+    aliases: ["kiro-ai"],
+  },
+  {
+    id: "opencode-free",
+    vendorKey: "opencode-free",
+    name: "OpenCode Free",
+    baseUrl: "https://opencode.ai/zen/free/v1",
+    apiStyle: "chat_completions",
+    labelKey: "settings.presetOpenCodeFree",
+    aliases: ["opencode-free-tier"],
+  },
+];
+
+export type ProviderFallbackPreset = {
+  id: string;
+  name: string;
+  primaryPresetId: string;
+  fallbackPresetIds: readonly string[];
+};
+
+export const DEFAULT_FALLBACK_CHAINS: readonly ProviderFallbackPreset[] = [
+  {
+    id: "antigravity-resilient",
+    name: "Antigravity with Google Gemini Fallback",
+    primaryPresetId: "antigravity",
+    fallbackPresetIds: ["google", "openrouter"],
+  },
+  {
+    id: "anthropic-resilient",
+    name: "Anthropic with OpenRouter Fallback",
+    primaryPresetId: "anthropic",
+    fallbackPresetIds: ["openrouter"],
+  },
+  {
+    id: "deepseek-resilient",
+    name: "DeepSeek with SiliconFlow Fallback",
+    primaryPresetId: "deepseek",
+    fallbackPresetIds: ["siliconflow-cn"],
+  },
 ];
 
 /** Canonical form of a configured endpoint for preset matching. */

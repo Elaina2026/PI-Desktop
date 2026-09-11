@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type {
@@ -19,7 +19,6 @@ import {
   IconFileText,
 } from "./icons";
 import { TooltipButton } from "./ui";
-import { AnchoredMenu } from "./settings/AnchoredMenu";
 
 const APPROVAL_MODES: readonly GlobalPermissionMode[] = [
   "ask",
@@ -64,11 +63,41 @@ export function PlanApprovalBar({ proposal }: { proposal: PlanProposal }) {
   const [approvalMode, setApprovalMode] = useState<GlobalPermissionMode>(
     readPlanApprovalMode(),
   );
+  const menuRef = useRef<HTMLDivElement>(null);
+  const chevronRef = useRef<HTMLButtonElement>(null);
   const kind: ProposalKind = proposal.kind === "goal" ? "goal" : "plan";
   const copy = (name: string) => t(copyKey(kind, name));
   const artifactPath = proposal.artifact?.relativePath?.trim() || null;
   const isPending = proposal.status === "pending";
   const busy = resolving;
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setMenuOpen(false);
+      requestAnimationFrame(() => chevronRef.current?.focus());
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    const focusFrame = requestAnimationFrame(() => {
+      const selected = menuRef.current?.querySelector<HTMLButtonElement>(
+        '[role="menuitemradio"][aria-checked="true"]',
+      );
+      (selected ??
+        menuRef.current?.querySelector<HTMLButtonElement>(
+          '[role="menuitemradio"]',
+        ))?.focus();
+    });
+    return () => {
+      cancelAnimationFrame(focusFrame);
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
 
   useEffect(() => {
     setApprovalMode(readPlanApprovalMode());
@@ -138,6 +167,7 @@ export function PlanApprovalBar({ proposal }: { proposal: PlanProposal }) {
       event.preventDefault();
       event.stopPropagation();
       setMenuOpen(false);
+      requestAnimationFrame(() => chevronRef.current?.focus());
       return;
     }
     if (event.key === "Enter" || event.key === " ") {
@@ -156,7 +186,7 @@ export function PlanApprovalBar({ proposal }: { proposal: PlanProposal }) {
       return;
     }
     const items = Array.from(
-      event.currentTarget.querySelectorAll<HTMLButtonElement>(
+      menuRef.current?.querySelectorAll<HTMLButtonElement>(
         '[role="menuitemradio"]',
       ) ?? [],
     );
@@ -225,65 +255,64 @@ export function PlanApprovalBar({ proposal }: { proposal: PlanProposal }) {
           >
             {copy("reject")}
           </button>
-          <AnchoredMenu
+          <div
+            ref={menuRef}
             className="plan-approval-split"
-            open={menuOpen}
-            onClose={() => setMenuOpen(false)}
-            menuClassName="plan-approval-menu"
-            label={copy("chooseApprovalMode")}
-            role="menu"
-            align="end"
-            onMenuKeyDown={onMenuKeyDown}
-            trigger={(ref) => (
-              <>
-                <button
-                  type="button"
-                  className="plan-approval-approve-main"
-                  disabled={busy}
-                  aria-label={copy(APPROVE_LABELS[approvalMode])}
-                  onClick={() => void resolve("approve", approvalMode)}
-                >
-                  {resolving
-                    ? copy("approving")
-                    : copy(APPROVE_LABELS[approvalMode])}
-                </button>
-                <TooltipButton
-                  ref={ref}
-                  type="button"
-                  className="plan-approval-approve-menu"
-                  disabled={busy}
-                  ariaLabel={copy("chooseApprovalMode")}
-                  tooltip={copy("chooseApprovalMode")}
-                  aria-haspopup="menu"
-                  aria-expanded={menuOpen}
-                  onClick={() => setMenuOpen((open) => !open)}
-                >
-                  <IconChevronDown size={13} aria-hidden />
-                </TooltipButton>
-              </>
-            )}
+            onKeyDown={onMenuKeyDown}
           >
-            {APPROVAL_MODES.map((candidate) => (
-              <button
-                key={candidate}
-                type="button"
-                className="plan-approval-menu-item"
-                role="menuitemradio"
-                aria-checked={approvalMode === candidate}
-                data-approval-mode={candidate}
-                disabled={busy}
-                onClick={() => {
-                  setApprovalMode(candidate);
-                  void resolve("approve", candidate);
-                }}
+            <button
+              type="button"
+              className="plan-approval-approve-main"
+              disabled={busy}
+              aria-label={copy(APPROVE_LABELS[approvalMode])}
+              onClick={() => void resolve("approve", approvalMode)}
+            >
+              {resolving
+                ? copy("approving")
+                : copy(APPROVE_LABELS[approvalMode])}
+            </button>
+            <TooltipButton
+              ref={chevronRef}
+              type="button"
+              className="plan-approval-approve-menu"
+              disabled={busy}
+              ariaLabel={copy("chooseApprovalMode")}
+              tooltip={copy("chooseApprovalMode")}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen((open) => !open)}
+            >
+              <IconChevronDown size={13} aria-hidden />
+            </TooltipButton>
+            {menuOpen ? (
+              <div
+                className="plan-approval-menu"
+                role="menu"
+                aria-label={copy("chooseApprovalMode")}
               >
-                <span>{copy(APPROVAL_MODE_LABELS[candidate])}</span>
-                {approvalMode === candidate ? (
-                  <IconCheck size={13} aria-hidden />
-                ) : null}
-              </button>
-            ))}
-          </AnchoredMenu>
+                {APPROVAL_MODES.map((candidate) => (
+                  <button
+                    key={candidate}
+                    type="button"
+                    className="plan-approval-menu-item"
+                    role="menuitemradio"
+                    aria-checked={approvalMode === candidate}
+                    data-approval-mode={candidate}
+                    disabled={busy}
+                    onClick={() => {
+                      setApprovalMode(candidate);
+                      void resolve("approve", candidate);
+                    }}
+                  >
+                    <span>{copy(APPROVAL_MODE_LABELS[candidate])}</span>
+                    {approvalMode === candidate ? (
+                      <IconCheck size={13} aria-hidden />
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </section>

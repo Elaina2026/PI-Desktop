@@ -193,14 +193,17 @@ test("sidebar floating menus open to the anchor's right", () => {
 });
 
 test("portaled sort menu does not stretch to the viewport edge", () => {
-  const basePopoverRule = globalStyles.match(
-    /\.sidebar-row-menu,\n\.sidebar-popover\s*\{[^}]*\}/s,
-  )?.[0] ?? "";
+  const defaultPopoverRuleIndex = globalStyles.indexOf(
+    ".sidebar-popover {\n  top: calc(100% + 4px);\n  right: 0;\n}",
+  );
+  const floatingPopoverRuleIndex = globalStyles.indexOf(
+    ".sidebar-popover.sidebar-floating-menu",
+  );
   const floatingPopoverRule =
     globalStyles.match(/\.sidebar-popover\.sidebar-floating-menu\s*\{[^}]*\}/s)?.[0] ?? "";
 
-  assert.match(basePopoverRule, /position:\s*fixed;/);
-  assert.doesNotMatch(basePopoverRule, /position:\s*absolute;/);
+  assert.ok(defaultPopoverRuleIndex >= 0);
+  assert.ok(floatingPopoverRuleIndex > defaultPopoverRuleIndex);
   assert.match(floatingPopoverRule, /top:\s*auto;/);
   assert.match(floatingPopoverRule, /right:\s*auto;/);
   assert.match(globalStyles, /\.sidebar-floating-menu\s*\{[^}]*width:\s*max-content;/s);

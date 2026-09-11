@@ -10,7 +10,6 @@ import {
   IconSlash,
   IconSparkles,
 } from "./icons";
-import { AnchoredMenu } from "./settings/AnchoredMenu";
 
 /**
  * Composer autocomplete panel (D123–D125, spec 08 §11.8): full composer
@@ -57,11 +56,9 @@ function CommandIcon({ kind }: { kind: ComposerCommand["kind"] }) {
 }
 
 export function ComposerAutocomplete({
-  anchorRef,
   ac,
   onAccept,
 }: {
-  anchorRef: React.RefObject<HTMLElement | null>;
   ac: ReturnType<typeof useComposerAutocomplete>;
   onAccept: (index: number) => void;
 }) {
@@ -160,18 +157,10 @@ export function ComposerAutocomplete({
       : "chat.slashEmpty";
 
   return (
-    <AnchoredMenu
-      className="composer-autocomplete-anchor"
-      open={ac.open}
-      onClose={ac.close}
-      anchorRef={anchorRef}
-      menuClassName="composer-autocomplete"
-      label={t(ac.mode === "file" ? "chat.fileMenu" : "chat.slashMenu")}
+    <div
+      className="composer-autocomplete"
       role="listbox"
-      side="top"
-      matchAnchorWidth
-      initialFocus="none"
-      trigger={() => null}
+      aria-label={t(ac.mode === "file" ? "chat.fileMenu" : "chat.slashMenu")}
     >
       <div className="composer-ac-list" ref={listRef}>
         {rows.length > 0 ? (
@@ -186,6 +175,6 @@ export function ComposerAutocomplete({
           <span className="composer-ac-truncated">{t("chat.fileTruncated")}</span>
         ) : null}
       </div>
-    </AnchoredMenu>
+    </div>
   );
 }
