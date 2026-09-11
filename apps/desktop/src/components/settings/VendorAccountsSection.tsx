@@ -6,7 +6,12 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { OAuthAccount, OAuthVendor, ProviderPublic } from "@pi-desktop/shared";
+import type {
+  AccountQuotaInfo,
+  OAuthAccount,
+  OAuthVendor,
+  ProviderPublic,
+} from "@pi-desktop/shared";
 import { useAppStore } from "../../stores/app-store";
 import { api } from "../../lib/api";
 import {
@@ -14,7 +19,7 @@ import {
   type OAuthLoginSession,
 } from "../../lib/oauth-login-session";
 import { Badge, Button, TooltipButton, cx } from "../ui";
-import { IconKey, IconPencil, IconPlug, IconTrash } from "../icons";
+import { IconKey, IconPencil, IconPlug, IconRefresh, IconTrash } from "../icons";
 import { OAuthLoginDialog } from "./OAuthLoginDialog";
 import {
   VendorAccountDialog,
@@ -56,6 +61,20 @@ export function VendorAccountsSection() {
   const [editingAccount, setEditingAccount] = useState<AccountEntry | null>(null);
   const [savingAccount, setSavingAccount] = useState(false);
   const [testingAccount, setTestingAccount] = useState<string | null>(null);
+  const [quotas, setQuotas] = useState<Record<string, AccountQuotaInfo>>({});
+  const [refreshingQuota, setRefreshingQuota] = useState<string | null>(null);
+
+  const fetchAccountQuota = useCallback(async (providerId: string) => {
+    setRefreshingQuota(providerId);
+    try {
+      const quota = await api.getOauthAccountQuota(providerId);
+      setQuotas((prev) => ({ ...prev, [providerId]: quota }));
+    } catch {
+      // Best effort
+    } finally {
+      setRefreshingQuota(null);
+    }
+  }, []);
 
   const loadVendors = useCallback(async () => {
     try {
@@ -88,6 +107,14 @@ export function VendorAccountsSection() {
       }));
     });
   }, [vendors]);
+
+  useEffect(() => {
+    for (const entry of accounts) {
+      if (entry.account.connected && !quotas[entry.account.providerId]) {
+        void fetchAccountQuota(entry.account.providerId);
+      }
+    }
+  }, [accounts, fetchAccountQuota, quotas]);
 
   const removeAccount = async (entry: AccountEntry) => {
     const { account, vendor } = entry;
@@ -281,6 +308,69 @@ export function VendorAccountsSection() {
                         {duplicateLabel}
                       </span>
                     </div>
+                    {connected && (
+                      <div className="vendor-account-quota" style={{ marginTop: "6px" }}>
+                        {quotas[account.providerId] ? (
+                          <>
+                            <div
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                fontSize: "11px",
+                                marginBottom: "4px",
+                                color: "var(--color-text-subtle, #888)",
+                              }}
+                            >
+                              <span>
+                                Quota:{" "}
+                                <strong style={{ color: "var(--color-text-normal, #ddd)" }}>
+                                  {quotas[account.providerId].remainingPercentage !== undefined
+                                    ? `${quotas[account.providerId].remainingPercentage}% remaining`
+                                    : "Active"}
+                                </strong>
+                              </span>
+                              {quotas[account.providerId].resetInSeconds ? (
+                                <span>
+                                  Resets in{" "}
+                                  {Math.floor(quotas[account.providerId].resetInSeconds! / 3600)}h{" "}
+                                  {Math.floor((quotas[account.providerId].resetInSeconds! % 3600) / 60)}m
+                                </span>
+                              ) : null}
+                            </div>
+                            <div
+                              style={{
+                                height: "4px",
+                                width: "100%",
+                                backgroundColor: "rgba(255, 255, 255, 0.1)",
+                                borderRadius: "2px",
+                                overflow: "hidden",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  height: "100%",
+                                  width: `${Math.min(
+                                    100,
+                                    Math.max(0, quotas[account.providerId].remainingPercentage ?? 100),
+                                  )}%`,
+                                  backgroundColor:
+                                    (quotas[account.providerId].remainingPercentage ?? 100) > 40
+                                      ? "#22c55e"
+                                      : (quotas[account.providerId].remainingPercentage ?? 100) > 15
+                                        ? "#f59e0b"
+                                        : "#ef4444",
+                                  transition: "width 0.3s ease",
+                                }}
+                              />
+                            </div>
+                          </>
+                        ) : (
+                          <div style={{ fontSize: "11px", opacity: 0.5 }}>
+                            {refreshingQuota === account.providerId ? "Checking quota…" : ""}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {!connected ? (
                       <div className="vendor-account-status">
                         {t("settings.vendorDisconnectedDesc")}
@@ -288,6 +378,19 @@ export function VendorAccountsSection() {
                     ) : null}
                   </div>
                   <div className="provider-row-actions">
+                    <TooltipButton
+                      type="button"
+                      className={cx(
+                        "icon-btn provider-icon-btn",
+                        refreshingQuota === account.providerId && "is-testing",
+                      )}
+                      tooltip="Refresh Quota"
+                      ariaLabel="Refresh Quota"
+                      disabled={rowBusy || !provider || !connected}
+                      onClick={() => void fetchAccountQuota(account.providerId)}
+                    >
+                      <IconRefresh size={14} />
+                    </TooltipButton>
                     <TooltipButton
                       type="button"
                       className="icon-btn provider-icon-btn"

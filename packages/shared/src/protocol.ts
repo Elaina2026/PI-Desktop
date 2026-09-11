@@ -133,6 +133,7 @@ export const IPC = {
     providersOauthRespond: "pi-desktop/providers/oauth/respond",
     providersOauthCancel: "pi-desktop/providers/oauth/cancel",
     providersOauthDelete: "pi-desktop/providers/oauth/delete",
+    providersOauthQuota: "pi-desktop/providers/oauth/quota",
     pluginList: "pi-desktop/plugin/list",
     /** Plugin-contributed agent extensions (D387/D388, ADR 0214). */
     pluginImportExtension: "pi-desktop/plugin/importExtension",

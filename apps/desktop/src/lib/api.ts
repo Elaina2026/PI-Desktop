@@ -1,4 +1,5 @@
 import type {
+  AccountQuotaInfo,
   ActivationScope,
   AgentCapabilityQuery,
   AgentEventEnvelope,
@@ -454,6 +455,8 @@ export const api = {
     invoke<{ ok: boolean }>(IPC.invoke.providersOauthCancel, loginId),
   deleteOauthAccount: (providerId: string) =>
     invoke<{ ok: boolean }>(IPC.invoke.providersOauthDelete, providerId),
+  getOauthAccountQuota: (providerId: string) =>
+    invoke<AccountQuotaInfo>(IPC.invoke.providersOauthQuota, providerId),
   getProject: () =>
     invoke<{ workspace: ProjectWorkspace | null }>(IPC.invoke.projectGet),
   listProjects: () =>

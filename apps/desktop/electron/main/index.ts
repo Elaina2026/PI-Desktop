@@ -6790,6 +6790,12 @@ function registerIpc() {
     await vendorOAuth.deleteAccount(providerId);
     return { ok: true };
   });
+  handle(IPC.invoke.providersOauthQuota, async (providerId: unknown) => {
+    if (typeof providerId !== "string" || !providerId) {
+      throw new Error("providerId required");
+    }
+    return vendorOAuth.getQuota(providerId);
+  });
   handle(
     IPC.invoke.providersListModels,
     async (

@@ -44,6 +44,7 @@ import {
 } from "@pi-desktop/agent-runtime";
 import {
   OAUTH_AUTH_KIND,
+  type AccountQuotaInfo,
   type OAuthLoginEvent,
   type OAuthPromptRequest,
   type OAuthRespondInput,
@@ -456,6 +457,121 @@ export class VendorOAuth {
     }
     this.accountModels.delete(providerId);
     await this.deps.call("providers.delete", { id: providerId });
+  }
+
+  /**
+   * Fetch live quota status for an OAuth account.
+   */
+  async getQuota(providerId: string): Promise<AccountQuotaInfo> {
+    const raw = await this.readCredential(providerId);
+    if (!raw) return { providerId, status: "unknown", error: "Not signed in" };
+
+    const cred = (typeof raw === "string" ? JSON.parse(raw) : raw) as {
+      access_token: string;
+      refresh_token?: string;
+      expires_at?: number;
+      projectId?: string;
+    };
+
+    let token = cred.access_token;
+    if (
+      cred.expires_at &&
+      Date.now() > cred.expires_at - 60_000 &&
+      cred.refresh_token
+    ) {
+      try {
+        const auth = await this.resolveAntigravityAuth(providerId);
+        token = auth.apiKey || token;
+      } catch {}
+    }
+
+    try {
+      const quotaRes = await fetch(
+        "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            "User-Agent": "antigravity/ide/2.1.1 darwin/arm64",
+            ...(cred.projectId ? { "x-goog-user-project": cred.projectId } : {}),
+          },
+          body: JSON.stringify({ project: cred.projectId || "" }),
+        },
+      );
+
+      if (quotaRes.ok) {
+        const data = (await quotaRes.json()) as any;
+        let percentage = 100;
+        let resetTime = "";
+        let resetInSeconds: number | undefined;
+
+        if (typeof data.remainingPercentage === "number") {
+          percentage = data.remainingPercentage;
+        } else if (typeof data.remainingFraction === "number") {
+          percentage = Math.round(data.remainingFraction * 100);
+        } else if (Array.isArray(data.models) && data.models.length > 0) {
+          const modelWithLowest = data.models.reduce((prev: any, curr: any) => {
+            const prevRem = prev?.remainingPercentage ?? prev?.remaining ?? 100;
+            const currRem = curr?.remainingPercentage ?? curr?.remaining ?? 100;
+            return currRem < prevRem ? curr : prev;
+          }, data.models[0]);
+          percentage = modelWithLowest?.remainingPercentage ?? modelWithLowest?.remaining ?? 100;
+          resetTime = modelWithLowest?.resetTime || "";
+        }
+
+        if (resetTime) {
+          const diffMs = new Date(resetTime).getTime() - Date.now();
+          if (diffMs > 0) resetInSeconds = Math.round(diffMs / 1000);
+        }
+
+        const status: AccountQuotaInfo["status"] =
+          percentage <= 0 ? "exhausted" : percentage < 25 ? "low" : "healthy";
+
+        return {
+          providerId,
+          remainingPercentage: percentage,
+          resetTime,
+          resetInSeconds,
+          status,
+        };
+      }
+
+      const modelsRes = await fetch(
+        "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            "User-Agent": "antigravity/ide/2.1.1 darwin/arm64",
+            ...(cred.projectId ? { "x-goog-user-project": cred.projectId } : {}),
+          },
+          body: JSON.stringify({ project: cred.projectId || "" }),
+        },
+      );
+
+      if (modelsRes.ok) {
+        return {
+          providerId,
+          remainingPercentage: 100,
+          status: "healthy",
+        };
+      }
+
+      const errText = await quotaRes.text();
+      return {
+        providerId,
+        status: "unknown",
+        error: `HTTP ${quotaRes.status}: ${errText.slice(0, 100)}`,
+      };
+    } catch (e) {
+      return {
+        providerId,
+        status: "unknown",
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
   }
 
   /**
