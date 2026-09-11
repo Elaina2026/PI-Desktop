@@ -1765,14 +1765,20 @@ async function resolveAgentRuntimeLaunch(
       data: { diagnostics: subagentDiagnostics },
     });
   }
+  // Peer accounts for automatic failover when quota is exhausted
+  const peerAccounts = provider.vendorKey
+    ? providers.providers.filter(
+        (p) => p.id !== provider.id && p.vendorKey === provider.vendorKey && p.enabled,
+      )
+    : [];
+
   // Bind the vendor-account rows this turn is allowed to sign requests with:
-  // the session's own provider plus any row a pinned subagent resolved to. The
-  // sidecar may then ask main for request auth, but only for a row named here,
-  // and the set is rewritten on every launch.
+  // the session's own provider, fallback peer accounts, plus any row a pinned subagent resolved to.
   sidecar?.setVendorAuthBindings(
     sessionId,
     [
       provider.id,
+      ...peerAccounts.map((p) => p.id),
       ...Object.values(subagentBindings.providers).map((binding) => binding.id),
     ]
       .map((id) => providers.providers.find((row) => row.id === id))
@@ -1854,6 +1860,36 @@ async function resolveAgentRuntimeLaunch(
       subagents: subagentCatalog.definitions,
       subagentProviders: subagentBindings.providers,
       tokenSaver: settings.tokenSaver,
+      fallbackProviders: await Promise.all(
+        peerAccounts.map(async (peer) => {
+          let apiKey = "";
+          if (peer.authKind !== OAUTH_AUTH_KIND && peer.authKind !== "none") {
+            try {
+              apiKey =
+                (
+                  await host!.call<{ value?: string }>("providers.getSecret", {
+                    id: peer.id,
+                  })
+                ).value ?? "";
+            } catch {}
+          }
+          return {
+            id: peer.id,
+            name: peer.name,
+            vendorKey: peer.vendorKey,
+            baseUrl: peer.baseUrl || baseUrl,
+            modelId,
+            apiKey,
+            authKind: peer.authKind,
+            apiStyle: peer.apiStyle || apiStyle,
+            ...optionalProviderHeaders(peer.headers),
+            supportsReasoning: thinkingCapabilities.supportsReasoning,
+            supportsVision: visionFromModelConfig(modelConfig),
+            supportedThinkingLevels: [...thinkingCapabilities.supportedThinkingLevels],
+            ...(modelConfig ? { modelConfig } : {}),
+          };
+        }),
+      ),
     },
   };
 }

@@ -301,6 +301,9 @@ async function runtimeFor(
       withVendorAuth(sessionId, pinned),
     ]),
   );
+  const fallbackProviders = (params.fallbackProviders ?? []).map((p) =>
+    withVendorAuth(sessionId, p),
+  );
   if (
     !provider?.modelId ||
     (!provider.apiKey &&
@@ -390,7 +393,7 @@ async function runtimeFor(
     projectPath: params.projectPath,
     projectInstructions: params.projectInstructions,
     tokenSaver: params.tokenSaver,
-    fallbackProviders: params.fallbackProviders,
+    fallbackProviders,
     scratchDir:
       typeof params.scratchDir === "string" && params.scratchDir
         ? params.scratchDir
