@@ -78,10 +78,11 @@ describe("provider fallback stream", () => {
       controller: primaryController as any,
       createStream: () => {
         const stream = createAssistantMessageEventStream();
+        const msg = successMessage("Primary response");
         queueMicrotask(() => {
-          stream.push({ type: "start", message: successMessage("Primary response") });
-          stream.push({ type: "text_delta", delta: "Primary response" });
-          stream.end(successMessage("Primary response"));
+          stream.push({ type: "start", partial: msg });
+          stream.push({ type: "text_delta", contentIndex: 0, delta: "Primary response", partial: msg });
+          stream.end(msg);
         });
         return stream;
       },
@@ -132,10 +133,11 @@ describe("provider fallback stream", () => {
       controller: secondaryController as any,
       createStream: () => {
         const stream = createAssistantMessageEventStream();
+        const msg = successMessage("Fallback response");
         queueMicrotask(() => {
-          stream.push({ type: "start", message: successMessage("Fallback response") });
-          stream.push({ type: "text_delta", delta: "Fallback response" });
-          stream.end(successMessage("Fallback response"));
+          stream.push({ type: "start", partial: msg });
+          stream.push({ type: "text_delta", contentIndex: 0, delta: "Fallback response", partial: msg });
+          stream.end(msg);
         });
         return stream;
       },

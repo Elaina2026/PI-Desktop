@@ -865,6 +865,7 @@ export const es = {
     "presetMinimaxCnOpenai": "MiniMax (OpenAI)",
     "presetKimiCoding": "Kimi para codificación",
     "presetXiaomi": "Xiaomi",
+    "presetAntigravity": "Antigravity",
     "apiStyleResponses": "Respuestas de OpenAI",
     "apiStyleAnthropic": "Mensajes antrópicos",
     "apiStyleGoogle": "IA generativa de Google",
