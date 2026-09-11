@@ -210,6 +210,13 @@ test("vendors are derived from pi-ai, not hardcoded", async () => {
       isSubscription: true,
       accounts: [],
     },
+    {
+      vendorId: "antigravity",
+      name: "Antigravity (Google)",
+      loginLabel: "Sign in with Google",
+      isSubscription: false,
+      accounts: [],
+    },
   ]);
 });
 
@@ -448,6 +455,7 @@ test("the real pi-ai catalog offers every vendor account we ship", async () => {
     vendors.map((vendor) => vendor.vendorId).sort(),
     [
       "anthropic",
+      "antigravity",
       "github-copilot",
       "kimi-coding",
       "openai-codex",
