@@ -382,15 +382,25 @@ export function createProviderRetryStream(
   const outer = createAssistantMessageEventStream();
   const sleep = controller.sleep ?? delayWithAbort;
 
+  // Google Generative AI adapter in pi-ai rejects custom fetch.
+  const effectiveOptions =
+    model.api === "google-generative-ai" &&
+    options.fetch &&
+    options.fetch !== globalThis.fetch
+      ? (({ fetch: _, ...rest }) => rest)(options)
+      : options;
+
   void (async () => {
     // One repair per logical turn: after an opaque 400/422 the next attempt
     // drops the derived output limit. Repairing never consumes the shared
     // transient budget, and a second opaque failure surfaces untouched.
     let limitRepairTried = false;
     for (;;) {
-      if (options.signal?.aborted) throw requestAbortedError();
+      if (effectiveOptions.signal?.aborted) throw requestAbortedError();
       const inner = createStream({
-        ...(limitRepairTried ? withoutDerivedOutputLimit(options) : options),
+        ...(limitRepairTried
+          ? withoutDerivedOutputLimit(effectiveOptions)
+          : effectiveOptions),
         maxRetries: 0,
       });
       let sawStart = false;
@@ -437,7 +447,7 @@ export function createProviderRetryStream(
         // Drain the ended stream so providers with deferred cleanup do not
         // overlap the repair request, mirroring the retry path below.
         await inner.result();
-        if (options.signal?.aborted) throw requestAbortedError();
+        if (effectiveOptions.signal?.aborted) throw requestAbortedError();
         limitRepairTried = true;
         continue;
       }
@@ -472,11 +482,11 @@ export function createProviderRetryStream(
         attempt: retry.attempt,
         delayMs,
       });
-      await sleep(delayMs, options.signal);
+      await sleep(delayMs, effectiveOptions.signal);
     }
   })().catch((error) => {
     const aborted =
-      options.signal?.aborted ||
+      effectiveOptions.signal?.aborted ||
       (error instanceof Error && error.name === "AbortError");
     const message = setupErrorMessage(model, error, Boolean(aborted));
     outer.push({

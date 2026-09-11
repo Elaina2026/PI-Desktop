@@ -86,16 +86,21 @@ export async function completeOneShot(
   let transientRetryAttempt = 0;
   let rateLimitRetryAttempt = 0;
 
+  const supportsCustomFetch = model.api !== "google-generative-ai";
   const requestOptions: SimpleStreamOptions = withProviderHeaders(
     withOpenCodeSessionHeaders(
       {
         ...(options.signal ? { signal: options.signal } : {}),
         maxRetries: 0,
         ...(thinkingLevel !== "off" ? { reasoning: thinkingLevel } : {}),
-        fetch: captureProviderResponse(undefined, (response) => {
-          providerStatus = response?.status;
-          providerHeaders = response?.headers;
-        }),
+        ...(supportsCustomFetch
+          ? {
+              fetch: captureProviderResponse(undefined, (response) => {
+                providerStatus = response?.status;
+                providerHeaders = response?.headers;
+              }),
+            }
+          : {}),
       },
       {
         ...openCodeEndpointFromProvider(provider, model),

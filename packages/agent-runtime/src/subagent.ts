@@ -228,20 +228,25 @@ export class SubagentRun {
       streamFn: (m, context, options) => {
         this.providerRetryHeaders = undefined;
         this.providerResponseStatus = undefined;
+        const supportsCustomFetch = m.api !== "google-generative-ai";
         const requestOptions = withProviderHeaders(
           withOpenCodeSessionHeaders(
             {
               ...options,
               maxRetries: PROVIDER_REQUEST_MAX_RETRIES,
               sessionId: opts.sessionId,
-              fetch: captureProviderResponse(options?.fetch, (response) => {
-                this.providerResponseStatus = response?.status;
-                this.providerRetryHeaders = carriesRetryDelayHeaders(
-                  response?.status,
-                )
-                  ? response?.headers
-                  : undefined;
-              }),
+              ...(supportsCustomFetch
+                ? {
+                    fetch: captureProviderResponse(options?.fetch, (response) => {
+                      this.providerResponseStatus = response?.status;
+                      this.providerRetryHeaders = carriesRetryDelayHeaders(
+                        response?.status,
+                      )
+                        ? response?.headers
+                        : undefined;
+                    }),
+                  }
+                : {}),
             },
             {
               ...openCodeEndpointFromProvider(opts.provider, m),

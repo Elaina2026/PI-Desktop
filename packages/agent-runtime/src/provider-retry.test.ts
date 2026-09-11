@@ -693,3 +693,31 @@ describe("opaque bad-request repair", () => {
     expect(typeof repaired.onPayload).toBe("function");
   });
 });
+
+describe("google generative ai custom fetch handling", () => {
+  it("strips custom fetch option when model api is google-generative-ai", async () => {
+    let capturedOptions: any;
+    const googleModel = {
+      ...model,
+      api: "google-generative-ai",
+    };
+    const customFetch = vi.fn() as any;
+    const stream = createProviderRetryStream(
+      googleModel,
+      context,
+      { fetch: customFetch },
+      (retryOptions) => {
+        capturedOptions = retryOptions;
+        return successfulStream();
+      },
+      {
+        claim: vi.fn(() => undefined),
+        headers: () => undefined,
+      },
+    );
+
+    for await (const _event of stream) {}
+    expect(capturedOptions?.fetch).toBeUndefined();
+  });
+});
+

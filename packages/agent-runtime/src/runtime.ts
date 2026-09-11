@@ -1594,6 +1594,7 @@ Delegation rules:
         this.setAgentActivity({ phase: "waiting-model", since: Date.now() });
         this.providerResponseStatus = undefined;
         this.providerRetryHeaders = undefined;
+        const supportsCustomFetch = m.api !== "google-generative-ai";
         const requestOptions: SimpleStreamOptions = withProviderHeaders(
           withOpenCodeSessionHeaders(
             {
@@ -1602,16 +1603,21 @@ Delegation rules:
               sessionId: this.sessionId,
               // pi-ai only exposes onResponse after a request succeeds. Capture the
               // failed response separately so a 429 can honor Retry-After headers.
-              fetch: captureProviderResponse(options?.fetch, (response) => {
-                this.providerResponseStatus = response?.status;
-                // A gateway 502/503 can also state Retry-After, so keep headers for
-                // every status whose delay is usable instead of only for 429.
-                this.providerRetryHeaders = carriesRetryDelayHeaders(
-                  response?.status,
-                )
-                  ? response?.headers
-                  : undefined;
-              }),
+              // Google Generative AI adapter rejects custom fetch.
+              ...(supportsCustomFetch
+                ? {
+                    fetch: captureProviderResponse(options?.fetch, (response) => {
+                      this.providerResponseStatus = response?.status;
+                      // A gateway 502/503 can also state Retry-After, so keep headers for
+                      // every status whose delay is usable instead of only for 429.
+                      this.providerRetryHeaders = carriesRetryDelayHeaders(
+                        response?.status,
+                      )
+                        ? response?.headers
+                        : undefined;
+                    }),
+                  }
+                : {}),
               onResponse: async (response, responseModel) => {
                 this.providerResponseStatus = response.status;
                 await options?.onResponse?.(response, responseModel);
