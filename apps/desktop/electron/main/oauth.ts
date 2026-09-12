@@ -495,7 +495,7 @@ export class VendorOAuth {
           headers: {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
-            "User-Agent": "antigravity/ide/2.1.1 darwin/arm64",
+            "User-Agent": "antigravity/ide/2.11.0 darwin/arm64",
             ...(cred.projectId ? { "x-goog-user-project": cred.projectId } : {}),
           },
           body: JSON.stringify({ project: cred.projectId || "" }),
@@ -546,7 +546,7 @@ export class VendorOAuth {
           headers: {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
-            "User-Agent": "antigravity/ide/2.1.1 darwin/arm64",
+            "User-Agent": "antigravity/ide/2.11.0 darwin/arm64",
             ...(cred.projectId ? { "x-goog-user-project": cred.projectId } : {}),
           },
           body: JSON.stringify({ project: cred.projectId || "" }),
@@ -801,7 +801,7 @@ export class VendorOAuth {
     return {
       apiKey: accessToken,
       headers: {
-        "User-Agent": "antigravity/ide/2.1.1 darwin/arm64",
+        "User-Agent": "antigravity/ide/2.11.0 darwin/arm64",
         "x-client-name": "antigravity",
         "x-client-version": "4.2.5",
         ...(projectId ? { "x-antigravity-project-id": projectId } : {}),
@@ -929,7 +929,7 @@ export class VendorOAuth {
             headers: {
               Authorization: `Bearer ${tokens.access_token}`,
               "Content-Type": "application/json",
-              "User-Agent": "antigravity/ide/2.1.1 darwin/arm64",
+              "User-Agent": "antigravity/ide/2.11.0 darwin/arm64",
               "x-request-source": "local",
             },
             body: JSON.stringify({ metadata: { ideType: 9, platform: 2, pluginType: 2 } }),
