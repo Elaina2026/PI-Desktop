@@ -87,7 +87,7 @@ function buildAntigravityTools(
 
 
 
-function lookupAntigravityProjectId(): string {
+function lookupAntigravityProjectId(email?: string): string {
   try {
     const appData = process.env.APPDATA;
     if (!appData) return "";
@@ -95,9 +95,18 @@ function lookupAntigravityProjectId(): string {
     if (!fs.existsSync(dbPath)) return "";
     const { DatabaseSync } = require("node:sqlite");
     const db = new DatabaseSync(dbPath, { readOnly: true });
-    const row = db.prepare("SELECT data FROM providerConnections WHERE provider='antigravity' LIMIT 1").get() as { data?: string } | undefined;
-    if (row && row.data) {
-      const parsed = JSON.parse(row.data);
+    if (email) {
+      const row = db.prepare("SELECT data FROM providerConnections WHERE provider=\'antigravity\' AND email=? LIMIT 1").get(email) as { data?: string } | undefined;
+      if (row?.data) {
+        const parsed = JSON.parse(row.data);
+        if (typeof parsed.projectId === "string" && parsed.projectId.trim()) {
+          return parsed.projectId.trim();
+        }
+      }
+    }
+    const active = db.prepare("SELECT data FROM providerConnections WHERE provider=\'antigravity\' AND isActive=1 LIMIT 1").get() as { data?: string } | undefined;
+    if (active?.data) {
+      const parsed = JSON.parse(active.data);
       if (typeof parsed.projectId === "string" && parsed.projectId.trim()) {
         return parsed.projectId.trim();
       }
@@ -209,7 +218,8 @@ export const stream = (
         modelHeaders["x-goog-user-project"] ||
         "";
       if (!projectId || projectId === "aicode-consumers") {
-        projectId = lookupAntigravityProjectId();
+        const accountEmail = optHeaders["x-antigravity-account-email"] || modelHeaders["x-antigravity-account-email"] || "";
+        projectId = lookupAntigravityProjectId(accountEmail);
       }
 
       const contents = convertMessages(model as any, context);
