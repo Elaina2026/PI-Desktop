@@ -96,15 +96,16 @@ function lookupAntigravityProjectId(email?: string): string {
     const { DatabaseSync } = require("node:sqlite");
     const db = new DatabaseSync(dbPath, { readOnly: true });
     if (email) {
-      const row = db.prepare("SELECT data FROM providerConnections WHERE provider=\'antigravity\' AND email=? LIMIT 1").get(email) as { data?: string } | undefined;
+      const row = db.prepare("SELECT data FROM providerConnections WHERE provider='antigravity' AND email=? LIMIT 1").get(email) as { data?: string } | undefined;
       if (row?.data) {
         const parsed = JSON.parse(row.data);
         if (typeof parsed.projectId === "string" && parsed.projectId.trim()) {
           return parsed.projectId.trim();
         }
       }
+      return "";
     }
-    const active = db.prepare("SELECT data FROM providerConnections WHERE provider=\'antigravity\' AND isActive=1 LIMIT 1").get() as { data?: string } | undefined;
+    const active = db.prepare("SELECT data FROM providerConnections WHERE provider='antigravity' AND isActive=1 LIMIT 1").get() as { data?: string } | undefined;
     if (active?.data) {
       const parsed = JSON.parse(active.data);
       if (typeof parsed.projectId === "string" && parsed.projectId.trim()) {

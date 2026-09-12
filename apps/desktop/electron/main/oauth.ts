@@ -770,13 +770,42 @@ export class VendorOAuth {
       }
     }
 
+    let projectId = cred.projectId || "";
+    if (!projectId || projectId === "aicode-consumers") {
+      try {
+        const appData = process.env.APPDATA;
+        if (appData) {
+          const dbPath = path.join(appData, "9router", "db", "data.sqlite");
+          if (fs.existsSync(dbPath)) {
+            const { DatabaseSync } = await import("node:sqlite");
+            const db = new DatabaseSync(dbPath, { readOnly: true });
+            if (cred.email) {
+              const row = db.prepare("SELECT data FROM providerConnections WHERE provider='antigravity' AND email=? LIMIT 1").get(cred.email) as { data?: string } | undefined;
+              if (row?.data) {
+                const parsed = JSON.parse(row.data);
+                if (typeof parsed.projectId === "string" && parsed.projectId.trim()) {
+                  projectId = parsed.projectId.trim();
+                  cred.projectId = projectId;
+                  await this.deps.call("secrets.set", {
+                    secretRef: secretRefForProviderOauth(providerId),
+                    value: JSON.stringify(cred),
+                  });
+                }
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+
     return {
       apiKey: accessToken,
       headers: {
         "User-Agent": "antigravity/ide/2.1.1 darwin/arm64",
         "x-client-name": "antigravity",
         "x-client-version": "4.2.5",
-        ...(cred.projectId ? { "x-antigravity-project-id": cred.projectId } : {}),
+        ...(projectId ? { "x-antigravity-project-id": projectId } : {}),
+        ...(cred.email ? { "x-antigravity-account-email": cred.email } : {}),
       },
     };
   }

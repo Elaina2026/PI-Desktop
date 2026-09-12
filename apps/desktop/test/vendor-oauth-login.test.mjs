@@ -508,3 +508,28 @@ test("credential writes for one account run one at a time", async () => {
   assert.deepEqual(seen, ["access-for-abc", "rotated-1"]);
   assert.equal(host.secrets.size, 1);
 });
+
+test("antigravity resolveAuth propagates project id and account email", async () => {
+  const { host, oauth } = harness();
+  const providerId = "ag-test-row";
+  host.providers.set(providerId, {
+    id: providerId,
+    vendorKey: "antigravity",
+    authKind: "oauth",
+  });
+  host.secrets.set(
+    secretRefForProviderOauth(providerId),
+    JSON.stringify({
+      type: "oauth",
+      access_token: "test-token",
+      email: "test@example.com",
+      projectId: "test-project-123",
+      expires_at: Date.now() + 3600_000,
+    })
+  );
+
+  const auth = await oauth.resolveAuth(providerId);
+  assert.equal(auth.apiKey, "test-token");
+  assert.equal(auth.headers?.["x-antigravity-project-id"], "test-project-123");
+  assert.equal(auth.headers?.["x-antigravity-account-email"], "test@example.com");
+});
