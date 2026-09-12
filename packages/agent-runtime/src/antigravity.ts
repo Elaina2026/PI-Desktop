@@ -279,6 +279,7 @@ export const stream = (
       delete reqHeaders["x-goog-user-project"];
       reqHeaders.Authorization = `Bearer ${apiKey}`;
 
+            try { fs.writeFileSync("C:/Users/Admin/.pi-desktop/scratch/antigravity_req.json", JSON.stringify({ url, payload }, null, 2)); } catch (_) {}
       const fetchFn = options?.fetch ?? globalThis.fetch;
       const response = await fetchFn(url, {
         method: "POST",
@@ -288,7 +289,8 @@ export const stream = (
       });
 
       if (!response.ok) {
-        const errText = await response.text();
+                const errText = await response.text();
+        try { fs.writeFileSync("C:/Users/Admin/.pi-desktop/scratch/antigravity_err.json", JSON.stringify({ status: response.status, url, payload, error: errText }, null, 2)); } catch (_) {}
         let errorMessage = `Antigravity error (HTTP ${response.status}): ${errText.slice(0, 300)}`;
         try {
           const parsed = JSON.parse(errText);
