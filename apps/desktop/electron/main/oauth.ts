@@ -125,47 +125,47 @@ const ANTIGRAVITY_MODELS: OAuthModelOption[] = [
   {
     modelId: "gemini-3.8-flash-high",
     apiStyle: "antigravity",
-    baseUrl: "https://cloudcode-pa.googleapis.com",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
   {
     modelId: "gemini-3.8-flash-medium",
     apiStyle: "antigravity",
-    baseUrl: "https://cloudcode-pa.googleapis.com",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
   {
     modelId: "gemini-3.8-flash-low",
     apiStyle: "antigravity",
-    baseUrl: "https://cloudcode-pa.googleapis.com",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
   {
     modelId: "gemini-3.7-flash-high",
     apiStyle: "antigravity",
-    baseUrl: "https://cloudcode-pa.googleapis.com",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
   {
     modelId: "gemini-3.5-flash-high",
     apiStyle: "antigravity",
-    baseUrl: "https://cloudcode-pa.googleapis.com",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
   {
     modelId: "gemini-3.1-pro-low",
     apiStyle: "antigravity",
-    baseUrl: "https://cloudcode-pa.googleapis.com",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
   {
     modelId: "claude-sonnet-4-6",
     apiStyle: "antigravity",
-    baseUrl: "https://cloudcode-pa.googleapis.com",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
   {
     modelId: "claude-opus-4-6-thinking",
     apiStyle: "antigravity",
-    baseUrl: "https://cloudcode-pa.googleapis.com",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
   {
     modelId: "gpt-oss-120b-medium",
     apiStyle: "antigravity",
-    baseUrl: "https://cloudcode-pa.googleapis.com",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
 ];
 
@@ -360,7 +360,7 @@ export class VendorOAuth {
         vendorKey: "antigravity",
         type: "native",
         authKind: OAUTH_AUTH_KIND,
-        baseUrl: "https://cloudcode-pa.googleapis.com",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
       });
       const account = this.createAccount(vendorId, row.id);
       const session: LoginSession = {
@@ -650,7 +650,7 @@ export class VendorOAuth {
       const option = ANTIGRAVITY_MODELS.find((m) => m.modelId === modelId) ?? {
         modelId,
         apiStyle: "antigravity",
-        baseUrl: "https://cloudcode-pa.googleapis.com",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
       };
       const modelConfig =
         (await this.deps.modelConfigFor?.({
@@ -917,6 +917,37 @@ export class VendorOAuth {
         }
       } catch {}
 
+      if (!projectId || projectId === "aicode-consumers") {
+        try {
+          const appData = process.env.APPDATA;
+          if (appData) {
+            const dbPath = path.join(appData, "9router", "db", "data.sqlite");
+            if (fs.existsSync(dbPath)) {
+              const { DatabaseSync } = await import("node:sqlite");
+              const db = new DatabaseSync(dbPath, { readOnly: true });
+              if (email) {
+                const row = db.prepare("SELECT data FROM providerConnections WHERE provider='antigravity' AND email=? LIMIT 1").get(email) as { data?: string } | undefined;
+                if (row?.data) {
+                  const parsed = JSON.parse(row.data);
+                  if (typeof parsed.projectId === "string" && parsed.projectId.trim()) {
+                    projectId = parsed.projectId.trim();
+                  }
+                }
+              }
+              if (!projectId || projectId === "aicode-consumers") {
+                const active = db.prepare("SELECT data FROM providerConnections WHERE provider='antigravity' AND isActive=1 LIMIT 1").get() as { data?: string } | undefined;
+                if (active?.data) {
+                  const parsed = JSON.parse(active.data);
+                  if (typeof parsed.projectId === "string" && parsed.projectId.trim()) {
+                    projectId = parsed.projectId.trim();
+                  }
+                }
+              }
+            }
+          }
+        } catch {}
+      }
+
       const credPayload = {
         type: "oauth",
         access_token: tokens.access_token,
@@ -944,7 +975,7 @@ export class VendorOAuth {
         name: "Antigravity",
         authKind: OAUTH_AUTH_KIND,
         oauthAccountLabel: email,
-        baseUrl: "https://cloudcode-pa.googleapis.com",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
         apiStyle: "antigravity",
         protocol: "google",
         defaultModelId: "gemini-3.8-flash-high",

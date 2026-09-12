@@ -225,7 +225,7 @@ export const NAMED_ENDPOINT_PRESETS: readonly NamedEndpointPreset[] = [
     id: "antigravity",
     vendorKey: "antigravity",
     name: "Antigravity",
-    baseUrl: "https://cloudcode-pa.googleapis.com",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
     apiStyle: "antigravity",
     labelKey: "settings.presetAntigravity",
     aliases: ["ag", "cloudcode", "agy"],
