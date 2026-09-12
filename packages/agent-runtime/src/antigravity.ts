@@ -249,6 +249,12 @@ export const stream = (
         const level = String(options?.reasoning ?? "").toLowerCase();
         const suffix = level === "high" ? "high" : level === "low" ? "low" : "medium";
         wireModel = `${wireModel}-${suffix}`;
+      } else if (wireModel === "gemini-3.1-pro") {
+        wireModel = "gemini-3.1-pro-low";
+      } else if (wireModel === "claude-opus-4-6") {
+        wireModel = "claude-opus-4-6-thinking";
+      } else if (wireModel === "gpt-oss-120b") {
+        wireModel = "gpt-oss-120b-medium";
       }
 
       let payload: any = {

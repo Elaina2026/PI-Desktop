@@ -133,7 +133,7 @@ const ANTIGRAVITY_MODELS: OAuthModelOption[] = [
     baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
   {
-    modelId: "gemini-3.1-pro-low",
+    modelId: "gemini-3.1-pro",
     apiStyle: "antigravity",
     baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
@@ -143,12 +143,12 @@ const ANTIGRAVITY_MODELS: OAuthModelOption[] = [
     baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
   {
-    modelId: "claude-opus-4-6-thinking",
+    modelId: "claude-opus-4-6",
     apiStyle: "antigravity",
     baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
   {
-    modelId: "gpt-oss-120b-medium",
+    modelId: "gpt-oss-120b",
     apiStyle: "antigravity",
     baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
