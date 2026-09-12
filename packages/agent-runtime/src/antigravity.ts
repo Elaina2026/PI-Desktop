@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 /**
  * Native Antigravity stream adapter for Google Cloud Code Assist.
  *
@@ -83,6 +85,26 @@ function buildAntigravityTools(
   }));
 }
 
+
+
+function lookupAntigravityProjectId(): string {
+  try {
+    const appData = process.env.APPDATA;
+    if (!appData) return "";
+    const dbPath = path.join(appData, "9router", "db", "data.sqlite");
+    if (!fs.existsSync(dbPath)) return "";
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db.prepare("SELECT data FROM providerConnections WHERE provider='antigravity' LIMIT 1").get() as { data?: string } | undefined;
+    if (row && row.data) {
+      const parsed = JSON.parse(row.data);
+      if (typeof parsed.projectId === "string" && parsed.projectId.trim()) {
+        return parsed.projectId.trim();
+      }
+    }
+  } catch (_) {}
+  return "";
+}
 
 function generateAntigravityProjectId(): string {
   const adj = ["useful", "bright", "swift", "calm", "bold"];
