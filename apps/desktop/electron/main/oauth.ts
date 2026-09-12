@@ -17,7 +17,9 @@
  */
 
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import { createServer } from "node:http";
+import path from "node:path";
 
 import { InMemoryModelsStore } from "@earendil-works/pi-ai";
 import type {
@@ -458,6 +460,7 @@ export class VendorOAuth {
       refresh_token?: string;
       expires_at?: number;
       projectId?: string;
+      email?: string;
     };
 
     let token = cred.access_token;
@@ -761,6 +764,7 @@ export class VendorOAuth {
       refresh_token?: string;
       expires_at?: number;
       projectId?: string;
+      email?: string;
     };
 
     let accessToken = cred.access_token;
