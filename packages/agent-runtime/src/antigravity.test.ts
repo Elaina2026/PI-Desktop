@@ -81,7 +81,9 @@ describe("Antigravity stream adapter", () => {
       events.push(event);
     }
 
-    expect(capturedUrl).toBe("https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
+    expect(capturedUrl).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
+    expect(capturedBody.userAgent).toBe("antigravity");
+    expect(capturedBody.requestType).toBe("agent");
     expect(capturedBody).toMatchObject({
       project: "my-gcp-project",
       model: "gemini-3.8-flash-high",

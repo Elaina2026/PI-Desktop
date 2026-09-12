@@ -165,10 +165,18 @@ export const stream = (
         throw new Error(`No OAuth access token for Antigravity provider: ${model.provider}`);
       }
 
-      const baseUrl = (model.baseUrl || "https://cloudcode-pa.googleapis.com")
+      const rawBaseUrl =
+        model.baseUrl ||
+        (options as any)?.baseUrl ||
+        "https://daily-cloudcode-pa.googleapis.com";
+      const baseUrl = rawBaseUrl
         .replace(/\/+$/, "")
         .replace(/\/v1internal$/i, "");
-      const url = `${baseUrl}/v1internal:streamGenerateContent?alt=sse`;
+      const effectiveBaseUrl =
+        baseUrl === "https://cloudcode-pa.googleapis.com"
+          ? "https://daily-cloudcode-pa.googleapis.com"
+          : baseUrl;
+      const url = `${effectiveBaseUrl}/v1internal:streamGenerateContent?alt=sse`;
 
       const optHeaders = (options?.headers ?? {}) as Record<string, string>;
       const modelHeaders = (model.headers ?? {}) as Record<string, string>;
@@ -201,6 +209,9 @@ export const stream = (
       let payload: any = {
         project: projectId,
         model: model.id,
+        userAgent: "antigravity",
+        requestType: "agent",
+        requestId: `agent/${Date.now()}/${Math.random().toString(36).slice(2, 9)}`,
         request: {
           contents,
           ...(context.systemPrompt
@@ -222,7 +233,7 @@ export const stream = (
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
         Accept: "text/event-stream",
-        "User-Agent": "antigravity/ide/2.1.1 darwin/arm64",
+        "User-Agent": "antigravity/ide/2.11.0 darwin/arm64",
         "x-client-name": "antigravity",
         "x-client-version": "4.2.5",
         ...modelHeaders,
