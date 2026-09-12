@@ -1771,10 +1771,13 @@ Delegation rules:
     const projectPrompt = projectInstructionsPrompt(this.projectInstructions);
     const optionalToolsPrompt = this.optionalToolsPrompt();
     const compressionPrompt = buildOutputCompressionPrompt(this.tokenSaverSettings);
+    const modelDisplayName = this.provider.modelConfig?.name || this.provider.modelId;
+    const activeModelPrompt = `## Active Model\nYou are running on model "${modelDisplayName}" (model ID: "${this.provider.modelId}") from provider "${this.provider.name}" with thinking level "${this.thinkingLevel}". When asked about your current model or configuration, always answer based on this exact metadata.`;
     return composeModeSystemPrompt(
       this.mode,
       [
         this.baseSystemPrompt,
+        activeModelPrompt,
         ...(optionalToolsPrompt ? [optionalToolsPrompt] : []),
         ...(projectPrompt ? [projectPrompt] : []),
         ...(compressionPrompt ? [compressionPrompt] : []),
