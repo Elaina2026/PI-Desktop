@@ -202,10 +202,15 @@ export const stream = (
 
       const optHeaders = (options?.headers ?? {}) as Record<string, string>;
       const modelHeaders = (model.headers ?? {}) as Record<string, string>;
-      const projectId =
+      let projectId =
+        optHeaders["x-antigravity-project-id"] ||
+        modelHeaders["x-antigravity-project-id"] ||
         optHeaders["x-goog-user-project"] ||
         modelHeaders["x-goog-user-project"] ||
         "";
+      if (!projectId || projectId === "aicode-consumers") {
+        projectId = lookupAntigravityProjectId();
+      }
 
       const contents = convertMessages(model as any, context);
 

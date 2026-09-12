@@ -776,6 +776,7 @@ export class VendorOAuth {
         "User-Agent": "antigravity/ide/2.1.1 darwin/arm64",
         "x-client-name": "antigravity",
         "x-client-version": "4.2.5",
+        ...(cred.projectId ? { "x-antigravity-project-id": cred.projectId } : {}),
       },
     };
   }
