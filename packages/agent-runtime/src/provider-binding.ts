@@ -27,6 +27,7 @@ import { openAICodexResponsesApi } from "@earendil-works/pi-ai/api/openai-codex-
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { googleGenerativeAIApi } from "@earendil-works/pi-ai/api/google-generative-ai.lazy";
 import { piMessagesApi } from "@earendil-works/pi-ai/api/pi-messages.lazy";
+import { antigravityApi } from "./antigravity.js";
 import { GITHUB_COPILOT_MODELS } from "@earendil-works/pi-ai/providers/github-copilot.models";
 import {
   OPENCODE_GO_API_STYLE,
@@ -133,6 +134,12 @@ export function apiBindingForStyle(apiStyle?: string): ApiBinding {
         adapter: googleGenerativeAIApi,
         defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
       };
+    case "antigravity":
+      return {
+        api: "antigravity" as Api,
+        adapter: antigravityApi,
+        defaultBaseUrl: "https://cloudcode-pa.googleapis.com",
+      };
     default:
       return {
         api: "openai-completions",
@@ -157,6 +164,9 @@ export function providerRequestKey(provider: RuntimeProviderConfig): string {
  * wrong adapter (the gateway answers 500, see #105).
  */
 export function apiBindingForProviderModel(provider: RuntimeProviderConfig): ApiBinding {
+  if (provider.vendorKey === "antigravity" || provider.apiStyle === "antigravity") {
+    return apiBindingForStyle("antigravity");
+  }
   return apiBindingForStyle(resolveApiStyle(provider.modelConfig?.api) ?? provider.apiStyle);
 }
 
@@ -200,10 +210,13 @@ export function buildProviderModel(
   const catalogModel = catalog
     ? (({ source: _source, ...model }) => model)(catalog)
     : genericModelConfig(provider.modelId, provider.baseUrl ?? binding.defaultBaseUrl);
-  const baseUrl = runtimeBaseUrlForApi(
-    binding.api,
-    provider.baseUrl ?? catalog?.baseUrl ?? binding.defaultBaseUrl,
-  );
+  const baseUrl =
+    provider.vendorKey === "antigravity"
+      ? (provider.baseUrl?.replace(/\/+$/, "").replace(/\/v1internal$/i, "") || "https://cloudcode-pa.googleapis.com")
+      : runtimeBaseUrlForApi(
+          binding.api,
+          provider.baseUrl ?? catalog?.baseUrl ?? binding.defaultBaseUrl,
+        );
   const zhipuCompat = zhipuRequestCompat({
     vendorKey: provider.vendorKey,
     baseUrl,

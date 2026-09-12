@@ -68,6 +68,7 @@ const API_STYLE_BY_WIRE_API: Record<string, string> = {
   "openai-codex-responses": "openai_codex_responses",
   "google-generative-ai": "google_generative_ai",
   "pi-messages": "pi_messages",
+  antigravity: "antigravity",
 };
 
 const PROTOCOL_BY_API_STYLE: Record<string, string> = {
@@ -77,6 +78,7 @@ const PROTOCOL_BY_API_STYLE: Record<string, string> = {
   openai_codex_responses: "openai",
   google_generative_ai: "google",
   pi_messages: "custom_http",
+  antigravity: "google",
 };
 
 /**
@@ -122,48 +124,48 @@ const ANTIGRAVITY_SCOPES = [
 const ANTIGRAVITY_MODELS: OAuthModelOption[] = [
   {
     modelId: "gemini-3.8-flash-high",
-    apiStyle: "google_generative_ai",
-    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+    apiStyle: "antigravity",
+    baseUrl: "https://cloudcode-pa.googleapis.com",
   },
   {
     modelId: "gemini-3.8-flash-medium",
-    apiStyle: "google_generative_ai",
-    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+    apiStyle: "antigravity",
+    baseUrl: "https://cloudcode-pa.googleapis.com",
   },
   {
     modelId: "gemini-3.8-flash-low",
-    apiStyle: "google_generative_ai",
-    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+    apiStyle: "antigravity",
+    baseUrl: "https://cloudcode-pa.googleapis.com",
   },
   {
     modelId: "gemini-3.7-flash-high",
-    apiStyle: "google_generative_ai",
-    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+    apiStyle: "antigravity",
+    baseUrl: "https://cloudcode-pa.googleapis.com",
   },
   {
     modelId: "gemini-3.5-flash-high",
-    apiStyle: "google_generative_ai",
-    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+    apiStyle: "antigravity",
+    baseUrl: "https://cloudcode-pa.googleapis.com",
   },
   {
     modelId: "gemini-3.1-pro-low",
-    apiStyle: "google_generative_ai",
-    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+    apiStyle: "antigravity",
+    baseUrl: "https://cloudcode-pa.googleapis.com",
   },
   {
     modelId: "claude-sonnet-4-6",
-    apiStyle: "google_generative_ai",
-    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+    apiStyle: "antigravity",
+    baseUrl: "https://cloudcode-pa.googleapis.com",
   },
   {
     modelId: "claude-opus-4-6-thinking",
-    apiStyle: "google_generative_ai",
-    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+    apiStyle: "antigravity",
+    baseUrl: "https://cloudcode-pa.googleapis.com",
   },
   {
     modelId: "gpt-oss-120b-medium",
-    apiStyle: "google_generative_ai",
-    baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+    apiStyle: "antigravity",
+    baseUrl: "https://cloudcode-pa.googleapis.com",
   },
 ];
 
@@ -358,7 +360,7 @@ export class VendorOAuth {
         vendorKey: "antigravity",
         type: "native",
         authKind: OAUTH_AUTH_KIND,
-        baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+        baseUrl: "https://cloudcode-pa.googleapis.com",
       });
       const account = this.createAccount(vendorId, row.id);
       const session: LoginSession = {
@@ -647,8 +649,8 @@ export class VendorOAuth {
     if (account.vendorId === "antigravity") {
       const option = ANTIGRAVITY_MODELS.find((m) => m.modelId === modelId) ?? {
         modelId,
-        apiStyle: "google_generative_ai",
-        baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
+        apiStyle: "antigravity",
+        baseUrl: "https://cloudcode-pa.googleapis.com",
       };
       const modelConfig =
         (await this.deps.modelConfigFor?.({

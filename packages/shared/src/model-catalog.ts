@@ -23,6 +23,7 @@ export const API_STYLES = [
   "openai_codex_responses",
   "pi_messages",
   "opencode_go",
+  "antigravity",
 ] as const;
 
 export type CatalogApiStyle = (typeof API_STYLES)[number];

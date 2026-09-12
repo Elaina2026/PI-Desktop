@@ -32,6 +32,7 @@ const API_STYLE_LABEL_KEYS: Record<CatalogApiStyle, string> = {
   openai_codex_responses: "settings.apiStyleCodexResponses",
   pi_messages: "settings.apiStylePiMessages",
   opencode_go: "settings.apiStyleOpenCodeGo",
+  antigravity: "settings.presetAntigravity",
 };
 
 type BaseUrlIssue = "invalid";
@@ -49,6 +50,8 @@ function endpointPathSuffixes(apiStyle: CatalogApiStyle): string[] {
       return ["/responses", "/models"];
     case "google_generative_ai":
       return ["/models"];
+    case "antigravity":
+      return ["/v1internal", "/models"];
     default:
       return ["/chat/completions", "/models"];
   }
