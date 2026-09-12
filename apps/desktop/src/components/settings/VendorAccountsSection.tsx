@@ -37,6 +37,27 @@ type AccountEntry = {
   totalForVendor: number;
 };
 
+function formatResetDuration(totalSeconds: number): string {
+  if (totalSeconds <= 0) return "now";
+  const weeks = Math.floor(totalSeconds / 604800);
+  const remainderAfterWeeks = totalSeconds % 604800;
+  const days = Math.floor(remainderAfterWeeks / 86400);
+  const remainderAfterDays = remainderAfterWeeks % 86400;
+  const hours = Math.floor(remainderAfterDays / 3600);
+  const minutes = Math.floor((remainderAfterDays % 3600) / 60);
+
+  if (weeks > 0) {
+    return days > 0 ? `${weeks}w ${days}d` : `${weeks}w`;
+  }
+  if (days > 0) {
+    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  }
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  return `${Math.max(1, minutes)}m`;
+}
+
 function providerIsReady(provider: ProviderPublic, excludedId?: string): boolean {
   return (
     provider.id !== excludedId &&
@@ -332,7 +353,7 @@ export function VendorAccountsSection() {
                                     </span>
                                     {b.resetInSeconds && !b.disabled ? (
                                       <span>
-                                        Resets in {Math.floor(b.resetInSeconds / 3600)}h {Math.floor((b.resetInSeconds % 3600) / 60)}m
+                                        Resets in {formatResetDuration(b.resetInSeconds)}
                                       </span>
                                     ) : null}
                                   </div>
@@ -384,9 +405,7 @@ export function VendorAccountsSection() {
                                 </span>
                                 {quotas[account.providerId].resetInSeconds ? (
                                   <span>
-                                    Resets in{" "}
-                                    {Math.floor(quotas[account.providerId].resetInSeconds! / 3600)}h{" "}
-                                    {Math.floor((quotas[account.providerId].resetInSeconds! % 3600) / 60)}m
+                                    Resets in {formatResetDuration(quotas[account.providerId].resetInSeconds!)}
                                   </span>
                                 ) : null}
                               </div>
