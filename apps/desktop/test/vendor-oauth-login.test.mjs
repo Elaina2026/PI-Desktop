@@ -609,3 +609,30 @@ test("antigravity getCandidateAntigravityAccounts filters current email", async 
     assert.ok(Array.isArray(list));
   }
 });
+
+test("antigravity model group and lock duration parsing", async () => {
+  const {
+    getAntigravityModelGroup,
+    parseResetDurationFromErrorMessage,
+    writeAntigravityLock,
+    isAntigravityAccountLocked,
+  } = await import("@pi-desktop/agent-runtime");
+
+  assert.equal(getAntigravityModelGroup("gemini-3.8-flash"), "gemini");
+  assert.equal(getAntigravityModelGroup("claude-sonnet-4-6"), "3p");
+  assert.equal(getAntigravityModelGroup("gpt-oss-120b"), "3p");
+
+  const msg = "Individual quota reached. Resets in 16h21m38s.";
+  const seconds = parseResetDurationFromErrorMessage(msg);
+  assert.equal(seconds, 58898);
+
+  // Test write and read lock
+  writeAntigravityLock("test-user@example.com", "claude-sonnet-4-6", 3600);
+  const status = isAntigravityAccountLocked("test-user@example.com", "claude-sonnet-4-6");
+  assert.equal(status.locked, true);
+  assert.ok(status.remainingSeconds > 3500);
+
+  // Different group should not be locked
+  const geminiStatus = isAntigravityAccountLocked("test-user@example.com", "gemini-3.8-flash");
+  assert.equal(geminiStatus.locked, false);
+});

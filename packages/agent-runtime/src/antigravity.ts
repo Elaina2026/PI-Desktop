@@ -154,7 +154,90 @@ export type AntigravityAccountCandidate = {
   projectId: string;
 };
 
-export function getCandidateAntigravityAccounts(excludeEmail?: string): AntigravityAccountCandidate[] {
+export type AccountModelLock = {
+  lockedUntil: number; // Unix timestamp in ms
+  reason: string;
+  modelGroup: string; // 'gemini' | '3p' | string
+};
+
+const LOCKS_FILE = path.join(
+  process.env.USERPROFILE || process.env.HOME || ".",
+  ".pi-desktop",
+  "antigravity-model-locks.json"
+);
+
+export function getAntigravityModelGroup(modelId: string): string {
+  const m = modelId.toLowerCase();
+  if (m.startsWith("claude-") || m.startsWith("gpt-")) {
+    return "3p";
+  }
+  return "gemini";
+}
+
+export function readAntigravityLocks(): Record<string, AccountModelLock> {
+  try {
+    if (fs.existsSync(LOCKS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(LOCKS_FILE, "utf8"));
+      return typeof data === "object" && data !== null ? data : {};
+    }
+  } catch (_) {}
+  return {};
+}
+
+export function writeAntigravityLock(
+  email: string,
+  modelId: string,
+  durationSeconds: number,
+  reason: string = "quota_exhausted"
+): void {
+  try {
+    const locks = readAntigravityLocks();
+    const group = getAntigravityModelGroup(modelId);
+    const key = `${email.toLowerCase()}:${group}`;
+    const lockedUntil = Date.now() + Math.max(60, durationSeconds) * 1000;
+    locks[key] = {
+      lockedUntil,
+      reason,
+      modelGroup: group,
+    };
+    const dir = path.dirname(LOCKS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(LOCKS_FILE, JSON.stringify(locks, null, 2), "utf8");
+  } catch (_) {}
+}
+
+export function isAntigravityAccountLocked(email: string, modelId: string): { locked: boolean; remainingSeconds: number } {
+  const locks = readAntigravityLocks();
+  const group = getAntigravityModelGroup(modelId);
+  const key = `${email.toLowerCase()}:${group}`;
+  const entry = locks[key];
+  if (entry && entry.lockedUntil > Date.now()) {
+    return {
+      locked: true,
+      remainingSeconds: Math.ceil((entry.lockedUntil - Date.now()) / 1000),
+    };
+  }
+  return { locked: false, remainingSeconds: 0 };
+}
+
+export function parseResetDurationFromErrorMessage(message?: string): number | undefined {
+  if (!message) return undefined;
+  const match = message.match(/Resets in\s+((?:(\d+)\s*d)?\s*(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+)\s*s)?)/i);
+  if (!match) return undefined;
+
+  const days = parseInt(match[2] || "0", 10);
+  const hours = parseInt(match[3] || "0", 10);
+  const minutes = parseInt(match[4] || "0", 10);
+  const seconds = parseInt(match[5] || "0", 10);
+
+  const totalSeconds = (days * 86400) + (hours * 3600) + (minutes * 60) + seconds;
+  return totalSeconds > 0 ? totalSeconds : undefined;
+}
+
+export function getCandidateAntigravityAccounts(
+  modelId?: string,
+  excludeEmail?: string
+): AntigravityAccountCandidate[] {
   const candidates: AntigravityAccountCandidate[] = [];
   try {
     const appData = process.env.APPDATA;
@@ -166,7 +249,14 @@ export function getCandidateAntigravityAccounts(excludeEmail?: string): Antigrav
     const rows = db.prepare("SELECT email, data FROM providerConnections WHERE provider='antigravity' AND isActive=1").all() as Array<{ email?: string; data?: string }>;
     for (const r of rows) {
       if (!r.email) continue;
-      if (excludeEmail && r.email.toLowerCase() === excludeEmail.toLowerCase()) continue;
+      const email = r.email.trim();
+      if (excludeEmail && email.toLowerCase() === excludeEmail.toLowerCase()) continue;
+
+      if (modelId) {
+        const lock = isAntigravityAccountLocked(email, modelId);
+        if (lock.locked) continue;
+      }
+
       if (r.data) {
         try {
           const d = JSON.parse(r.data);
@@ -174,7 +264,7 @@ export function getCandidateAntigravityAccounts(excludeEmail?: string): Antigrav
             const pid = typeof d.projectId === "string" && d.projectId.trim() ? d.projectId.trim() : "";
             if (pid && pid !== "aicode-consumers") {
               candidates.push({
-                email: r.email,
+                email,
                 accessToken: d.accessToken.trim(),
                 projectId: pid,
               });
@@ -365,24 +455,55 @@ export const stream = (
       reqHeaders.Authorization = `Bearer ${apiKey}`;
 
             const fetchFn = options?.fetch ?? globalThis.fetch;
+      let activeReqHeaders = { ...reqHeaders };
+      let activePayload = { ...payload };
+      let activeEmail = optHeaders["x-antigravity-account-email"] || modelHeaders["x-antigravity-account-email"] || "";
+
+      // Check if primary account is already in cooldown for this model group
+      if (activeEmail) {
+        const check = isAntigravityAccountLocked(activeEmail, wireModel);
+        if (check.locked) {
+          const altCandidates = getCandidateAntigravityAccounts(wireModel, activeEmail);
+          if (altCandidates.length > 0) {
+            const nextAcc = altCandidates[0];
+            activeReqHeaders.Authorization = `Bearer ${nextAcc.accessToken}`;
+            activePayload.project = nextAcc.projectId;
+            activeEmail = nextAcc.email;
+          }
+        }
+      }
+
       let response = await fetchFn(url, {
         method: "POST",
-        headers: reqHeaders,
-        body: JSON.stringify(payload),
+        headers: activeReqHeaders,
+        body: JSON.stringify(activePayload),
         signal: options?.signal,
       });
 
-      // If rate-limited (429) or quota exhausted, attempt failover to other connected accounts in the pool
+      // If rate-limited (429) or entity missing (404), mark lock and attempt failover to remaining accounts in the pool
       if (!response.ok && (response.status === 429 || response.status === 404)) {
-        const currentEmail = optHeaders["x-antigravity-account-email"] || modelHeaders["x-antigravity-account-email"] || "";
-        const candidates = getCandidateAntigravityAccounts(currentEmail);
-        for (const candidate of candidates) {
+        let errText = "";
+        try {
+          errText = await response.clone().text();
+        } catch {}
+
+        let resetSec = parseResetDurationFromErrorMessage(errText);
+        if (!resetSec) {
+          resetSec = response.status === 429 ? 300 : 60; // 5 min for 429, 1 min for 404
+        }
+
+        if (activeEmail) {
+          writeAntigravityLock(activeEmail, wireModel, resetSec, response.status === 429 ? "quota_429" : "error_404");
+        }
+
+        const remainingCandidates = getCandidateAntigravityAccounts(wireModel, activeEmail);
+        for (const candidate of remainingCandidates) {
           const failoverHeaders = {
-            ...reqHeaders,
+            ...activeReqHeaders,
             Authorization: `Bearer ${candidate.accessToken}`,
           };
           const failoverPayload = {
-            ...payload,
+            ...activePayload,
             project: candidate.projectId,
           };
           const altResponse = await fetchFn(url, {
@@ -391,9 +512,16 @@ export const stream = (
             body: JSON.stringify(failoverPayload),
             signal: options?.signal,
           });
+
           if (altResponse.ok) {
             response = altResponse;
+            activeEmail = candidate.email;
             break;
+          } else if (altResponse.status === 429 || altResponse.status === 404) {
+            let altErrText = "";
+            try { altErrText = await altResponse.clone().text(); } catch {}
+            const altReset = parseResetDurationFromErrorMessage(altErrText) || (altResponse.status === 429 ? 300 : 60);
+            writeAntigravityLock(candidate.email, wireModel, altReset, "quota_429");
           }
         }
       }
