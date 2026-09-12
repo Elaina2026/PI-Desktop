@@ -533,3 +533,69 @@ test("antigravity resolveAuth propagates project id and account email", async ()
   assert.equal(auth.headers?.["x-antigravity-project-id"], "test-project-123");
   assert.equal(auth.headers?.["x-antigravity-account-email"], "test@example.com");
 });
+
+test("antigravity getQuota parses multi-group quota buckets", async () => {
+  const { host, oauth } = harness();
+  const providerId = "ag-test-quota";
+  host.providers.set(providerId, {
+    id: providerId,
+    vendorKey: "antigravity",
+    authKind: "oauth",
+  });
+  host.secrets.set(
+    secretRefForProviderOauth(providerId),
+    JSON.stringify({
+      type: "oauth",
+      access_token: "test-token",
+      email: "test@example.com",
+      projectId: "test-project-123",
+      expires_at: Date.now() + 3600_000,
+    })
+  );
+
+  const mockGroups = {
+    groups: [
+      {
+        displayName: "Gemini Models",
+        buckets: [
+          { bucketId: "gemini-weekly", window: "weekly", remainingFraction: 0.56 },
+          { bucketId: "gemini-5h", window: "5h", remainingFraction: 0.73 }
+        ]
+      },
+      {
+        displayName: "Claude and GPT models",
+        buckets: [
+          { bucketId: "3p-weekly", window: "weekly", remainingFraction: 0 },
+          { bucketId: "3p-5h", window: "5h", remainingFraction: 0.99, disabled: true }
+        ]
+      }
+    ]
+  };
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("retrieveUserQuotaSummary")) {
+      return new Response(JSON.stringify(mockGroups), { status: 200 });
+    }
+    return origFetch(url);
+  };
+
+  try {
+    const quota = await oauth.getQuota(providerId);
+    assert.ok(quota.buckets);
+    assert.equal(quota.buckets.length, 4);
+    assert.equal(quota.buckets[0].name, "Gemini (Weekly)");
+    assert.equal(quota.buckets[0].remainingPercentage, 56);
+    assert.equal(quota.buckets[1].name, "Gemini (5h)");
+    assert.equal(quota.buckets[1].remainingPercentage, 73);
+    assert.equal(quota.buckets[2].name, "Claude/GPT (Weekly)");
+    assert.equal(quota.buckets[2].remainingPercentage, 0);
+    assert.equal(quota.buckets[3].name, "Claude/GPT (5h)");
+    assert.equal(quota.buckets[3].disabled, true);
+    // lowest active bucket
+    assert.equal(quota.remainingPercentage, 0);
+    assert.equal(quota.status, "exhausted");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});

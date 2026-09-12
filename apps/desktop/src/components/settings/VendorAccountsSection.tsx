@@ -311,59 +311,113 @@ export function VendorAccountsSection() {
                     {connected && (
                       <div className="vendor-account-quota" style={{ marginTop: "6px" }}>
                         {quotas[account.providerId] ? (
-                          <>
-                            <div
-                              style={{
-                                display: "flex",
-                                justifyContent: "space-between",
-                                fontSize: "11px",
-                                marginBottom: "4px",
-                                color: "var(--color-text-subtle, #888)",
-                              }}
-                            >
-                              <span>
-                                Quota:{" "}
-                                <strong style={{ color: "var(--color-text-normal, #ddd)" }}>
-                                  {quotas[account.providerId].remainingPercentage !== undefined
-                                    ? `${quotas[account.providerId].remainingPercentage}% remaining`
-                                    : "Active"}
-                                </strong>
-                              </span>
-                              {quotas[account.providerId].resetInSeconds ? (
-                                <span>
-                                  Resets in{" "}
-                                  {Math.floor(quotas[account.providerId].resetInSeconds! / 3600)}h{" "}
-                                  {Math.floor((quotas[account.providerId].resetInSeconds! % 3600) / 60)}m
-                                </span>
-                              ) : null}
+                          quotas[account.providerId].buckets && quotas[account.providerId].buckets!.length > 0 ? (
+                            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                              {quotas[account.providerId].buckets!.map((b) => (
+                                <div key={b.id}>
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      justifyContent: "space-between",
+                                      fontSize: "10.5px",
+                                      marginBottom: "2px",
+                                      color: "var(--color-text-subtle, #888)",
+                                    }}
+                                  >
+                                    <span>
+                                      {b.name}:{" "}
+                                      <strong style={{ color: b.disabled ? "var(--color-text-subtle, #888)" : "var(--color-text-normal, #ddd)" }}>
+                                        {b.disabled ? "Inactive" : `${b.remainingPercentage}%`}
+                                      </strong>
+                                    </span>
+                                    {b.resetInSeconds && !b.disabled ? (
+                                      <span>
+                                        Resets in {Math.floor(b.resetInSeconds / 3600)}h {Math.floor((b.resetInSeconds % 3600) / 60)}m
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <div
+                                    style={{
+                                      height: "4px",
+                                      width: "100%",
+                                      backgroundColor: "rgba(255, 255, 255, 0.1)",
+                                      borderRadius: "2px",
+                                      overflow: "hidden",
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        height: "100%",
+                                        width: `${Math.min(100, Math.max(0, b.remainingPercentage))}%`,
+                                        backgroundColor: b.disabled
+                                          ? "rgba(255, 255, 255, 0.2)"
+                                          : b.remainingPercentage > 40
+                                            ? "#22c55e"
+                                            : b.remainingPercentage > 15
+                                              ? "#f59e0b"
+                                              : "#ef4444",
+                                        transition: "width 0.3s ease",
+                                      }}
+                                    />
+                                  </div>
+                                </div>
+                              ))}
                             </div>
-                            <div
-                              style={{
-                                height: "4px",
-                                width: "100%",
-                                backgroundColor: "rgba(255, 255, 255, 0.1)",
-                                borderRadius: "2px",
-                                overflow: "hidden",
-                              }}
-                            >
+                          ) : (
+                            <>
                               <div
                                 style={{
-                                  height: "100%",
-                                  width: `${Math.min(
-                                    100,
-                                    Math.max(0, quotas[account.providerId].remainingPercentage ?? 100),
-                                  )}%`,
-                                  backgroundColor:
-                                    (quotas[account.providerId].remainingPercentage ?? 100) > 40
-                                      ? "#22c55e"
-                                      : (quotas[account.providerId].remainingPercentage ?? 100) > 15
-                                        ? "#f59e0b"
-                                        : "#ef4444",
-                                  transition: "width 0.3s ease",
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  fontSize: "11px",
+                                  marginBottom: "4px",
+                                  color: "var(--color-text-subtle, #888)",
                                 }}
-                              />
-                            </div>
-                          </>
+                              >
+                                <span>
+                                  Quota:{" "}
+                                  <strong style={{ color: "var(--color-text-normal, #ddd)" }}>
+                                    {quotas[account.providerId].remainingPercentage !== undefined
+                                      ? `${quotas[account.providerId].remainingPercentage}% remaining`
+                                      : "Active"}
+                                  </strong>
+                                </span>
+                                {quotas[account.providerId].resetInSeconds ? (
+                                  <span>
+                                    Resets in{" "}
+                                    {Math.floor(quotas[account.providerId].resetInSeconds! / 3600)}h{" "}
+                                    {Math.floor((quotas[account.providerId].resetInSeconds! % 3600) / 60)}m
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div
+                                style={{
+                                  height: "4px",
+                                  width: "100%",
+                                  backgroundColor: "rgba(255, 255, 255, 0.1)",
+                                  borderRadius: "2px",
+                                  overflow: "hidden",
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    height: "100%",
+                                    width: `${Math.min(
+                                      100,
+                                      Math.max(0, quotas[account.providerId].remainingPercentage ?? 100),
+                                    )}%`,
+                                    backgroundColor:
+                                      (quotas[account.providerId].remainingPercentage ?? 100) > 40
+                                        ? "#22c55e"
+                                        : (quotas[account.providerId].remainingPercentage ?? 100) > 15
+                                          ? "#f59e0b"
+                                          : "#ef4444",
+                                    transition: "width 0.3s ease",
+                                  }}
+                                />
+                              </div>
+                            </>
+                          )
                         ) : (
                           <div style={{ fontSize: "11px", opacity: 0.5 }}>
                             {refreshingQuota === account.providerId ? "Checking quota…" : ""}

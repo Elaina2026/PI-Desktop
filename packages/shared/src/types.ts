@@ -982,6 +982,15 @@ export type OAuthVendor = {
   accounts: OAuthAccount[];
 };
 
+export type AccountQuotaBucket = {
+  id: string;
+  name: string;
+  remainingPercentage: number;
+  resetTime?: string;
+  resetInSeconds?: number;
+  disabled?: boolean;
+};
+
 export type AccountQuotaInfo = {
   providerId: string;
   remainingPercentage?: number;
@@ -989,6 +998,7 @@ export type AccountQuotaInfo = {
   resetInSeconds?: number;
   status?: "healthy" | "low" | "exhausted" | "unknown";
   error?: string;
+  buckets?: AccountQuotaBucket[];
 };
 
 export type OAuthPromptOption = {

@@ -244,9 +244,16 @@ export const stream = (
         };
       }
 
+      let wireModel = model.id;
+      if (wireModel === "gemini-3.8-flash" || wireModel === "gemini-3.7-flash") {
+        const level = String(options?.reasoning ?? "").toLowerCase();
+        const suffix = level === "high" ? "high" : level === "low" ? "low" : "medium";
+        wireModel = `${wireModel}-${suffix}`;
+      }
+
       let payload: any = {
         project: projectId,
-        model: model.id,
+        model: wireModel,
         userAgent: "antigravity",
         requestType: "agent",
         requestId: `agent/${Date.now()}/${Math.random().toString(36).slice(2, 9)}`,

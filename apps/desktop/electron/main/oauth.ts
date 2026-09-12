@@ -123,27 +123,12 @@ const ANTIGRAVITY_SCOPES = [
 
 const ANTIGRAVITY_MODELS: OAuthModelOption[] = [
   {
-    modelId: "gemini-3.8-flash-high",
+    modelId: "gemini-3.8-flash",
     apiStyle: "antigravity",
     baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
   {
-    modelId: "gemini-3.8-flash-medium",
-    apiStyle: "antigravity",
-    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
-  },
-  {
-    modelId: "gemini-3.8-flash-low",
-    apiStyle: "antigravity",
-    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
-  },
-  {
-    modelId: "gemini-3.7-flash-high",
-    apiStyle: "antigravity",
-    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
-  },
-  {
-    modelId: "gemini-3.5-flash-high",
+    modelId: "gemini-3.7-flash",
     apiStyle: "antigravity",
     baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
@@ -164,6 +149,26 @@ const ANTIGRAVITY_MODELS: OAuthModelOption[] = [
   },
   {
     modelId: "gpt-oss-120b-medium",
+    apiStyle: "antigravity",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+  },
+  {
+    modelId: "gemini-3.8-flash-high",
+    apiStyle: "antigravity",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+  },
+  {
+    modelId: "gemini-3.8-flash-medium",
+    apiStyle: "antigravity",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+  },
+  {
+    modelId: "gemini-3.8-flash-low",
+    apiStyle: "antigravity",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+  },
+  {
+    modelId: "gemini-3.7-flash-high",
     apiStyle: "antigravity",
     baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
@@ -496,7 +501,6 @@ export class VendorOAuth {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
             "User-Agent": "antigravity/ide/2.11.0 darwin/arm64",
-            ...(cred.projectId ? { "x-goog-user-project": cred.projectId } : {}),
           },
           body: JSON.stringify({ project: cred.projectId || "" }),
         },
@@ -504,27 +508,72 @@ export class VendorOAuth {
 
       if (quotaRes.ok) {
         const data = (await quotaRes.json()) as any;
-        let percentage = 100;
-        let resetTime = "";
-        let resetInSeconds: number | undefined;
+        const buckets: any[] = [];
+        let lowestPercentage = 100;
+        let lowestResetInSeconds: number | undefined;
+        let lowestResetTime = "";
 
-        if (typeof data.remainingPercentage === "number") {
-          percentage = data.remainingPercentage;
-        } else if (typeof data.remainingFraction === "number") {
-          percentage = Math.round(data.remainingFraction * 100);
-        } else if (Array.isArray(data.models) && data.models.length > 0) {
-          const modelWithLowest = data.models.reduce((prev: any, curr: any) => {
-            const prevRem = prev?.remainingPercentage ?? prev?.remaining ?? 100;
-            const currRem = curr?.remainingPercentage ?? curr?.remaining ?? 100;
-            return currRem < prevRem ? curr : prev;
-          }, data.models[0]);
-          percentage = modelWithLowest?.remainingPercentage ?? modelWithLowest?.remaining ?? 100;
-          resetTime = modelWithLowest?.resetTime || "";
+        if (Array.isArray(data.groups)) {
+          for (const group of data.groups) {
+            const groupName = group.displayName || "";
+            const isGemini = groupName.toLowerCase().includes("gemini");
+            const groupPrefix = isGemini ? "Gemini" : "Claude/GPT";
+            if (Array.isArray(group.buckets)) {
+              for (const b of group.buckets) {
+                const rem = typeof b.remainingPercentage === "number"
+                  ? b.remainingPercentage
+                  : typeof b.remainingFraction === "number"
+                    ? Math.round(b.remainingFraction * 100)
+                    : 100;
+                let resetInSeconds: number | undefined;
+                if (b.resetTime) {
+                  const diff = new Date(b.resetTime).getTime() - Date.now();
+                  if (diff > 0) resetInSeconds = Math.round(diff / 1000);
+                }
+                const windowLabel = b.window === "5h" ? "5h" : b.window === "weekly" ? "Weekly" : (b.displayName || b.window || "");
+                const bucketName = `${groupPrefix} (${windowLabel})`;
+                buckets.push({
+                  id: b.bucketId || `${groupPrefix}-${windowLabel}`,
+                  name: bucketName,
+                  remainingPercentage: rem,
+                  resetTime: b.resetTime,
+                  resetInSeconds,
+                  disabled: !!b.disabled,
+                });
+
+                if (!b.disabled && rem < lowestPercentage) {
+                  lowestPercentage = rem;
+                  lowestResetTime = b.resetTime || "";
+                  lowestResetInSeconds = resetInSeconds;
+                }
+              }
+            }
+          }
         }
 
-        if (resetTime) {
-          const diffMs = new Date(resetTime).getTime() - Date.now();
-          if (diffMs > 0) resetInSeconds = Math.round(diffMs / 1000);
+        let percentage = buckets.length > 0 ? lowestPercentage : 100;
+        let resetTime = lowestResetTime;
+        let resetInSeconds: number | undefined = lowestResetInSeconds;
+
+        if (buckets.length === 0) {
+          if (typeof data.remainingPercentage === "number") {
+            percentage = data.remainingPercentage;
+          } else if (typeof data.remainingFraction === "number") {
+            percentage = Math.round(data.remainingFraction * 100);
+          } else if (Array.isArray(data.models) && data.models.length > 0) {
+            const modelWithLowest = data.models.reduce((prev: any, curr: any) => {
+              const prevRem = prev?.remainingPercentage ?? prev?.remaining ?? 100;
+              const currRem = curr?.remainingPercentage ?? curr?.remaining ?? 100;
+              return currRem < prevRem ? curr : prev;
+            }, data.models[0]);
+            percentage = modelWithLowest?.remainingPercentage ?? modelWithLowest?.remaining ?? 100;
+            resetTime = modelWithLowest?.resetTime || "";
+          }
+
+          if (resetTime) {
+            const diffMs = new Date(resetTime).getTime() - Date.now();
+            if (diffMs > 0) resetInSeconds = Math.round(diffMs / 1000);
+          }
         }
 
         const status: AccountQuotaInfo["status"] =
@@ -536,6 +585,7 @@ export class VendorOAuth {
           resetTime,
           resetInSeconds,
           status,
+          ...(buckets.length > 0 ? { buckets } : {}),
         };
       }
 
@@ -1007,7 +1057,7 @@ export class VendorOAuth {
         baseUrl: "https://daily-cloudcode-pa.googleapis.com",
         apiStyle: "antigravity",
         protocol: "google",
-        defaultModelId: "gemini-3.8-flash-high",
+        defaultModelId: "gemini-3.8-flash",
         models: modelBindings,
       });
 
