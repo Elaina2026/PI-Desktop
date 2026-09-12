@@ -18,6 +18,7 @@ import {
   type SimpleStreamOptions,
   type TextContent,
   type ThinkingContent,
+  type Tool,
   type ToolCall,
 } from "@earendil-works/pi-ai";
 import {
@@ -26,7 +27,59 @@ import {
   isThinkingPart,
   mapStopReasonString,
   retainThoughtSignature,
+  supportsGoogleStrictToolSampling,
 } from "@earendil-works/pi-ai/api/google-shared";
+
+/**
+ * Recursively convert JSON Schema `const` into OpenAPI 3.0 `enum: [val]`.
+ * Google Cloud Code Assist's protobuf schema for OpenAPI `parameters` has no `const` field.
+ */
+function sanitizeOpenApiConst(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sanitizeOpenApiConst);
+  }
+  if (typeof value !== "object" || value === null) {
+    return value;
+  }
+  const obj = { ...(value as Record<string, unknown>) };
+  if ("const" in obj) {
+    const val = obj.const;
+    delete obj.const;
+    if (!("enum" in obj)) {
+      obj.enum = [val];
+    }
+  }
+  for (const [k, v] of Object.entries(obj)) {
+    obj[k] = sanitizeOpenApiConst(v);
+  }
+  return obj;
+}
+
+function buildAntigravityTools(
+  tools: Tool[],
+  modelId: string,
+): { functionDeclarations: Record<string, unknown>[] }[] | undefined {
+  const isClaude = modelId.toLowerCase().startsWith("claude-");
+  const raw = convertTools(
+    tools,
+    isClaude,
+    supportsGoogleStrictToolSampling(modelId),
+  );
+  if (!raw || !isClaude) return raw;
+
+  return raw.map((group) => ({
+    ...group,
+    functionDeclarations: group.functionDeclarations.map((decl) => {
+      if (decl.parameters) {
+        return {
+          ...decl,
+          parameters: sanitizeOpenApiConst(decl.parameters) as Record<string, unknown>,
+        };
+      }
+      return decl;
+    }),
+  }));
+}
 
 let toolCallCounter = 0;
 
@@ -146,7 +199,7 @@ export const stream = (
             : {}),
           ...(Object.keys(generationConfig).length > 0 ? { generationConfig } : {}),
           ...(context.tools && context.tools.length > 0
-            ? { tools: convertTools(context.tools, true) }
+            ? { tools: buildAntigravityTools(context.tools, model.id) }
             : {}),
         },
       };

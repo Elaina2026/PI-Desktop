@@ -155,4 +155,92 @@ describe("Antigravity stream adapter", () => {
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("quota exceeded");
   });
+  it("serializes tools using parametersJsonSchema for Gemini models (preserving const)", async () => {
+    let capturedBody: any;
+    const mockFetch = vi.fn(async (_url: any, init: any) => {
+      capturedBody = JSON.parse(init.body);
+      return createMockSseResponse(['data: {"response":{"candidates":[{"content":{"parts":[{"text":"ok"}]}}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2,"totalTokenCount":7}}}', 'data: {"response":{"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}]}}', 'data: [DONE]']);
+    });
+
+    const toolWithConst = {
+      name: "Grep",
+      description: "Search file contents",
+      parameters: {
+        type: "object",
+        properties: {
+          outputMode: {
+            anyOf: [
+              { const: "content", type: "string" },
+              { const: "filesWithMatches", type: "string" },
+            ],
+          },
+        },
+        required: ["outputMode"],
+      },
+    } as any;
+
+    const eventStream = stream(
+      testModel,
+      { ...testContext, tools: [toolWithConst] },
+      { apiKey: "test-token", fetch: mockFetch as any },
+    );
+
+    for await (const _ of eventStream) {}
+
+    const toolGroup = capturedBody.request.tools[0];
+    const decl = toolGroup.functionDeclarations[0];
+    expect(decl.name).toBe("Grep");
+    expect(decl.parametersJsonSchema).toBeDefined();
+    expect(decl.parameters).toBeUndefined();
+    expect(decl.parametersJsonSchema.properties.outputMode.anyOf[0].const).toBe("content");
+  });
+
+  it("serializes tools using parameters with const sanitized to enum for Claude models", async () => {
+    let capturedBody: any;
+    const mockFetch = vi.fn(async (_url: any, init: any) => {
+      capturedBody = JSON.parse(init.body);
+      return createMockSseResponse(['data: {"response":{"candidates":[{"content":{"parts":[{"text":"ok"}]}}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2,"totalTokenCount":7}}}', 'data: {"response":{"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}]}}', 'data: [DONE]']);
+    });
+
+    const claudeModel = {
+      ...testModel,
+      id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+    };
+
+    const toolWithConst = {
+      name: "Grep",
+      description: "Search file contents",
+      parameters: {
+        type: "object",
+        properties: {
+          outputMode: {
+            anyOf: [
+              { const: "content", type: "string" },
+              { const: "filesWithMatches", type: "string" },
+            ],
+          },
+        },
+        required: ["outputMode"],
+      },
+    } as any;
+
+    const eventStream = stream(
+      claudeModel,
+      { ...testContext, tools: [toolWithConst] },
+      { apiKey: "test-token", fetch: mockFetch as any },
+    );
+
+    for await (const _ of eventStream) {}
+
+    const toolGroup = capturedBody.request.tools[0];
+    const decl = toolGroup.functionDeclarations[0];
+    expect(decl.name).toBe("Grep");
+    expect(decl.parameters).toBeDefined();
+    expect(decl.parametersJsonSchema).toBeUndefined();
+    const serializedDecl = JSON.stringify(decl);
+    expect(serializedDecl).not.toContain('"const"');
+    expect(decl.parameters.properties.outputMode.anyOf[0].enum).toEqual(["content"]);
+    expect(decl.parameters.properties.outputMode.anyOf[1].enum).toEqual(["filesWithMatches"]);
+  });
 });
