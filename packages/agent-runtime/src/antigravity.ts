@@ -223,12 +223,12 @@ export const stream = (
         "Content-Type": "application/json",
         Accept: "text/event-stream",
         "User-Agent": "antigravity/ide/2.1.1 darwin/arm64",
-        "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
-        "Client-Metadata": JSON.stringify({ ideType: 9, platform: 3, pluginType: 2 }),
-        ...(projectId ? { "x-goog-user-project": projectId } : {}),
+        "x-client-name": "antigravity",
+        "x-client-version": "4.2.5",
         ...modelHeaders,
         ...optHeaders,
       };
+      delete reqHeaders["x-goog-user-project"];
       reqHeaders.Authorization = `Bearer ${apiKey}`;
 
       const fetchFn = options?.fetch ?? globalThis.fetch;

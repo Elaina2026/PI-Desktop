@@ -91,7 +91,9 @@ describe("Antigravity stream adapter", () => {
     });
     expect(capturedHeaders.Authorization).toBe("Bearer test-token-123");
     expect(capturedHeaders["User-Agent"]).toContain("antigravity");
-    expect(capturedHeaders["Client-Metadata"]).toBeDefined();
+    expect(capturedHeaders["x-client-name"]).toBe("antigravity");
+    expect(capturedHeaders["Client-Metadata"]).toBeUndefined();
+    expect(capturedHeaders["X-Goog-Api-Client"]).toBeUndefined();
 
     const result = await eventStream.result();
     expect(result.stopReason).toBe("stop");
