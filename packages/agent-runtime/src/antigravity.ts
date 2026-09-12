@@ -46,6 +46,37 @@ function sanitizeOpenApiSchema(value: unknown): unknown {
     return value;
   }
   const obj = { ...(value as Record<string, unknown>) };
+
+  // Collapse anyOf / oneOf where every branch is a literal (e.g. TypeBox Union of Literals)
+  // into a single canonical enum: ["a", "b"]. Anthropic Vertex rejects anyOf of single-enum branches.
+  for (const unionKey of ["anyOf", "oneOf"]) {
+    const unionList = obj[unionKey];
+    if (Array.isArray(unionList) && unionList.length > 0) {
+      const allLiterals = unionList.every(
+        (branch) =>
+          typeof branch === "object" &&
+          branch !== null &&
+          ("const" in branch || (Array.isArray(branch.enum) && branch.enum.length > 0)),
+      );
+      if (allLiterals) {
+        const values: unknown[] = [];
+        let commonType: unknown = undefined;
+        for (const branch of unionList) {
+          if ("const" in branch) {
+            values.push(branch.const);
+            commonType = commonType || branch.type || typeof branch.const;
+          } else if (Array.isArray(branch.enum)) {
+            values.push(...branch.enum);
+            commonType = commonType || branch.type || (branch.enum.length > 0 ? typeof branch.enum[0] : undefined);
+          }
+        }
+        delete obj[unionKey];
+        if (commonType) obj.type = commonType;
+        obj.enum = [...new Set(values)];
+      }
+    }
+  }
+
   if ("const" in obj) {
     const val = obj.const;
     delete obj.const;

@@ -247,4 +247,50 @@ describe("Antigravity stream adapter", () => {
     expect(decl.parameters.properties.outputMode.anyOf[0].enum).toEqual(["content"]);
     expect(decl.parameters.properties.outputMode.anyOf[1].enum).toEqual(["filesWithMatches"]);
   });
+
+  it("collapses anyOf with const literals into a single enum for Claude models", async () => {
+    let capturedBody: any;
+    const mockFetch = vi.fn(async (_url: any, init: any) => {
+      capturedBody = JSON.parse(init.body);
+      return createMockSseResponse(['data: {"response":{"candidates":[{"content":{"parts":[{"text":"ok"}]}}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2,"totalTokenCount":7}}}', 'data: {"response":{"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}]}}', 'data: [DONE]']);
+    });
+
+    const claudeModel = {
+      ...testModel,
+      id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+    };
+
+    const toolWithUnionLiteral = {
+      name: "TaskWait",
+      description: "Wait for subagents",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: {
+            anyOf: [
+              { const: "all", type: "string" },
+              { const: "any", type: "string" },
+            ],
+            description: "Wait mode",
+          },
+        },
+      },
+    } as any;
+
+    const eventStream = stream(
+      claudeModel,
+      { ...testContext, tools: [toolWithUnionLiteral] },
+      { apiKey: "test-token", fetch: mockFetch as any },
+    );
+
+    for await (const _ of eventStream) {}
+
+    const toolGroup = capturedBody.request.tools[0];
+    const decl = toolGroup.functionDeclarations[0];
+    expect(decl.name).toBe("TaskWait");
+    expect(decl.parameters.properties.mode.anyOf).toBeUndefined();
+    expect(decl.parameters.properties.mode.type).toBe("string");
+    expect(decl.parameters.properties.mode.enum).toEqual(["all", "any"]);
+  });
 });
