@@ -164,12 +164,13 @@ PI-Desktop does not lock the agent runtime to a hardcoded model list.
 
 Use:
 
-* OpenAI and Anthropic
+* OpenAI, Anthropic, and Google Cloud Code Assist (Antigravity)
 * OpenAI-compatible APIs
 * hosted model gateways
 * local gateways such as Ollama and LM Studio
-* multiple models under the same provider
-* provider OAuth accounts where supported
+* multiple models under the same provider with dynamic Thinking level mapping
+* multi-account OAuth pools with automatic failover on quota exhaustion
+* granular quota tracking across rolling 5-hour and weekly windows
 
 Model configuration can include context windows, output limits, reasoning controls, temperature, and other model-specific behavior.
 

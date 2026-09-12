@@ -164,12 +164,13 @@ PI-Desktop 不会把智能体运行时锁死在一份硬编码模型名单上。
 
 可用：
 
-* OpenAI 和 Anthropic
+* OpenAI、Anthropic 与 Google Cloud Code Assist (Antigravity)
 * 兼容 OpenAI 的 API
 * 托管模型网关
 * Ollama、LM Studio 这类本地网关
-* 同一服务商下的多个模型
-* 支持 OAuth 的厂商账号
+* 同一服务商下的多个模型，支持统一思维级别（Thinking Level）映射
+* 多账号 OAuth 连接池，配额耗尽时自动故障转移（Auto-failover）
+* 细粒度配额监控，支持 5 小时滚动与每周独立窗口
 
 模型配置可包含上下文窗口、输出上限、推理控制、温度，以及其他按模型定制的行为。
 
