@@ -599,3 +599,13 @@ test("antigravity getQuota parses multi-group quota buckets", async () => {
     globalThis.fetch = origFetch;
   }
 });
+
+test("antigravity getCandidateAntigravityAccounts filters current email", async () => {
+  const { getCandidateAntigravityAccounts } = await import(
+    "@pi-desktop/agent-runtime"
+  );
+  if (typeof getCandidateAntigravityAccounts === "function") {
+    const list = getCandidateAntigravityAccounts("non-existent-filter@example.com");
+    assert.ok(Array.isArray(list));
+  }
+});

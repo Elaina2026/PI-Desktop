@@ -116,6 +116,46 @@ function lookupAntigravityProjectId(email?: string): string {
   return "";
 }
 
+
+export type AntigravityAccountCandidate = {
+  email: string;
+  accessToken: string;
+  projectId: string;
+};
+
+export function getCandidateAntigravityAccounts(excludeEmail?: string): AntigravityAccountCandidate[] {
+  const candidates: AntigravityAccountCandidate[] = [];
+  try {
+    const appData = process.env.APPDATA;
+    if (!appData) return candidates;
+    const dbPath = path.join(appData, "9router", "db", "data.sqlite");
+    if (!fs.existsSync(dbPath)) return candidates;
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const rows = db.prepare("SELECT email, data FROM providerConnections WHERE provider='antigravity' AND isActive=1").all() as Array<{ email?: string; data?: string }>;
+    for (const r of rows) {
+      if (!r.email) continue;
+      if (excludeEmail && r.email.toLowerCase() === excludeEmail.toLowerCase()) continue;
+      if (r.data) {
+        try {
+          const d = JSON.parse(r.data);
+          if (typeof d.accessToken === "string" && d.accessToken.trim()) {
+            const pid = typeof d.projectId === "string" && d.projectId.trim() ? d.projectId.trim() : "";
+            if (pid && pid !== "aicode-consumers") {
+              candidates.push({
+                email: r.email,
+                accessToken: d.accessToken.trim(),
+                projectId: pid,
+              });
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch (_) {}
+  return candidates;
+}
+
 function generateAntigravityProjectId(): string {
   const adj = ["useful", "bright", "swift", "calm", "bold"];
   const noun = ["fuze", "wave", "spark", "flow", "core"];
@@ -294,12 +334,38 @@ export const stream = (
       reqHeaders.Authorization = `Bearer ${apiKey}`;
 
             const fetchFn = options?.fetch ?? globalThis.fetch;
-      const response = await fetchFn(url, {
+      let response = await fetchFn(url, {
         method: "POST",
         headers: reqHeaders,
         body: JSON.stringify(payload),
         signal: options?.signal,
       });
+
+      // If rate-limited (429) or quota exhausted, attempt failover to other connected accounts in the pool
+      if (!response.ok && (response.status === 429 || response.status === 404)) {
+        const currentEmail = optHeaders["x-antigravity-account-email"] || modelHeaders["x-antigravity-account-email"] || "";
+        const candidates = getCandidateAntigravityAccounts(currentEmail);
+        for (const candidate of candidates) {
+          const failoverHeaders = {
+            ...reqHeaders,
+            Authorization: `Bearer ${candidate.accessToken}`,
+          };
+          const failoverPayload = {
+            ...payload,
+            project: candidate.projectId,
+          };
+          const altResponse = await fetchFn(url, {
+            method: "POST",
+            headers: failoverHeaders,
+            body: JSON.stringify(failoverPayload),
+            signal: options?.signal,
+          });
+          if (altResponse.ok) {
+            response = altResponse;
+            break;
+          }
+        }
+      }
 
       if (!response.ok) {
                 const errText = await response.text();

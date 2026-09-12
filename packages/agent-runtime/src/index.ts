@@ -19,3 +19,4 @@ export * from "./extensions/index.js";
 export * from "./compression-prompts.js";
 export * from "./rtk-compressor.js";
 export * from "./provider-retry.js";
+export * from "./antigravity.js";
