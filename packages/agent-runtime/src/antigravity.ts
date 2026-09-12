@@ -69,7 +69,7 @@ function buildAntigravityTools(
     isClaude,
     supportsGoogleStrictToolSampling(modelId),
   );
-  if (!raw || !isClaude) return raw;
+  if (!raw) return raw;
 
   return raw.map((group) => ({
     ...group,

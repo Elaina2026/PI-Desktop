@@ -152,26 +152,6 @@ const ANTIGRAVITY_MODELS: OAuthModelOption[] = [
     apiStyle: "antigravity",
     baseUrl: "https://daily-cloudcode-pa.googleapis.com",
   },
-  {
-    modelId: "gemini-3.8-flash-high",
-    apiStyle: "antigravity",
-    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
-  },
-  {
-    modelId: "gemini-3.8-flash-medium",
-    apiStyle: "antigravity",
-    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
-  },
-  {
-    modelId: "gemini-3.8-flash-low",
-    apiStyle: "antigravity",
-    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
-  },
-  {
-    modelId: "gemini-3.7-flash-high",
-    apiStyle: "antigravity",
-    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
-  },
 ];
 
 export type HostCall = <T = unknown>(
