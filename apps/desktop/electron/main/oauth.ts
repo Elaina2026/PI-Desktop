@@ -773,7 +773,6 @@ export class VendorOAuth {
     return {
       apiKey: accessToken,
       headers: {
-        ...(cred.projectId ? { "x-goog-user-project": cred.projectId } : {}),
         "User-Agent": "antigravity/ide/2.1.1 darwin/arm64",
         "x-client-name": "antigravity",
         "x-client-version": "4.2.5",
@@ -944,8 +943,8 @@ export class VendorOAuth {
         name: "Antigravity",
         authKind: OAUTH_AUTH_KIND,
         oauthAccountLabel: email,
-        baseUrl: "https://cloudcode-pa.googleapis.com/v1internal",
-        apiStyle: "google_generative_ai",
+        baseUrl: "https://cloudcode-pa.googleapis.com",
+        apiStyle: "antigravity",
         protocol: "google",
         defaultModelId: "gemini-3.8-flash-high",
         models: modelBindings,

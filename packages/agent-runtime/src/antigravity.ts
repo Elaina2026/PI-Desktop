@@ -34,9 +34,11 @@ import {
  * Recursively convert JSON Schema `const` into OpenAPI 3.0 `enum: [val]`.
  * Google Cloud Code Assist's protobuf schema for OpenAPI `parameters` has no `const` field.
  */
-function sanitizeOpenApiConst(value: unknown): unknown {
+const UNSUPPORTED_KEYWORDS = new Set(["$schema","$defs","definitions","$comment","$ref","const","title","default","examples","minLength","maxLength","exclusiveMinimum","exclusiveMaximum","minItems","maxItems","multipleOf","uniqueItems","additionalProperties","propertyNames","patternProperties"]);
+
+function sanitizeOpenApiSchema(value: unknown): unknown {
   if (Array.isArray(value)) {
-    return value.map(sanitizeOpenApiConst);
+    return value.map(sanitizeOpenApiSchema);
   }
   if (typeof value !== "object" || value === null) {
     return value;
@@ -50,7 +52,7 @@ function sanitizeOpenApiConst(value: unknown): unknown {
     }
   }
   for (const [k, v] of Object.entries(obj)) {
-    obj[k] = sanitizeOpenApiConst(v);
+    if (UNSUPPORTED_KEYWORDS.has(k) || k.startsWith("x-")) { delete obj[k]; } else { obj[k] = sanitizeOpenApiSchema(v); }
   }
   return obj;
 }
@@ -73,12 +75,19 @@ function buildAntigravityTools(
       if (decl.parameters) {
         return {
           ...decl,
-          parameters: sanitizeOpenApiConst(decl.parameters) as Record<string, unknown>,
+          parameters: sanitizeOpenApiSchema(decl.parameters) as Record<string, unknown>,
         };
       }
       return decl;
     }),
   }));
+}
+
+
+function generateAntigravityProjectId(): string {
+  const adj = ["useful", "bright", "swift", "calm", "bold"];
+  const noun = ["fuze", "wave", "spark", "flow", "core"];
+  return adj[Math.floor(Math.random() * adj.length)] + "-" + noun[Math.floor(Math.random() * noun.length)] + "-" + Math.random().toString(36).slice(2, 7);
 }
 
 let toolCallCounter = 0;
