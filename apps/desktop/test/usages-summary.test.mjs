@@ -1,44 +1,45 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {
+  BASE_MODEL_RATES,
+  resolveModelRate,
+  computeTokenCost,
+  formatTokenCount,
+} from "../src/lib/model-pricing.ts";
 
-const MODEL_RATES = {
-  "gemini-3.8-flash": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
-  "claude-sonnet-4-6": { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 },
-  "gpt-4o": { input: 2.50, output: 10.00, cacheRead: 1.25, cacheWrite: 0 },
-  "deepseek-chat": { input: 0.14, output: 0.28, cacheRead: 0.014, cacheWrite: 0 },
-};
+test("resolveModelRate handles known providers and prefixes", () => {
+  const gemini = resolveModelRate("gemini-3.8-flash");
+  assert.equal(gemini.input, 0.15);
+  assert.equal(gemini.output, 0.60);
 
-function resolveRate(modelId) {
-  if (MODEL_RATES[modelId]) return MODEL_RATES[modelId];
-  const lower = (modelId || "").toLowerCase();
-  for (const [k, v] of Object.entries(MODEL_RATES)) {
-    if (lower.includes(k.toLowerCase()) || k.toLowerCase().includes(lower)) return v;
-  }
-  return { input: 1.00, output: 4.00, cacheRead: 0.1, cacheWrite: 0 };
-}
+  const claudeSonnet = resolveModelRate("ag/claude-sonnet-4-6");
+  assert.equal(claudeSonnet.input, 3.00);
+  assert.equal(claudeSonnet.output, 15.00);
 
-function computeCost(usage, rates) {
-  const inp = ((usage.inputTokens || 0) * (rates.input || 0)) / 1e6;
-  const out = ((usage.outputTokens || 0) * (rates.output || 0)) / 1e6;
-  const cr = ((usage.cacheReadTokens || 0) * (rates.cacheRead || 0)) / 1e6;
-  const cw = ((usage.cacheWriteTokens || 0) * (rates.cacheWrite || 0)) / 1e6;
-  return inp + out + cr + cw;
-}
+  const gpt4o = resolveModelRate("openai/gpt-4o");
+  assert.equal(gpt4o.input, 2.50);
+  assert.equal(gpt4o.output, 10.00);
 
-test("rates resolve exact and fallback keys", () => {
-  assert.equal(resolveRate("gemini-3.8-flash").input, 0.15);
-  assert.equal(resolveRate("claude-sonnet-4-6").output, 15.00);
-  assert.equal(resolveRate("custom-unknown-model").input, 1.00);
+  const deepseek = resolveModelRate("deepseek-ai/deepseek-v4-flash");
+  assert.equal(deepseek.input, 0.14);
+  assert.equal(deepseek.output, 0.28);
+
+  const unknown = resolveModelRate("some-random-unknown-model");
+  assert.equal(unknown.input, 1.00);
+  assert.equal(unknown.output, 4.00);
 });
 
-test("computeCost calculates USD accurately per 1M tokens", () => {
+test("computeTokenCost computes USD accurately including cache", () => {
   const rates = { input: 2.00, output: 10.00, cacheRead: 0.50, cacheWrite: 0 };
   const usage = { inputTokens: 1_000_000, outputTokens: 500_000, cacheReadTokens: 2_000_000 };
-  const cost = computeCost(usage, rates);
+  const cost = computeTokenCost(usage, rates);
   assert.equal(cost, 8.00);
 });
 
-test("5 timeframes exist and maintain ascending or equal token counts", () => {
-  const timeframes = ["today", "sevenDays", "thirtyDays", "sixtyDays", "allTime"];
-  assert.equal(timeframes.length, 5);
+test("formatTokenCount formats K, M, B accurately", () => {
+  assert.equal(formatTokenCount(500), "500");
+  assert.equal(formatTokenCount(1500), "1.5k");
+  assert.equal(formatTokenCount(25000), "25k");
+  assert.equal(formatTokenCount(2500000), "2.5M");
+  assert.equal(formatTokenCount(3500000000), "3.50B");
 });

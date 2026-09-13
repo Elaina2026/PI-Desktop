@@ -1,17 +1,23 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../stores/app-store";
 import {
   IconSidebar,
   IconNewSession,
   IconSearch,
+  IconSparkles,
 } from "./icons";
 import { TooltipButton } from "./ui";
+import {
+  formatTokenCount,
+  resolveModelRate,
+  computeTokenCost,
+} from "../lib/model-pricing";
 
 function projectName(path?: string | null, name?: string | null) {
   if (name) return name;
   if (!path) return null;
-  const parts = path.split(/[/\\]/).filter(Boolean);
+  const parts = path.split(/[/\\\\]/).filter(Boolean);
   return parts[parts.length - 1] || path;
 }
 
@@ -30,16 +36,30 @@ function truncateTopbarTitle(title: string) {
     : title;
 }
 
-
-function formatKTokens(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
-  if (value >= 10_000) return `${Math.round(value / 1000)}k`;
-  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
-  return String(value);
-}
-
-function SessionTokenBar({ messages }: { messages: any[] }) {
+function SessionTokenBar({
+  messages,
+  modelId,
+}: {
+  messages: any[];
+  modelId?: string;
+}) {
+  const { t } = useTranslation();
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Close popover when clicking outside
+  useEffect(() => {
+    if (!detailsOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setDetailsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [detailsOpen]);
+
+  const rates = useMemo(() => resolveModelRate(modelId), [modelId]);
 
   const stats = useMemo(() => {
     let input = 0;
@@ -48,17 +68,26 @@ function SessionTokenBar({ messages }: { messages: any[] }) {
     let reasoning = 0;
 
     for (const m of messages) {
+      // Exclude nested subagent internal tool turns from inflating parent topbar
+      if (m.parentToolCallId) continue;
       if (m.usage) {
         input += m.usage.inputTokens || 0;
         output += m.usage.outputTokens || 0;
         cache += m.usage.cacheReadTokens || 0;
         reasoning += m.usage.reasoningTokens || 0;
+      } else if (m.responseOutputTokens) {
+        // Fallback throughput tokens if stream stopped early
+        output += m.responseOutputTokens;
       }
     }
 
     const total = input + output + cache;
-    return { input, output, cache, reasoning, total };
-  }, [messages]);
+    const cost = computeTokenCost(
+      { inputTokens: input, outputTokens: output, cacheReadTokens: cache },
+      rates,
+    );
+    return { input, output, cache, reasoning, total, cost };
+  }, [messages, rates]);
 
   if (stats.total === 0) return null;
 
@@ -68,123 +97,223 @@ function SessionTokenBar({ messages }: { messages: any[] }) {
 
   return (
     <div
+      ref={containerRef}
       className="session-token-insights-topbar"
       style={{
+        position: "relative",
         display: "inline-flex",
         alignItems: "center",
-        gap: "10px",
-        padding: "3px 8px",
-        borderRadius: "6px",
-        backgroundColor: "var(--ds-background-subtle, rgba(255, 255, 255, 0.04))",
-        border: "1px solid var(--ds-border-subtle, rgba(255, 255, 255, 0.08))",
-        fontSize: "11px",
-        color: "var(--ds-text-secondary, #aaa)",
-        cursor: "pointer",
-        userSelect: "none",
-        position: "relative",
-        height: "26px",
       }}
-      onClick={() => setDetailsOpen((v) => !v)}
-      title="Session Token Usage (Click for breakdown)"
     >
-      {/* Mini Segmented Bar Chart */}
-      <div
+      <button
+        type="button"
+        className={`ct-token-pill ${detailsOpen ? "active" : ""}`}
+        onClick={() => setDetailsOpen((v) => !v)}
+        title={t("settings.sessionTokensTitle")}
+        aria-expanded={detailsOpen}
         style={{
-          display: "flex",
-          width: "48px",
-          height: "8px",
-          borderRadius: "4px",
-          overflow: "hidden",
-          backgroundColor: "rgba(255, 255, 255, 0.1)",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "8px",
+          padding: "4px 10px",
+          borderRadius: "9999px",
+          backgroundColor: "var(--ds-tile)",
+          border: "1px solid var(--ds-border-subtle)",
+          fontSize: "11px",
+          color: "var(--ds-text-secondary)",
+          cursor: "pointer",
+          userSelect: "none",
+          height: "26px",
+          transition: "border-color 0.15s ease, background-color 0.15s ease",
         }}
       >
-        <div style={{ width: `${cachePct}%`, backgroundColor: "#38bdf8" }} title={`Cache: ${cachePct}%`} />
-        <div style={{ width: `${inputPct}%`, backgroundColor: "#818cf8" }} title={`Input: ${inputPct}%`} />
-        <div style={{ width: `${outputPct}%`, backgroundColor: "#34d399" }} title={`Output: ${outputPct}%`} />
-      </div>
+        {/* Visual Progress Dot Cluster */}
+        <div style={{ display: "flex", gap: "2px", alignItems: "center" }}>
+          <span
+            style={{
+              width: "6px",
+              height: "6px",
+              borderRadius: "50%",
+              backgroundColor: "#38bdf8",
+            }}
+            title={`Cache: ${formatTokenCount(stats.cache)}`}
+          />
+          <span
+            style={{
+              width: "6px",
+              height: "6px",
+              borderRadius: "50%",
+              backgroundColor: "#818cf8",
+            }}
+            title={`In: ${formatTokenCount(stats.input)}`}
+          />
+          <span
+            style={{
+              width: "6px",
+              height: "6px",
+              borderRadius: "50%",
+              backgroundColor: "#34d399",
+            }}
+            title={`Out: ${formatTokenCount(stats.output)}`}
+          />
+        </div>
 
-      {/* Summary Token Count */}
-      <span style={{ fontWeight: 600, color: "var(--ds-text-primary, #ddd)" }}>
-        {formatKTokens(stats.total)}
-      </span>
+        {/* Total Tokens Formatted */}
+        <span style={{ fontWeight: 600, color: "var(--ds-text-primary)" }}>
+          {formatTokenCount(stats.total)}
+        </span>
 
-      {/* Compact Badges */}
-      <span style={{ color: "#38bdf8" }}>
-        <span style={{ opacity: 0.7 }}>cache:</span> {formatKTokens(stats.cache)}
-      </span>
-      <span style={{ color: "#818cf8" }}>
-        <span style={{ opacity: 0.7 }}>in:</span> {formatKTokens(stats.input)}
-      </span>
-      <span style={{ color: "#34d399" }}>
-        <span style={{ opacity: 0.7 }}>out:</span> {formatKTokens(stats.output)}
-      </span>
+        {/* Cost Badge */}
+        <span
+          style={{
+            fontSize: "10.5px",
+            fontWeight: 500,
+            color: "var(--ds-accent)",
+            backgroundColor: "rgba(56, 189, 248, 0.08)",
+            padding: "1px 5px",
+            borderRadius: "4px",
+          }}
+        >
+          ${stats.cost < 0.0001 && stats.cost > 0 ? "<$0.001" : stats.cost.toFixed(3)}
+        </span>
+      </button>
 
-      {/* Popover Breakdown Dialog */}
+      {/* Modern Popover Breakdown Dialog */}
       {detailsOpen && (
         <div
+          className="ct-token-popover"
           style={{
             position: "absolute",
-            top: "32px",
+            top: "34px",
             right: "0",
             zIndex: 1000,
-            backgroundColor: "var(--ds-background-elevated, #18181b)",
-            border: "1px solid var(--ds-border-normal, rgba(255, 255, 255, 0.15))",
-            borderRadius: "8px",
-            padding: "12px",
-            boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
-            width: "220px",
+            backgroundColor: "var(--ds-bg-elevated)",
+            border: "1px solid var(--ds-border-strong)",
+            borderRadius: "var(--radius-md)",
+            padding: "14px",
+            boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+            width: "260px",
             display: "flex",
             flexDirection: "column",
-            gap: "8px",
+            gap: "12px",
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div style={{ fontWeight: 600, fontSize: "12px", color: "var(--ds-text-primary, #eee)", borderBottom: "1px solid rgba(255,255,255,0.1)", paddingBottom: "4px" }}>
-            Session Token Insights
+          {/* Header with Title & Active Model */}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              borderBottom: "1px solid var(--ds-border-subtle)",
+              paddingBottom: "8px",
+            }}
+          >
+            <div style={{ fontWeight: 600, fontSize: "12px", color: "var(--ds-text-primary)" }}>
+              {t("settings.sessionTokensTitle")}
+            </div>
+            {modelId && (
+              <span
+                style={{
+                  fontSize: "10px",
+                  fontFamily: "var(--font-mono)",
+                  padding: "2px 6px",
+                  borderRadius: "4px",
+                  backgroundColor: "var(--ds-tile)",
+                  color: "var(--ds-text-muted)",
+                }}
+              >
+                {modelId.split("/").pop()}
+              </span>
+            )}
           </div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+          {/* Breakdown Bars */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {/* Cache Read */}
             <div>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "2px" }}>
-                <span style={{ color: "#38bdf8" }}>Cache Read</span>
-                <strong>{stats.cache.toLocaleString()} ({cachePct}%)</strong>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", marginBottom: "3px" }}>
+                <span style={{ color: "#38bdf8", display: "flex", alignItems: "center", gap: "4px" }}>
+                  <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#38bdf8" }} />
+                  {t("settings.sessionTokensCache")}
+                </span>
+                <span style={{ fontFamily: "var(--font-mono)", color: "var(--ds-text-secondary)" }}>
+                  {stats.cache.toLocaleString()} ({cachePct}%)
+                </span>
               </div>
-              <div style={{ height: "4px", width: "100%", backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "2px", overflow: "hidden" }}>
+              <div style={{ height: "4px", width: "100%", backgroundColor: "var(--ds-tile)", borderRadius: "2px", overflow: "hidden" }}>
                 <div style={{ height: "100%", width: `${cachePct}%`, backgroundColor: "#38bdf8" }} />
               </div>
             </div>
 
+            {/* Input Tokens */}
             <div>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "2px" }}>
-                <span style={{ color: "#818cf8" }}>Input Tokens</span>
-                <strong>{stats.input.toLocaleString()} ({inputPct}%)</strong>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", marginBottom: "3px" }}>
+                <span style={{ color: "#818cf8", display: "flex", alignItems: "center", gap: "4px" }}>
+                  <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#818cf8" }} />
+                  {t("settings.sessionTokensInput")}
+                </span>
+                <span style={{ fontFamily: "var(--font-mono)", color: "var(--ds-text-secondary)" }}>
+                  {stats.input.toLocaleString()} ({inputPct}%)
+                </span>
               </div>
-              <div style={{ height: "4px", width: "100%", backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "2px", overflow: "hidden" }}>
+              <div style={{ height: "4px", width: "100%", backgroundColor: "var(--ds-tile)", borderRadius: "2px", overflow: "hidden" }}>
                 <div style={{ height: "100%", width: `${inputPct}%`, backgroundColor: "#818cf8" }} />
               </div>
             </div>
 
+            {/* Output Tokens */}
             <div>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "2px" }}>
-                <span style={{ color: "#34d399" }}>Output Tokens</span>
-                <strong>{stats.output.toLocaleString()} ({outputPct}%)</strong>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", marginBottom: "3px" }}>
+                <span style={{ color: "#34d399", display: "flex", alignItems: "center", gap: "4px" }}>
+                  <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#34d399" }} />
+                  {t("settings.sessionTokensOutput")}
+                </span>
+                <span style={{ fontFamily: "var(--font-mono)", color: "var(--ds-text-secondary)" }}>
+                  {stats.output.toLocaleString()} ({outputPct}%)
+                </span>
               </div>
-              <div style={{ height: "4px", width: "100%", backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "2px", overflow: "hidden" }}>
+              <div style={{ height: "4px", width: "100%", backgroundColor: "var(--ds-tile)", borderRadius: "2px", overflow: "hidden" }}>
                 <div style={{ height: "100%", width: `${outputPct}%`, backgroundColor: "#34d399" }} />
               </div>
             </div>
 
+            {/* Reasoning Tokens if present */}
             {stats.reasoning > 0 && (
-              <div style={{ display: "flex", justifyContent: "space-between", color: "#f59e0b", fontSize: "10.5px" }}>
-                <span>Thinking (Reasoning)</span>
-                <strong>{stats.reasoning.toLocaleString()}</strong>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "#f59e0b" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                  <IconSparkles size={11} />
+                  {t("settings.sessionTokensReasoning")}
+                </span>
+                <span style={{ fontFamily: "var(--font-mono)" }}>
+                  {stats.reasoning.toLocaleString()}
+                </span>
               </div>
             )}
           </div>
 
-          <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: "6px", display: "flex", justifyContent: "space-between", fontWeight: 600 }}>
-            <span>Total Spent</span>
-            <span style={{ color: "var(--ds-text-primary, #fff)" }}>{stats.total.toLocaleString()} tokens</span>
+          {/* Footer with Total and Cost */}
+          <div
+            style={{
+              borderTop: "1px solid var(--ds-border-subtle)",
+              paddingTop: "10px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "4px",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11.5px" }}>
+              <span style={{ color: "var(--ds-text-muted)" }}>{t("settings.sessionTokensTotal")}</span>
+              <span style={{ fontWeight: 600, color: "var(--ds-text-primary)" }}>
+                {stats.total.toLocaleString()} tokens
+              </span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11.5px" }}>
+              <span style={{ color: "var(--ds-text-muted)" }}>{t("settings.sessionTokensCost")}</span>
+              <span style={{ fontWeight: 600, color: "var(--ds-accent)" }}>
+                ${stats.cost.toFixed(4)} USD
+              </span>
+            </div>
           </div>
         </div>
       )}
@@ -210,8 +339,15 @@ export function ConversationTopbar({
   const sessions = useAppStore((s) => s.sessions);
   const workspace = useAppStore((s) => s.workspace);
   const messages = useAppStore((s) => s.messages);
+  const draftConfiguration = useAppStore((s) => s.draftConfiguration);
+  const settings = useAppStore((s) => s.settings);
 
   const activeSession = sessions.find((session) => session.id === activeSessionId);
+  const currentModelId =
+    draftConfiguration?.modelId ||
+    activeSession?.modelId ||
+    settings?.defaultModelId ||
+    "gemini-3.8-flash";
 
   const fullTaskTitle = isDefaultSessionTitle(activeSession?.title)
     ? t("chat.untitledTask")
@@ -228,11 +364,6 @@ export function ConversationTopbar({
       aria-label={t("nav.conversation")}
     >
       <div className="ct-left">
-        {/*
-          Always mounted: the slot animates from 0 to 28px with the dock, so
-          unmounting it would reintroduce the first-frame title jump. While the
-          sidebar is open the slot is zero-width and hidden from AT.
-        */}
         <div className="ct-lead" aria-hidden={!sidebarCollapsed}>
           <TooltipButton
             type="button"
@@ -254,7 +385,7 @@ export function ConversationTopbar({
       </div>
 
       <div className="ct-right">
-        <SessionTokenBar messages={messages} />
+        <SessionTokenBar messages={messages} modelId={currentModelId} />
         <div className="ct-actions">
           <TooltipButton
             type="button"

@@ -2035,22 +2035,26 @@ export type ModelUsageSummaryItem = {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  cacheTokens: number;
   totalTokens: number;
   turnCount: number;
   costUsd: number;
+  percent?: number;
   rates: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
 };
 
 export type TimeframeUsageItem = {
-  id: "today" | "sevenDays" | "thirtyDays" | "sixtyDays" | "allTime";
+  id: "today" | "sevenDays" | "thirtyDays" | "allTime" | "sixtyDays";
   labelKey: string;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  cacheTokens: number;
   totalTokens: number;
   turnCount: number;
   costUsd: number;
+  models?: ModelUsageSummaryItem[];
 };
 
 export type ModelUsageSummaryResult = {

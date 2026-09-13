@@ -8,7 +8,9 @@ import type {
 } from "@pi-desktop/shared";
 import { api } from "../../lib/api";
 import { Button } from "../ui";
-import { IconActivity, IconReview } from "../icons";
+import { IconActivity, IconBot, IconReview } from "../icons";
+import { useAppStore } from "../../stores/app-store";
+import { formatTokenCount } from "../../lib/model-pricing";
 
 function cellFill(value: number, max: number): string {
   if (value <= 0) return "var(--ds-tile)";
@@ -23,13 +25,15 @@ function mondayIndex(dateStr: string): number {
   return weekday === 0 ? 6 : weekday - 1;
 }
 
+type TimeframeKey = "today" | "sevenDays" | "thirtyDays" | "allTime";
+
 export function UsagesPage() {
   const { t, i18n } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [summary, setSummary] = useState<ModelUsageSummaryResult | null>(null);
   const [historyItems, setHistoryItems] = useState<TokenUsageHistoryItem[]>([]);
-  const [activeTimeframe, setActiveTimeframe] = useState<string>("allTime");
+  const [selectedTimeframe, setSelectedTimeframe] = useState<TimeframeKey>("sevenDays");
   const [selectedCell, setSelectedCell] = useState<{
     date: string;
     total: number;
@@ -38,6 +42,13 @@ export function UsagesPage() {
     cost?: number;
     turns?: number;
   } | null>(null);
+
+  const draftConfiguration = useAppStore((s) => s.draftConfiguration);
+  const settings = useAppStore((s) => s.settings);
+  const activeModelId =
+    draftConfiguration?.modelId ||
+    settings?.defaultModelId ||
+    "gemini-3.8-flash";
 
   const loadData = async () => {
     setLoading(true);
@@ -61,28 +72,50 @@ export function UsagesPage() {
 
   useEffect(() => {
     void loadData();
+
+    // Auto-refresh when sessions / messages update
+    if (window.piDesktop?.on) {
+      const cleanup = window.piDesktop.on("pi-desktop/event/sessionsChanged", () => {
+        void loadData();
+      });
+      return cleanup;
+    }
   }, []);
 
-  const timeframeList: TimeframeUsageItem[] = useMemo(() => {
-    if (!summary?.timeframes) {
-      return [
-        { id: "today", labelKey: "settings.usageToday", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, turnCount: 0 },
-        { id: "sevenDays", labelKey: "settings.usage7Days", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, turnCount: 0 },
-        { id: "thirtyDays", labelKey: "settings.usage1Month", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, turnCount: 0 },
-        { id: "sixtyDays", labelKey: "settings.usage2Months", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, turnCount: 0 },
-        { id: "allTime", labelKey: "settings.usageAllTime", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, turnCount: 0 },
-      ];
+  const timeframesMap = summary?.timeframes;
+  const currentTfData: TimeframeUsageItem = useMemo(() => {
+    if (timeframesMap && timeframesMap[selectedTimeframe]) {
+      return timeframesMap[selectedTimeframe];
     }
-    return [
-      summary.timeframes.today,
-      summary.timeframes.sevenDays,
-      summary.timeframes.thirtyDays,
-      summary.timeframes.sixtyDays,
-      summary.timeframes.allTime,
-    ];
-  }, [summary]);
+    return {
+      id: selectedTimeframe,
+      labelKey: `settings.usage${selectedTimeframe}`,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      cacheTokens: 0,
+      totalTokens: 0,
+      turnCount: 0,
+      costUsd: 0,
+      models: [],
+    };
+  }, [timeframesMap, selectedTimeframe]);
 
-  // Build 53 columns x 7 rows for SVG
+  // Models used in selected timeframe (or allTime)
+  const currentModels: ModelUsageSummaryItem[] = useMemo(() => {
+    if (currentTfData.models && currentTfData.models.length > 0) {
+      return currentTfData.models;
+    }
+    return summary?.models ?? [];
+  }, [currentTfData, summary]);
+
+  // Top 5 models for the right-hand panel
+  const topModels = useMemo(() => {
+    return currentModels.slice(0, 5);
+  }, [currentModels]);
+
+  // Contribution graph data
   const rawItems = historyItems.length > 0 ? historyItems : (summary?.daily ?? []);
 
   const { weeks, monthLabels, maxTokens } = useMemo(() => {
@@ -123,63 +156,175 @@ export function UsagesPage() {
     return { weeks: wks, monthLabels: labels, maxTokens: max };
   }, [rawItems, i18n.language]);
 
-  // Calculate cutoff for active timeframe filter
   const timeframeCutoffMs = useMemo(() => {
     const now = Date.now();
-    if (activeTimeframe === "today") {
+    if (selectedTimeframe === "today") {
       const d = new Date();
       d.setHours(0, 0, 0, 0);
       return d.getTime();
     }
-    if (activeTimeframe === "sevenDays") return now - 7 * 86400 * 1000;
-    if (activeTimeframe === "thirtyDays") return now - 30 * 86400 * 1000;
-    if (activeTimeframe === "sixtyDays") return now - 60 * 86400 * 1000;
+    if (selectedTimeframe === "sevenDays") return now - 7 * 86400 * 1000;
+    if (selectedTimeframe === "thirtyDays") return now - 30 * 86400 * 1000;
     return 0; // allTime
-  }, [activeTimeframe]);
+  }, [selectedTimeframe]);
 
-  const models = summary?.models ?? [];
-  const svgWidth = Math.max(28 + weeks.length * 13 + 6, 725);
+  const svgWidth = Math.max(28 + weeks.length * 13 + 6, 728);
   const svgHeight = 112;
+
+  const timeframeTabs: Array<{ id: TimeframeKey; labelKey: string }> = [
+    { id: "today", labelKey: "settings.usageToday" },
+    { id: "sevenDays", labelKey: "settings.usage7Days" },
+    { id: "thirtyDays", labelKey: "settings.usage1Month" },
+    { id: "allTime", labelKey: "settings.usageAllTime" },
+  ];
 
   return (
     <div className="token-usage-page">
+      {/* Top Header & Timeframe Selector Bar */}
       <div className="token-usage-toolbar">
-        <h2 className="text-lg font-semibold text-text-primary">{t("settings.usages")}</h2>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => void loadData()}
-          disabled={loading}
-          aria-label={t("settings.usageRefresh")}
-        >
-          <IconReview className={loading ? "animate-spin" : ""} />
-        </Button>
+        <div>
+          <h2 className="text-lg font-semibold text-text-primary">{t("settings.usages")}</h2>
+        </div>
+
+        <div className="flex items-center gap-3">
+          {/* Timeframe Selector Segment */}
+          <div className="token-usage-timeframe-selector" role="tablist">
+            {timeframeTabs.map((tab) => {
+              const active = selectedTimeframe === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  className={`token-usage-timeframe-btn ${active ? "active" : ""}`}
+                  onClick={() => setSelectedTimeframe(tab.id)}
+                >
+                  {t(tab.labelKey)}
+                </button>
+              );
+            })}
+          </div>
+
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => void loadData()}
+            disabled={loading}
+            aria-label={t("settings.usageRefresh")}
+          >
+            <IconReview className={loading ? "animate-spin" : ""} />
+          </Button>
+        </div>
       </div>
 
-      {/* 5 Timeframe KPI Cards */}
-      <div className="token-usage-kpis" role="radiogroup" aria-label={t("settings.usageTimeframes")}>
-        {timeframeList.map((tf) => {
-          const isActive = activeTimeframe === tf.id;
-          return (
-            <button
-              key={tf.id}
-              type="button"
-              className={`token-usage-kpi ${isActive ? "active" : ""}`}
-              onClick={() => setActiveTimeframe(tf.id)}
-              aria-pressed={isActive}
-            >
-              <div className="text-xs font-medium uppercase tracking-wide text-text-muted">
-                {t(tf.labelKey)}
-              </div>
-              <div className="mt-1 text-lg font-semibold text-text-primary">
-                {tf.totalTokens.toLocaleString()} <span className="text-xs font-normal text-text-muted">tokens</span>
-              </div>
-              <div className="mt-1 text-sm font-medium text-ds-accent">
-                ${tf.costUsd.toFixed(4)} <span className="text-xs text-text-muted">USD</span>
-              </div>
-            </button>
-          );
-        })}
+      {/* Main 9router-style Dashboard Grid: 4 KPIs (left) & Active/Top Models (right) */}
+      <div className="token-usage-dashboard-grid">
+        {/* Left Column: 4 Stat Cards */}
+        <div className="token-usage-stat-cards">
+          {/* Input Tokens */}
+          <div className="token-usage-card">
+            <div className="text-xs font-medium text-text-muted">
+              {t("settings.usageInputTokens")}
+            </div>
+            <div className="mt-2 text-2xl font-bold text-text-primary font-mono">
+              {formatTokenCount(currentTfData.inputTokens)}
+            </div>
+            <div className="mt-1 text-xs text-text-muted font-mono">
+              {currentTfData.inputTokens.toLocaleString()} tokens
+            </div>
+          </div>
+
+          {/* Cache Tokens */}
+          <div className="token-usage-card">
+            <div className="text-xs font-medium text-text-muted flex items-center justify-between">
+              <span>{t("settings.usageCacheTokens")}</span>
+              <span className="token-dot cache" />
+            </div>
+            <div className="mt-2 text-2xl font-bold text-sky-400 font-mono">
+              {formatTokenCount(currentTfData.cacheTokens || (currentTfData.cacheReadTokens + currentTfData.cacheWriteTokens))}
+            </div>
+            <div className="mt-1 text-xs text-text-muted font-mono">
+              {(currentTfData.cacheReadTokens + currentTfData.cacheWriteTokens).toLocaleString()} tokens
+            </div>
+          </div>
+
+          {/* Output Tokens */}
+          <div className="token-usage-card">
+            <div className="text-xs font-medium text-text-muted flex items-center justify-between">
+              <span>{t("settings.usageOutputTokens")}</span>
+              <span className="token-dot output" />
+            </div>
+            <div className="mt-2 text-2xl font-bold text-emerald-400 font-mono">
+              {formatTokenCount(currentTfData.outputTokens)}
+            </div>
+            <div className="mt-1 text-xs text-text-muted font-mono">
+              {currentTfData.outputTokens.toLocaleString()} tokens
+            </div>
+          </div>
+
+          {/* Total Cost USD */}
+          <div className="token-usage-card highlight">
+            <div className="text-xs font-medium text-text-muted">
+              {t("settings.usageTotalCost")}
+            </div>
+            <div className="mt-2 text-2xl font-bold text-ds-accent font-mono">
+              ${currentTfData.costUsd.toFixed(4)}
+            </div>
+            <div className="mt-1 text-xs text-text-muted">
+              {t(timeframeTabs.find((x) => x.id === selectedTimeframe)?.labelKey || "")} USD
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column: Active Model & Top Models Overview */}
+        <div className="token-usage-models-overview">
+          {/* Active Model */}
+          <div className="token-usage-active-model-box">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-text-muted flex items-center gap-1.5">
+                <IconBot size={13} />
+                {t("settings.usageActiveModel")}
+              </span>
+              <span className="token-badge-active">{t("settings.usageStatusActive")}</span>
+            </div>
+            <div className="mt-1.5 text-sm font-semibold text-text-primary font-mono truncate">
+              {activeModelId}
+            </div>
+          </div>
+
+          {/* Top Models ranking for current timeframe */}
+          <div className="token-usage-top-models-box">
+            <div className="text-xs font-medium text-text-muted mb-2">
+              {t("settings.usageTopModels")}
+            </div>
+            <div className="flex flex-col gap-2.5">
+              {topModels.length === 0 ? (
+                <div className="py-2 text-xs text-text-muted">{t("settings.usageEmpty")}</div>
+              ) : (
+                topModels.map((m) => {
+                  const pct = m.percent ?? Math.round((m.totalTokens / (currentTfData.totalTokens || 1)) * 100);
+                  return (
+                    <div key={m.modelId} className="token-usage-model-rank-item">
+                      <div className="flex items-center justify-between text-xs mb-1">
+                        <span className="font-mono text-text-primary truncate max-w-[130px]" title={m.modelId}>
+                          {m.modelId.split("/").pop()}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-text-secondary">{formatTokenCount(m.totalTokens)}</span>
+                          <span className="text-ds-accent font-mono text-xs-plus">${m.costUsd.toFixed(3)}</span>
+                        </div>
+                      </div>
+                      <div className="token-progress-bar-bg">
+                        <div className="token-progress-bar-fill" style={{ width: `${Math.max(pct, 2)}%` }} />
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Contribution Graph Heatmap Card */}
@@ -214,7 +359,6 @@ export function UsagesPage() {
               role="grid"
               aria-label={t("settings.usageActivity")}
             >
-              {/* Month Labels along top */}
               {monthLabels.map((m) => (
                 <text
                   key={`${m.col}-${m.name}`}
@@ -226,12 +370,10 @@ export function UsagesPage() {
                 </text>
               ))}
 
-              {/* Weekday Labels along left */}
               <text x="0" y="27" className="token-usage-svg-label">{t("settings.usageMon")}</text>
               <text x="0" y="53" className="token-usage-svg-label">{t("settings.usageWed")}</text>
               <text x="0" y="79" className="token-usage-svg-label">{t("settings.usageFri")}</text>
 
-              {/* Contribution Grid */}
               {weeks.map((week, colIdx) => {
                 const colX = 28 + colIdx * 13;
                 return (
@@ -321,26 +463,41 @@ export function UsagesPage() {
               <tr>
                 <th>{t("settings.usageTableTimeframe")}</th>
                 <th className="text-right">{t("settings.usageTableInput")}</th>
+                <th className="text-right">{t("settings.usageCacheTokens")}</th>
                 <th className="text-right">{t("settings.usageTableOutput")}</th>
                 <th className="text-right">{t("settings.usageTableTotal")}</th>
                 <th className="text-right">{t("settings.usageTableCost")}</th>
               </tr>
             </thead>
             <tbody>
-              {timeframeList.map((tf) => (
-                <tr
-                  key={tf.id}
-                  className={activeTimeframe === tf.id ? "bg-ds-tile/40 font-medium" : ""}
-                >
-                  <td className="font-medium">{t(tf.labelKey)}</td>
-                  <td className="text-right font-mono">{tf.inputTokens.toLocaleString()}</td>
-                  <td className="text-right font-mono">{tf.outputTokens.toLocaleString()}</td>
-                  <td className="text-right font-mono font-semibold">{tf.totalTokens.toLocaleString()}</td>
-                  <td className="text-right font-mono font-semibold text-ds-accent">
-                    ${tf.costUsd.toFixed(4)}
-                  </td>
-                </tr>
-              ))}
+              {timeframeTabs.map((tab) => {
+                const tf = timeframesMap ? timeframesMap[tab.id] : null;
+                const isCurrent = selectedTimeframe === tab.id;
+                return (
+                  <tr
+                    key={tab.id}
+                    className={isCurrent ? "bg-ds-tile/50 font-medium" : ""}
+                    style={{ cursor: "pointer" }}
+                    onClick={() => setSelectedTimeframe(tab.id)}
+                  >
+                    <td className="font-medium">
+                      <span className="flex items-center gap-2">
+                        {isCurrent ? <span className="w-1.5 h-1.5 rounded-full bg-ds-accent" /> : null}
+                        {t(tab.labelKey)}
+                      </span>
+                    </td>
+                    <td className="text-right font-mono">{(tf?.inputTokens ?? 0).toLocaleString()}</td>
+                    <td className="text-right font-mono text-sky-400">
+                      {((tf?.cacheTokens ?? ((tf?.cacheReadTokens ?? 0) + (tf?.cacheWriteTokens ?? 0)))).toLocaleString()}
+                    </td>
+                    <td className="text-right font-mono text-emerald-400">{(tf?.outputTokens ?? 0).toLocaleString()}</td>
+                    <td className="text-right font-mono font-semibold">{(tf?.totalTokens ?? 0).toLocaleString()}</td>
+                    <td className="text-right font-mono font-semibold text-ds-accent">
+                      ${(tf?.costUsd ?? 0).toFixed(4)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -348,7 +505,9 @@ export function UsagesPage() {
 
       {/* Per-Model Usage Breakdown Table */}
       <div className="token-usage-card-block">
-        <h3 className="token-usage-card-heading">{t("settings.usageModels")}</h3>
+        <h3 className="token-usage-card-heading">
+          {t("settings.usageModels")} ({t(timeframeTabs.find((x) => x.id === selectedTimeframe)?.labelKey || "")})
+        </h3>
         <div className="token-usage-table-wrap">
           <table className="token-usage-table">
             <thead>
@@ -356,20 +515,21 @@ export function UsagesPage() {
                 <th>{t("settings.usageModelName")}</th>
                 <th className="text-right">{t("settings.usageRate")}</th>
                 <th className="text-right">{t("settings.usageTableInput")}</th>
+                <th className="text-right">{t("settings.usageCacheTokens")}</th>
                 <th className="text-right">{t("settings.usageTableOutput")}</th>
                 <th className="text-right">{t("settings.usageTableTotal")}</th>
                 <th className="text-right">{t("settings.usageTableCost")}</th>
               </tr>
             </thead>
             <tbody>
-              {models.length === 0 ? (
+              {currentModels.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-6 text-center text-xs text-text-muted">
+                  <td colSpan={7} className="py-6 text-center text-xs text-text-muted">
                     {t("settings.usageEmpty")}
                   </td>
                 </tr>
               ) : (
-                models.map((m: ModelUsageSummaryItem) => (
+                currentModels.map((m: ModelUsageSummaryItem) => (
                   <tr key={m.modelId}>
                     <td className="font-medium">
                       <span className="token-usage-model-tag">{m.modelId}</span>
@@ -378,7 +538,10 @@ export function UsagesPage() {
                       ${m.rates?.input ?? 1} / ${m.rates?.output ?? 4}
                     </td>
                     <td className="text-right font-mono">{m.inputTokens.toLocaleString()}</td>
-                    <td className="text-right font-mono">{m.outputTokens.toLocaleString()}</td>
+                    <td className="text-right font-mono text-sky-400">
+                      {(m.cacheTokens ?? (m.cacheReadTokens + m.cacheWriteTokens)).toLocaleString()}
+                    </td>
+                    <td className="text-right font-mono text-emerald-400">{m.outputTokens.toLocaleString()}</td>
                     <td className="text-right font-mono font-semibold">{m.totalTokens.toLocaleString()}</td>
                     <td className="text-right font-mono font-semibold text-ds-accent">
                       ${m.costUsd.toFixed(4)}

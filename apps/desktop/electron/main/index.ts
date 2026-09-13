@@ -7320,37 +7320,108 @@ function registerIpc() {
   handle(
     IPC.invoke.statsGetModelUsageSummary,
     async () => {
-      const MODEL_RATES: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
+      // Comprehensive model rate catalog ($ / 1M tokens)
+      const BASE_RATES: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
+        // Google Gemini
         "gemini-3.8-flash": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
-        "ag/gemini-3.8-flash": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
-        "ag/gemini-3.8-flash-high": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
         "gemini-3.7-flash": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
         "gemini-3.7-flash-tiered": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
         "gemini-3.6-flash": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
         "gemini-3.6-flash-tiered": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
+        "gemini-2.5-flash": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
+        "gemini-2.0-flash": { input: 0.10, output: 0.40, cacheRead: 0.025, cacheWrite: 0 },
+        "gemini-1.5-flash": { input: 0.075, output: 0.30, cacheRead: 0.01875, cacheWrite: 0 },
+        "gemini-1.5-pro": { input: 1.25, output: 5.00, cacheRead: 0.3125, cacheWrite: 0 },
+        // Anthropic Claude
         "claude-sonnet-4-6": { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 },
-        "ag/claude-sonnet-4-6": { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 },
+        "claude-3-7-sonnet": { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 },
         "claude-3-5-sonnet": { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 },
         "claude-opus-4-6": { input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },
         "claude-opus-4-6-thinking": { input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },
+        "claude-3-opus": { input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },
         "claude-haiku-4-5": { input: 1.00, output: 5.00, cacheRead: 0.10, cacheWrite: 1.25 },
+        "claude-3-5-haiku": { input: 0.80, output: 4.00, cacheRead: 0.08, cacheWrite: 1.00 },
+        // OpenAI GPT
         "gpt-4o": { input: 2.50, output: 10.00, cacheRead: 1.25, cacheWrite: 0 },
         "gpt-4o-mini": { input: 0.15, output: 0.60, cacheRead: 0.075, cacheWrite: 0 },
+        "gpt-4-turbo": { input: 10.00, output: 30.00, cacheRead: 0, cacheWrite: 0 },
+        "gpt-4": { input: 30.00, output: 60.00, cacheRead: 0, cacheWrite: 0 },
+        "gpt-3.5-turbo": { input: 0.50, output: 1.50, cacheRead: 0, cacheWrite: 0 },
+        "o1": { input: 15.00, output: 60.00, cacheRead: 7.50, cacheWrite: 0 },
+        "o1-mini": { input: 1.10, output: 4.40, cacheRead: 0.55, cacheWrite: 0 },
+        "o3": { input: 2.00, output: 8.00, cacheRead: 0.50, cacheWrite: 0 },
+        "o3-mini": { input: 1.10, output: 4.40, cacheRead: 0.55, cacheWrite: 0 },
+        "o4-mini": { input: 1.10, output: 4.40, cacheRead: 0.275, cacheWrite: 0 },
         "gpt-5.6-sol": { input: 4.00, output: 20.00, cacheRead: 0.40, cacheWrite: 5.00 },
-        "deepseek-ai/deepseek-v4-flash-0731": { input: 0.14, output: 0.28, cacheRead: 0.014, cacheWrite: 0 },
+        "gpt-5.6-terra": { input: 2.00, output: 12.00, cacheRead: 0.20, cacheWrite: 2.50 },
+        "gpt-5.6-luna": { input: 0.20, output: 1.20, cacheRead: 0.02, cacheWrite: 0.25 },
+        "gpt-5.4": { input: 2.50, output: 15.00, cacheRead: 0.25, cacheWrite: 0 },
+        "gpt-5.4-mini": { input: 0.75, output: 4.50, cacheRead: 0.075, cacheWrite: 0 },
+        "gpt-5-mini": { input: 0.25, output: 2.00, cacheRead: 0.025, cacheWrite: 0 },
+        "gpt-5": { input: 1.25, output: 10.00, cacheRead: 0.125, cacheWrite: 0 },
+        // DeepSeek
+        "deepseek-chat": { input: 0.14, output: 0.28, cacheRead: 0.014, cacheWrite: 0 },
+        "deepseek-v3": { input: 0.14, output: 0.28, cacheRead: 0.014, cacheWrite: 0 },
+        "deepseek-reasoner": { input: 0.55, output: 2.19, cacheRead: 0.14, cacheWrite: 0 },
+        "deepseek-r1": { input: 0.55, output: 2.19, cacheRead: 0.14, cacheWrite: 0 },
+        "deepseek-v4": { input: 0.14, output: 0.28, cacheRead: 0.014, cacheWrite: 0 },
+        "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.014, cacheWrite: 0 },
+        // Moonshot Kimi
+        "kimi-k2.5": { input: 0.60, output: 3.00, cacheRead: 0.12, cacheWrite: 0 },
+        "kimi-k2.7-code": { input: 0.95, output: 4.00, cacheRead: 0.19, cacheWrite: 0 },
+        "kimi-k3": { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 0 },
+        // Zhipu GLM
+        "glm-4.7": { input: 0.60, output: 2.20, cacheRead: 0.12, cacheWrite: 0 },
+        "glm-5": { input: 0.95, output: 3.15, cacheRead: 0.20, cacheWrite: 0 },
+        "glm-5.1": { input: 1.30, output: 4.30, cacheRead: 0.26, cacheWrite: 0 },
+        "glm-5.2": { input: 1.40, output: 4.40, cacheRead: 0.30, cacheWrite: 0 },
         "glm-5.3": { input: 1.40, output: 4.40, cacheRead: 0.14, cacheWrite: 0 },
+        "glm-5.3-flash": { input: 0.15, output: 0.50, cacheRead: 0.03, cacheWrite: 0 },
+        // Qwen / Alibaba
+        "qwen3.8-27b": { input: 0.45, output: 3.20, cacheRead: 0.05, cacheWrite: 0 },
+        "qwen3-30b": { input: 0.05, output: 0.33, cacheRead: 0.01, cacheWrite: 0 },
+        "qwen2.5-72b": { input: 0.35, output: 1.40, cacheRead: 0.07, cacheWrite: 0 },
+        // Meta Llama
+        "llama-3.3-70b": { input: 0.60, output: 2.40, cacheRead: 0.12, cacheWrite: 0 },
+        "llama-3.1-405b": { input: 2.00, output: 6.00, cacheRead: 0.50, cacheWrite: 0 },
+        "llama-4-scout": { input: 0.27, output: 0.85, cacheRead: 0.05, cacheWrite: 0 },
+        // Grok
+        "grok-4.5": { input: 2.00, output: 6.00, cacheRead: 0.50, cacheWrite: 0 },
+        "grok-4.6": { input: 2.00, output: 6.00, cacheRead: 0.50, cacheWrite: 0 },
       };
 
       function resolveRate(modelId: string) {
-        if (MODEL_RATES[modelId]) return MODEL_RATES[modelId];
-        const lower = (modelId || "").toLowerCase();
-        for (const [k, v] of Object.entries(MODEL_RATES)) {
-          if (lower.includes(k.toLowerCase()) || k.toLowerCase().includes(lower)) return v;
+        if (!modelId) return { input: 1.00, output: 4.00, cacheRead: 0.1, cacheWrite: 0 };
+        const clean = modelId.trim().toLowerCase();
+        const shortId = clean.includes("/") ? clean.split("/").pop()! : clean;
+
+        // 1. Direct catalog lookup
+        const catalogHit = modelsDevCatalog.findModel({ modelId });
+        if (catalogHit?.cost) {
+          return {
+            input: catalogHit.cost.input ?? 1.00,
+            output: catalogHit.cost.output ?? 4.00,
+            cacheRead: catalogHit.cost.cacheRead ?? 0.1,
+            cacheWrite: catalogHit.cost.cacheWrite ?? 0,
+          };
         }
+
+        // 2. Exact base rate
+        if (BASE_RATES[clean]) return BASE_RATES[clean];
+        if (BASE_RATES[shortId]) return BASE_RATES[shortId];
+
+        // 3. Prefix / Substring match
+        for (const [k, v] of Object.entries(BASE_RATES)) {
+          if (shortId.includes(k) || k.includes(shortId)) return v;
+        }
+
         return { input: 1.00, output: 4.00, cacheRead: 0.1, cacheWrite: 0 };
       }
 
-      function computeCost(usage: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }, rates: { input: number; output: number; cacheRead: number; cacheWrite: number }) {
+      function computeCost(
+        usage: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number },
+        rates: { input: number; output: number; cacheRead: number; cacheWrite: number },
+      ) {
         const inp = ((usage.inputTokens || 0) * (rates.input || 0)) / 1e6;
         const out = ((usage.outputTokens || 0) * (rates.output || 0)) / 1e6;
         const cr = ((usage.cacheReadTokens || 0) * (rates.cacheRead || 0)) / 1e6;
@@ -7365,26 +7436,121 @@ function registerIpc() {
       const todayStartMs = todayStart.getTime();
       const sevenDaysMs = now - 7 * 86400 * 1000;
       const thirtyDaysMs = now - 30 * 86400 * 1000;
-      const sixtyDaysMs = now - 60 * 86400 * 1000;
 
-      const modelStats: Record<string, any> = {};
-      const dailyMap: Record<string, any> = {};
-      const timeframes = {
-        today: { id: "today" as const, labelKey: "settings.usageToday", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, turnCount: 0 },
-        sevenDays: { id: "sevenDays" as const, labelKey: "settings.usage7Days", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, turnCount: 0 },
-        thirtyDays: { id: "thirtyDays" as const, labelKey: "settings.usage1Month", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, turnCount: 0 },
-        sixtyDays: { id: "sixtyDays" as const, labelKey: "settings.usage2Months", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, turnCount: 0 },
-        allTime: { id: "allTime" as const, labelKey: "settings.usageAllTime", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, turnCount: 0 },
+      type Acc = {
+        inputTokens: number;
+        cacheReadTokens: number;
+        cacheWriteTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+        costUsd: number;
+        turnCount: number;
+        modelStats: Record<string, any>;
       };
 
-      function addUsageItem(target: any, u: any, cost: number) {
-        target.inputTokens += u.inputTokens || 0;
-        target.outputTokens += u.outputTokens || 0;
-        target.cacheReadTokens += u.cacheReadTokens || 0;
-        target.cacheWriteTokens += u.cacheWriteTokens || 0;
-        target.totalTokens += u.totalTokens || (u.inputTokens || 0) + (u.outputTokens || 0);
-        target.costUsd += cost;
-        target.turnCount += 1;
+      function createAcc(): Acc {
+        return {
+          inputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          costUsd: 0,
+          turnCount: 0,
+          modelStats: {},
+        };
+      }
+
+      const accMap: Record<string, Acc> = {
+        today: createAcc(),
+        sevenDays: createAcc(),
+        thirtyDays: createAcc(),
+        allTime: createAcc(),
+      };
+
+      const dailyMap: Record<string, any> = {};
+
+      function addRecord(acc: Acc, modelId: string, u: any, cost: number) {
+        const inp = u.inputTokens || u.input || 0;
+        const out = u.outputTokens || u.output || 0;
+        const cr = u.cacheReadTokens || u.cacheRead || 0;
+        const cw = u.cacheWriteTokens || u.cacheWrite || 0;
+        const tot = u.totalTokens || (inp + out + cr + cw);
+
+        acc.inputTokens += inp;
+        acc.outputTokens += out;
+        acc.cacheReadTokens += cr;
+        acc.cacheWriteTokens += cw;
+        acc.totalTokens += tot;
+        acc.costUsd += cost;
+        acc.turnCount += 1;
+
+        if (!acc.modelStats[modelId]) {
+          acc.modelStats[modelId] = {
+            modelId,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            cacheTokens: 0,
+            totalTokens: 0,
+            costUsd: 0,
+            turnCount: 0,
+            rates: resolveRate(modelId),
+          };
+        }
+        const m = acc.modelStats[modelId];
+        m.inputTokens += inp;
+        m.outputTokens += out;
+        m.cacheReadTokens += cr;
+        m.cacheWriteTokens += cw;
+        m.cacheTokens += (cr + cw);
+        m.totalTokens += tot;
+        m.costUsd += cost;
+        m.turnCount += 1;
+      }
+
+      function processMessageRecord(rec: any) {
+        if (rec.type === "message" && rec.role === "assistant") {
+          const u = rec.meta?.usage || rec.usage;
+          if (!u) return;
+          const modelId = rec.meta?.modelId || rec.modelId || "unknown";
+          const rawCreated = rec.createdAt || rec.created_at;
+          const ts = rawCreated ? new Date(rawCreated).getTime() : now;
+          const dateStr = rawCreated ? rawCreated.slice(0, 10) : new Date(now).toISOString().slice(0, 10);
+          const rates = resolveRate(modelId);
+          const cost = computeCost(u, rates);
+
+          addRecord(accMap.allTime, modelId, u, cost);
+          if (ts >= thirtyDaysMs) addRecord(accMap.thirtyDays, modelId, u, cost);
+          if (ts >= sevenDaysMs) addRecord(accMap.sevenDays, modelId, u, cost);
+          if (ts >= todayStartMs) addRecord(accMap.today, modelId, u, cost);
+
+          const inp = u.inputTokens || u.input || 0;
+          const out = u.outputTokens || u.output || 0;
+          const cr = u.cacheReadTokens || u.cacheRead || 0;
+          const cw = u.cacheWriteTokens || u.cacheWrite || 0;
+          const tot = u.totalTokens || (inp + out + cr + cw);
+
+          if (!dailyMap[dateStr]) {
+            dailyMap[dateStr] = {
+              date: dateStr,
+              timestamp: ts,
+              inputTokens: 0,
+              cacheTokens: 0,
+              outputTokens: 0,
+              totalTokens: 0,
+              turnCount: 0,
+              costUsd: 0,
+            };
+          }
+          dailyMap[dateStr].inputTokens += inp;
+          dailyMap[dateStr].cacheTokens += (cr + cw);
+          dailyMap[dateStr].outputTokens += out;
+          dailyMap[dateStr].totalTokens += tot;
+          dailyMap[dateStr].costUsd += cost;
+          dailyMap[dateStr].turnCount += 1;
+        }
       }
 
       if (existsSync(sessionsDir)) {
@@ -7395,55 +7561,13 @@ function registerIpc() {
           for (const file of files) {
             try {
               const fileContent = readFileSync(join(sessionsDir, file), "utf8");
-              const lines = fileContent.split("\n");
+              const lines = fileContent.split("
+");
               for (const line of lines) {
                 if (!line.trim()) continue;
                 try {
                   const rec = JSON.parse(line);
-                  if (rec.type === "message" && rec.role === "assistant" && rec.meta?.usage) {
-                    const modelId = rec.meta.modelId || "unknown";
-                    const u = rec.meta.usage;
-                    const ts = rec.createdAt ? new Date(rec.createdAt).getTime() : now;
-                    const dateStr = rec.createdAt ? rec.createdAt.slice(0, 10) : new Date(now).toISOString().slice(0, 10);
-                    const rates = resolveRate(modelId);
-                    const cost = computeCost(u, rates);
-
-                    if (!modelStats[modelId]) {
-                      modelStats[modelId] = {
-                        modelId,
-                        inputTokens: 0,
-                        outputTokens: 0,
-                        cacheReadTokens: 0,
-                        cacheWriteTokens: 0,
-                        totalTokens: 0,
-                        costUsd: 0,
-                        turnCount: 0,
-                        rates,
-                      };
-                    }
-                    modelStats[modelId].inputTokens += u.inputTokens || 0;
-                    modelStats[modelId].outputTokens += u.outputTokens || 0;
-                    modelStats[modelId].cacheReadTokens += u.cacheReadTokens || 0;
-                    modelStats[modelId].cacheWriteTokens += u.cacheWriteTokens || 0;
-                    modelStats[modelId].totalTokens += u.totalTokens || (u.inputTokens || 0) + (u.outputTokens || 0);
-                    modelStats[modelId].costUsd += cost;
-                    modelStats[modelId].turnCount += 1;
-
-                    if (!dailyMap[dateStr]) {
-                      dailyMap[dateStr] = { date: dateStr, timestamp: ts, inputTokens: 0, outputTokens: 0, totalTokens: 0, turnCount: 0, costUsd: 0 };
-                    }
-                    dailyMap[dateStr].inputTokens += u.inputTokens || 0;
-                    dailyMap[dateStr].outputTokens += u.outputTokens || 0;
-                    dailyMap[dateStr].totalTokens += u.totalTokens || (u.inputTokens || 0) + (u.outputTokens || 0);
-                    dailyMap[dateStr].costUsd += cost;
-                    dailyMap[dateStr].turnCount += 1;
-
-                    addUsageItem(timeframes.allTime, u, cost);
-                    if (ts >= sixtyDaysMs) addUsageItem(timeframes.sixtyDays, u, cost);
-                    if (ts >= thirtyDaysMs) addUsageItem(timeframes.thirtyDays, u, cost);
-                    if (ts >= sevenDaysMs) addUsageItem(timeframes.sevenDays, u, cost);
-                    if (ts >= todayStartMs) addUsageItem(timeframes.today, u, cost);
-                  }
+                  processMessageRecord(rec);
                 } catch {}
               }
             } catch {}
@@ -7451,7 +7575,36 @@ function registerIpc() {
         } catch {}
       }
 
-      const models = Object.values(modelStats).sort((a: any, b: any) => b.totalTokens - a.totalTokens);
+      function formatTimeframe(id: "today" | "sevenDays" | "thirtyDays" | "allTime", labelKey: string, acc: Acc) {
+        const modelsList = Object.values(acc.modelStats).sort((a: any, b: any) => b.totalTokens - a.totalTokens);
+        const total = acc.totalTokens || 1;
+        modelsList.forEach((m: any) => {
+          m.percent = Math.round((m.totalTokens / total) * 100);
+        });
+
+        return {
+          id,
+          labelKey,
+          inputTokens: acc.inputTokens,
+          cacheReadTokens: acc.cacheReadTokens,
+          cacheWriteTokens: acc.cacheWriteTokens,
+          cacheTokens: acc.cacheReadTokens + acc.cacheWriteTokens,
+          outputTokens: acc.outputTokens,
+          totalTokens: acc.totalTokens,
+          costUsd: acc.costUsd,
+          turnCount: acc.turnCount,
+          models: modelsList,
+        };
+      }
+
+      const timeframes = {
+        today: formatTimeframe("today", "settings.usageToday", accMap.today),
+        sevenDays: formatTimeframe("sevenDays", "settings.usage7Days", accMap.sevenDays),
+        thirtyDays: formatTimeframe("thirtyDays", "settings.usage1Month", accMap.thirtyDays),
+        allTime: formatTimeframe("allTime", "settings.usageAllTime", accMap.allTime),
+      };
+
+      const models = timeframes.allTime.models;
       const daily = Object.values(dailyMap).sort((a: any, b: any) => a.date.localeCompare(b.date));
 
       return {

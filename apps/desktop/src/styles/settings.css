@@ -2147,11 +2147,12 @@
   line-height: var(--leading-normal);
 }
 
+/* Token Usages Page (9router-inspired clean dashboard) */
 .token-usage-page {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 58rem;
+  max-width: 60rem;
   width: 100%;
 }
 
@@ -2160,36 +2161,144 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
-.token-usage-kpis {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.token-usage-kpi {
-  padding: 12px;
+.token-usage-timeframe-selector {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
   border-radius: var(--radius-md);
   background: var(--ds-tile);
   border: 1px solid var(--ds-border-subtle);
-  text-align: left;
+  gap: 2px;
+}
+
+.token-usage-timeframe-btn {
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--ds-text-secondary);
+  border: 0;
+  background: transparent;
   cursor: pointer;
-  transition: border-color var(--motion-duration-fast) var(--motion-ease-out),
-              box-shadow var(--motion-duration-fast) var(--motion-ease-out);
+  transition: all var(--motion-duration-fast) var(--motion-ease-out);
 }
 
-.token-usage-kpi:hover {
-  border-color: var(--ds-border-strong);
+.token-usage-timeframe-btn:hover {
+  color: var(--ds-text-primary);
 }
 
-.token-usage-kpi.active {
-  border-color: var(--ds-accent);
-  box-shadow: 0 0 0 1px var(--ds-accent);
+.token-usage-timeframe-btn.active {
+  background: var(--ds-bg-elevated);
+  color: var(--ds-text-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
 
+/* 9router-style Dashboard Grid: Left 4 Stat Cards, Right Active & Top Models */
+.token-usage-dashboard-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 14px;
+}
+
+@media (max-width: 768px) {
+  .token-usage-dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.token-usage-stat-cards {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.token-usage-card {
+  padding: 16px;
+  border-radius: var(--radius-md);
+  background: var(--ds-tile);
+  border: 1px solid var(--ds-border-subtle);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  position: relative;
+}
+
+.token-usage-card.highlight {
+  background: color-mix(in oklab, var(--ds-accent) 6%, var(--ds-tile));
+  border-color: color-mix(in oklab, var(--ds-accent) 30%, transparent);
+}
+
+.token-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.token-dot.cache {
+  background-color: #38bdf8;
+}
+
+.token-dot.output {
+  background-color: #34d399;
+}
+
+.token-usage-models-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.token-usage-active-model-box {
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--ds-tile);
+  border: 1px solid var(--ds-border-subtle);
+}
+
+.token-badge-active {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.25);
+}
+
+.token-usage-top-models-box {
+  padding: 14px;
+  border-radius: var(--radius-md);
+  background: var(--ds-tile);
+  border: 1px solid var(--ds-border-subtle);
+  flex: 1;
+}
+
+.token-usage-model-rank-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.token-progress-bar-bg {
+  height: 4px;
+  width: 100%;
+  border-radius: 2px;
+  background: var(--ds-border-subtle);
+  overflow: hidden;
+}
+
+.token-progress-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--ds-accent);
+}
+
+/* Heatmap Card (Contribution Graph) */
 .token-usage-heatmap-card {
-  padding: 20px;
+  padding: 18px;
   border-radius: var(--radius-md);
   background: var(--ds-bg-primary);
   border: 1px solid var(--ds-border-subtle);
@@ -2201,7 +2310,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
 .token-usage-legend {
@@ -2257,13 +2366,14 @@
   display: flex;
   flex-wrap: wrap;
   gap: 14px;
-  margin-top: 16px;
+  margin-top: 14px;
   padding-top: 12px;
   border-top: 1px solid var(--ds-border-subtle);
 }
 
+/* Tables */
 .token-usage-card-block {
-  margin-top: 8px;
+  margin-top: 4px;
 }
 
 .token-usage-card-heading {
