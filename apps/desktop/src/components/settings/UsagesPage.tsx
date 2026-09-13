@@ -24,12 +24,20 @@ function mondayIndex(dateStr: string): number {
 }
 
 export function UsagesPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [summary, setSummary] = useState<ModelUsageSummaryResult | null>(null);
   const [historyItems, setHistoryItems] = useState<TokenUsageHistoryItem[]>([]);
-  const [selectedCell, setSelectedCell] = useState<{ date: string; total: number; input: number; output: number; cost?: number; turns?: number } | null>(null);
+  const [activeTimeframe, setActiveTimeframe] = useState<string>("allTime");
+  const [selectedCell, setSelectedCell] = useState<{
+    date: string;
+    total: number;
+    input: number;
+    output: number;
+    cost?: number;
+    turns?: number;
+  } | null>(null);
 
   const loadData = async () => {
     setLoading(true);
@@ -74,29 +82,64 @@ export function UsagesPage() {
     ];
   }, [summary]);
 
-  const dailyCells = useMemo(() => {
-    if (historyItems.length > 0) {
-      const pad = mondayIndex(historyItems[0].date);
-      return [...Array<TokenUsageHistoryItem | null>(pad).fill(null), ...historyItems];
-    }
-    if (summary?.daily?.length) {
-      const pad = mondayIndex(summary.daily[0].date);
-      return [...Array<any | null>(pad).fill(null), ...summary.daily];
-    }
-    return null;
-  }, [historyItems, summary]);
+  // Build 53 columns x 7 rows for SVG
+  const rawItems = historyItems.length > 0 ? historyItems : (summary?.daily ?? []);
 
-  const maxTokens = useMemo(() => {
-    if (historyItems.length > 0) {
-      return Math.max(...historyItems.map((i) => i.totalTokens), 1);
+  const { weeks, monthLabels, maxTokens } = useMemo(() => {
+    if (!rawItems.length) {
+      return { weeks: [], monthLabels: [], maxTokens: 1 };
     }
-    if (summary?.daily?.length) {
-      return Math.max(...summary.daily.map((i) => i.totalTokens), 1);
+
+    const pad = mondayIndex(rawItems[0].date);
+    const padded: Array<any | null> = [...Array(pad).fill(null), ...rawItems];
+
+    const wks: Array<Array<any | null>> = [];
+    for (let i = 0; i < padded.length; i += 7) {
+      wks.push(padded.slice(i, i + 7));
     }
-    return 1;
-  }, [historyItems, summary]);
+
+    const max = Math.max(...rawItems.map((i: any) => i.totalTokens), 1);
+
+    const labels: Array<{ col: number; name: string; x: number }> = [];
+    let lastM = -1;
+    wks.forEach((w, col) => {
+      const day = w.find((d) => d !== null);
+      if (day) {
+        const [y, m] = day.date.split("-").map(Number);
+        if (m !== lastM) {
+          const d = new Date(y, m - 1, 1);
+          let name = "";
+          try {
+            name = d.toLocaleDateString(i18n.language, { month: "short" });
+          } catch {
+            name = d.toLocaleDateString("en-US", { month: "short" });
+          }
+          labels.push({ col, name, x: 28 + col * 13 });
+          lastM = m;
+        }
+      }
+    });
+
+    return { weeks: wks, monthLabels: labels, maxTokens: max };
+  }, [rawItems, i18n.language]);
+
+  // Calculate cutoff for active timeframe filter
+  const timeframeCutoffMs = useMemo(() => {
+    const now = Date.now();
+    if (activeTimeframe === "today") {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      return d.getTime();
+    }
+    if (activeTimeframe === "sevenDays") return now - 7 * 86400 * 1000;
+    if (activeTimeframe === "thirtyDays") return now - 30 * 86400 * 1000;
+    if (activeTimeframe === "sixtyDays") return now - 60 * 86400 * 1000;
+    return 0; // allTime
+  }, [activeTimeframe]);
 
   const models = summary?.models ?? [];
+  const svgWidth = Math.max(28 + weeks.length * 13 + 6, 725);
+  const svgHeight = 112;
 
   return (
     <div className="token-usage-page">
@@ -114,20 +157,29 @@ export function UsagesPage() {
       </div>
 
       {/* 5 Timeframe KPI Cards */}
-      <div className="token-usage-kpis">
-        {timeframeList.map((tf) => (
-          <div key={tf.id} className="token-usage-kpi">
-            <div className="text-xs font-medium uppercase tracking-wide text-text-muted">
-              {t(tf.labelKey)}
-            </div>
-            <div className="mt-1 text-lg font-semibold text-text-primary">
-              {tf.totalTokens.toLocaleString()} <span className="text-xs font-normal text-text-muted">tokens</span>
-            </div>
-            <div className="mt-1 text-sm font-medium text-ds-accent">
-              ${tf.costUsd.toFixed(4)} <span className="text-xs text-text-muted">USD</span>
-            </div>
-          </div>
-        ))}
+      <div className="token-usage-kpis" role="radiogroup" aria-label={t("settings.usageTimeframes")}>
+        {timeframeList.map((tf) => {
+          const isActive = activeTimeframe === tf.id;
+          return (
+            <button
+              key={tf.id}
+              type="button"
+              className={`token-usage-kpi ${isActive ? "active" : ""}`}
+              onClick={() => setActiveTimeframe(tf.id)}
+              aria-pressed={isActive}
+            >
+              <div className="text-xs font-medium uppercase tracking-wide text-text-muted">
+                {t(tf.labelKey)}
+              </div>
+              <div className="mt-1 text-lg font-semibold text-text-primary">
+                {tf.totalTokens.toLocaleString()} <span className="text-xs font-normal text-text-muted">tokens</span>
+              </div>
+              <div className="mt-1 text-sm font-medium text-ds-accent">
+                ${tf.costUsd.toFixed(4)} <span className="text-xs text-text-muted">USD</span>
+              </div>
+            </button>
+          );
+        })}
       </div>
 
       {/* Contribution Graph Heatmap Card */}
@@ -150,50 +202,87 @@ export function UsagesPage() {
 
         {error ? (
           <div className="py-10 text-center text-xs text-text-muted">{t("settings.usageLoadError")}</div>
-        ) : loading && !dailyCells ? (
+        ) : loading && !weeks.length ? (
           <div className="py-10 text-center text-xs text-text-muted">{t("settings.usageRefresh")}</div>
-        ) : !dailyCells || dailyCells.every((item) => !item || item.totalTokens === 0) ? (
+        ) : !rawItems.length || rawItems.every((item: any) => item.totalTokens === 0) ? (
           <div className="py-10 text-center text-xs text-text-muted">{t("settings.usageEmpty")}</div>
         ) : (
           <div className="token-usage-heatmap-layout">
-            <div className="token-usage-weekdays" aria-hidden="true">
-              <span>{t("settings.usageMon")}</span>
-              <span />
-              <span>{t("settings.usageWed")}</span>
-              <span />
-              <span>{t("settings.usageFri")}</span>
-              <span />
-              <span />
-            </div>
-            <div className="token-usage-heatmap" role="grid">
-              {dailyCells.map((item, index) =>
-                item ? (
-                  <button
-                    key={item.date}
-                    type="button"
-                    className={`token-usage-cell${selectedCell?.date === item.date ? " selected" : ""}`}
-                    style={{ backgroundColor: cellFill(item.totalTokens, maxTokens) }}
-                    aria-label={t("settings.usageCell", {
-                      date: item.date,
-                      total: item.totalTokens.toLocaleString(),
+            <svg
+              viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+              className="token-usage-heatmap-svg"
+              role="grid"
+              aria-label={t("settings.usageActivity")}
+            >
+              {/* Month Labels along top */}
+              {monthLabels.map((m) => (
+                <text
+                  key={`${m.col}-${m.name}`}
+                  x={m.x}
+                  y="10"
+                  className="token-usage-svg-label"
+                >
+                  {m.name}
+                </text>
+              ))}
+
+              {/* Weekday Labels along left */}
+              <text x="0" y="27" className="token-usage-svg-label">{t("settings.usageMon")}</text>
+              <text x="0" y="53" className="token-usage-svg-label">{t("settings.usageWed")}</text>
+              <text x="0" y="79" className="token-usage-svg-label">{t("settings.usageFri")}</text>
+
+              {/* Contribution Grid */}
+              {weeks.map((week, colIdx) => {
+                const colX = 28 + colIdx * 13;
+                return (
+                  <g key={`col-${colIdx}`}>
+                    {week.map((item, rowIdx) => {
+                      if (!item) return null;
+                      const cellY = 18 + rowIdx * 13;
+                      const isSelected = selectedCell?.date === item.date;
+                      const inActiveWindow =
+                        timeframeCutoffMs === 0 ||
+                        (item.timestamp ? item.timestamp >= timeframeCutoffMs : new Date(item.date).getTime() >= timeframeCutoffMs);
+
+                      return (
+                        <rect
+                          key={item.date}
+                          x={colX}
+                          y={cellY}
+                          width={10}
+                          height={10}
+                          rx={2}
+                          ry={2}
+                          className={`token-usage-svg-cell ${isSelected ? "selected" : ""}`}
+                          style={{
+                            fill: cellFill(item.totalTokens, maxTokens),
+                            opacity: inActiveWindow ? 1 : 0.25,
+                          }}
+                          aria-pressed={isSelected}
+                          onClick={() =>
+                            setSelectedCell({
+                              date: item.date,
+                              total: item.totalTokens,
+                              input: item.inputTokens,
+                              output: item.outputTokens,
+                              cost: item.costUsd,
+                              turns: item.turnCount,
+                            })
+                          }
+                        >
+                          <title>
+                            {t("settings.usageCell", {
+                              date: item.date,
+                              total: item.totalTokens.toLocaleString(),
+                            })}
+                          </title>
+                        </rect>
+                      );
                     })}
-                    aria-pressed={selectedCell?.date === item.date}
-                    onClick={() =>
-                      setSelectedCell({
-                        date: item.date,
-                        total: item.totalTokens,
-                        input: item.inputTokens,
-                        output: item.outputTokens,
-                        cost: item.costUsd,
-                        turns: item.turnCount,
-                      })
-                    }
-                  />
-                ) : (
-                  <span key={`pad-${index}`} className="token-usage-cell token-usage-cell-empty" />
-                )
-              )}
-            </div>
+                  </g>
+                );
+              })}
+            </svg>
           </div>
         )}
 
@@ -239,7 +328,10 @@ export function UsagesPage() {
             </thead>
             <tbody>
               {timeframeList.map((tf) => (
-                <tr key={tf.id}>
+                <tr
+                  key={tf.id}
+                  className={activeTimeframe === tf.id ? "bg-ds-tile/40 font-medium" : ""}
+                >
                   <td className="font-medium">{t(tf.labelKey)}</td>
                   <td className="text-right font-mono">{tf.inputTokens.toLocaleString()}</td>
                   <td className="text-right font-mono">{tf.outputTokens.toLocaleString()}</td>

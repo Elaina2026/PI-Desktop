@@ -2151,7 +2151,8 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 54rem;
+  max-width: 58rem;
+  width: 100%;
 }
 
 .token-usage-toolbar {
@@ -2172,6 +2173,19 @@
   border-radius: var(--radius-md);
   background: var(--ds-tile);
   border: 1px solid var(--ds-border-subtle);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--motion-duration-fast) var(--motion-ease-out),
+              box-shadow var(--motion-duration-fast) var(--motion-ease-out);
+}
+
+.token-usage-kpi:hover {
+  border-color: var(--ds-border-strong);
+}
+
+.token-usage-kpi.active {
+  border-color: var(--ds-accent);
+  box-shadow: 0 0 0 1px var(--ds-accent);
 }
 
 .token-usage-heatmap-card {
@@ -2179,6 +2193,7 @@
   border-radius: var(--radius-md);
   background: var(--ds-bg-primary);
   border: 1px solid var(--ds-border-subtle);
+  overflow: hidden;
 }
 
 .token-usage-heatmap-header {
@@ -2203,48 +2218,39 @@
 }
 
 .token-usage-heatmap-layout {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 8px;
-  align-items: start;
-  overflow-x: auto;
-  padding-bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  overflow: hidden;
 }
 
-.token-usage-weekdays {
-  display: grid;
-  grid-template-rows: repeat(7, 10px);
-  gap: 3px;
-  font-size: var(--text-3xs);
-  color: var(--ds-text-muted);
-  line-height: var(--leading-none);
+.token-usage-heatmap-svg {
+  width: 100%;
+  height: auto;
+  display: block;
 }
 
-.token-usage-heatmap {
-  display: grid;
-  grid-template-rows: repeat(7, 10px);
-  grid-auto-flow: column;
-  grid-auto-columns: 10px;
-  gap: 3px;
+.token-usage-svg-label {
+  font-size: 9px;
+  fill: var(--ds-text-muted);
+  font-family: var(--font-sans);
+  user-select: none;
 }
 
-.token-usage-cell {
-  width: 10px;
-  height: 10px;
-  border: 0;
-  padding: 0;
-  border-radius: var(--radius-3xs);
-  background: var(--ds-tile);
-}
-
-.token-usage-cell:not(.token-usage-cell-empty) {
+.token-usage-svg-cell {
   cursor: pointer;
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-out),
+              stroke var(--motion-duration-fast) var(--motion-ease-out);
 }
 
-.token-usage-cell.selected,
-.token-usage-cell:focus-visible {
-  outline: 2px solid var(--ds-accent);
-  outline-offset: 1px;
+.token-usage-svg-cell:hover {
+  stroke: var(--ds-text-primary);
+  stroke-width: 1.5;
+}
+
+.token-usage-svg-cell.selected {
+  stroke: var(--ds-accent);
+  stroke-width: 2;
 }
 
 .token-usage-detail {
