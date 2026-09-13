@@ -6,8 +6,10 @@ import {
   IconNewSession,
   IconSearch,
   IconSparkles,
+  IconListChecks,
 } from "./icons";
 import { TooltipButton } from "./ui";
+import { todoPlanWorkPanelTab } from "../lib/work-panel-tabs";
 import {
   formatTokenCount,
   resolveModelRate,
@@ -387,6 +389,18 @@ export function ConversationTopbar({
       <div className="ct-right">
         <SessionTokenBar messages={messages} modelId={currentModelId} />
         <div className="ct-actions">
+          <TooltipButton
+            type="button"
+            className="ct-icon-btn"
+            tooltip="Todo & Plan"
+            ariaLabel="Todo & Plan"
+            onClick={() => {
+              const state = useAppStore.getState();
+              state.openWorkPanelTab(todoPlanWorkPanelTab());
+            }}
+          >
+            <IconListChecks size={15} />
+          </TooltipButton>
           <TooltipButton
             type="button"
             className="ct-icon-btn"

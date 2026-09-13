@@ -261,14 +261,15 @@ export function getCandidateAntigravityAccounts(
         try {
           const d = JSON.parse(r.data);
           if (typeof d.accessToken === "string" && d.accessToken.trim()) {
-            const pid = typeof d.projectId === "string" && d.projectId.trim() ? d.projectId.trim() : "";
-            if (pid && pid !== "aicode-consumers") {
-              candidates.push({
-                email,
-                accessToken: d.accessToken.trim(),
-                projectId: pid,
-              });
+            let pid = typeof d.projectId === "string" && d.projectId.trim() ? d.projectId.trim() : "";
+            if (!pid || pid === "aicode-consumers") {
+              pid = lookupAntigravityProjectId(email) || generateAntigravityProjectId();
             }
+            candidates.push({
+              email,
+              accessToken: d.accessToken.trim(),
+              projectId: pid,
+            });
           }
         } catch {}
       }
@@ -473,6 +474,17 @@ export const stream = (
         }
       }
 
+      // Auto-resolve activeEmail if not present in headers
+      if (!activeEmail) {
+        const pool = getCandidateAntigravityAccounts(wireModel);
+        const match = pool.find((c) => c.accessToken === apiKey);
+        if (match) {
+          activeEmail = match.email;
+        } else if (pool.length > 0) {
+          activeEmail = pool[0].email;
+        }
+      }
+
       let response = await fetchFn(url, {
         method: "POST",
         headers: activeReqHeaders,
@@ -480,20 +492,34 @@ export const stream = (
         signal: options?.signal,
       });
 
-      // If rate-limited (429) or entity missing (404), mark lock and attempt failover to remaining accounts in the pool
-      if (!response.ok && (response.status === 429 || response.status === 404)) {
+      // Check if error is quota exhausted, rate limit, permission denied, or overloaded (429, 404, 403, 503, 400)
+      let shouldFailover = false;
+      let errBodyText = "";
+      if (!response.ok) {
+        try {
+          errBodyText = await response.clone().text();
+        } catch {}
+        shouldFailover =
+          response.status === 429 ||
+          response.status === 404 ||
+          response.status === 403 ||
+          response.status === 503 ||
+          /quota|exhausted|rate.?limit|too many requests|resource_exhausted|permission denied|overloaded/i.test(errBodyText);
+      }
+
+      if (!response.ok && shouldFailover) {
         let errText = "";
         try {
           errText = await response.clone().text();
         } catch {}
 
-        let resetSec = parseResetDurationFromErrorMessage(errText);
+        let resetSec = parseResetDurationFromErrorMessage(errBodyText);
         if (!resetSec) {
-          resetSec = response.status === 429 ? 300 : 60; // 5 min for 429, 1 min for 404
+          resetSec = response.status === 429 ? 300 : 120;
         }
 
         if (activeEmail) {
-          writeAntigravityLock(activeEmail, wireModel, resetSec, response.status === 429 ? "quota_429" : "error_404");
+          writeAntigravityLock(activeEmail, wireModel, resetSec, "quota_failover");
         }
 
         const remainingCandidates = getCandidateAntigravityAccounts(wireModel, activeEmail);
@@ -516,12 +542,14 @@ export const stream = (
           if (altResponse.ok) {
             response = altResponse;
             activeEmail = candidate.email;
+            activeReqHeaders = failoverHeaders;
+            activePayload = failoverPayload;
             break;
-          } else if (altResponse.status === 429 || altResponse.status === 404) {
-            let altErrText = "";
-            try { altErrText = await altResponse.clone().text(); } catch {}
-            const altReset = parseResetDurationFromErrorMessage(altErrText) || (altResponse.status === 429 ? 300 : 60);
-            writeAntigravityLock(candidate.email, wireModel, altReset, "quota_429");
+          } else {
+            let altErr = "";
+            try { altErr = await altResponse.clone().text(); } catch {}
+            const altReset = parseResetDurationFromErrorMessage(altErr) || (altResponse.status === 429 ? 300 : 120);
+            writeAntigravityLock(candidate.email, wireModel, altReset, "quota_failover");
           }
         }
       }
@@ -569,7 +597,11 @@ export const stream = (
         for (const chunk of chunks) {
           if (!chunk) continue;
           if (chunk.error) {
-            throw new Error(chunk.error.message || JSON.stringify(chunk.error));
+            const msg = chunk.error.message || JSON.stringify(chunk.error);
+            if (activeEmail && /quota|exhausted|rate.?limit|resource_exhausted/i.test(msg)) {
+              writeAntigravityLock(activeEmail, wireModel, 300, "quota_sse");
+            }
+            throw new Error(msg);
           }
 
           output.responseId ||= chunk.responseId;

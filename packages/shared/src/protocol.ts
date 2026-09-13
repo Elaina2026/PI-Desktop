@@ -215,6 +215,8 @@ export const IPC = {
     fsReadImageDataUrl: "pi-desktop/fs/readImageDataUrl",
     statsGetTokenUsageHistory: "pi-desktop/stats/getTokenUsageHistory",
     statsGetModelUsageSummary: "pi-desktop/stats/getModelUsageSummary",
+    todoList: "pi-desktop/todo/list",
+    todoSave: "pi-desktop/todo/save",
     fsReveal: "pi-desktop/fs/reveal",
     fsOpen: "pi-desktop/fs/open",
     fsIndex: "pi-desktop/fs/index",

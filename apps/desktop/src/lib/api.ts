@@ -851,6 +851,12 @@ export const api = {
     invoke<{ behavior: CloseBehavior }>(IPC.invoke.closeBehaviorSet, {
       behavior,
     }),
+  listTodos: () =>
+    invoke<{ ok: boolean; todos: import("@pi-desktop/shared").TodoItem[]; todosUpdatedAt: number }>(
+      IPC.invoke.todoList,
+    ),
+  saveTodos: (todos: import("@pi-desktop/shared").TodoItem[]) =>
+    invoke<{ ok: boolean; count: number }>(IPC.invoke.todoSave, { todos }),
   getModelUsageSummary: () =>
     invoke<import("@pi-desktop/shared").ModelUsageSummaryResult>(
       IPC.invoke.statsGetModelUsageSummary,

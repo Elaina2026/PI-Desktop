@@ -2076,3 +2076,14 @@ export type ModelUsageSummaryResult = {
     costUsd: number;
   }>;
 };
+
+export type TodoItem = {
+  id: string;
+  text: string;
+  done: boolean;
+  q: number; // 1: Urgent & Important, 2: Important, 3: Urgent, 4: Normal
+  createdAt: number;
+  doneAt?: number;
+  due?: string | number | null;
+  reminded?: boolean;
+};

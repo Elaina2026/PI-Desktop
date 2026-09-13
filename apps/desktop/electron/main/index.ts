@@ -7317,6 +7317,34 @@ function registerIpc() {
     },
   );
 
+  handle(IPC.invoke.todoList, async () => {
+    const p = join(dataDir, "plugins", "data", "pi.todo", "settings.json");
+    if (existsSync(p)) {
+      try {
+        const data = JSON.parse(readFileSync(p, "utf8"));
+        return {
+          ok: true,
+          todos: Array.isArray(data.todos) ? data.todos : [],
+          todosUpdatedAt: data.todosUpdatedAt ?? Date.now(),
+        };
+      } catch {}
+    }
+    return { ok: true, todos: [], todosUpdatedAt: Date.now() };
+  });
+
+  handle(IPC.invoke.todoSave, async (input: { todos?: unknown[] } = {}) => {
+    const p = join(dataDir, "plugins", "data", "pi.todo", "settings.json");
+    const dir = dirname(p);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const payload = {
+      todos: Array.isArray(input?.todos) ? input.todos : [],
+      todosUpdatedAt: Date.now(),
+    };
+    writeFileSync(p, JSON.stringify(payload, null, 2), "utf8");
+    sendToRenderer(IPC.event.sessionsChanged, { reason: "todo" });
+    return { ok: true, count: payload.todos.length };
+  });
+
   handle(
     IPC.invoke.statsGetModelUsageSummary,
     async () => {

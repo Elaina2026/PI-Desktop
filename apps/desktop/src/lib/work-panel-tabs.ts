@@ -1,7 +1,8 @@
 export type WorkPanelTabKind =
   | "review"
   | "file"
-  | "plugin";
+  | "plugin"
+  | "todo-plan";
 
 export type WorkPanelTab = {
   id: string;
@@ -234,5 +235,12 @@ export function closeWorkPanelTabState(
   return {
     tabs,
     activeTabId: tabs[Math.min(index, tabs.length - 1)]?.id ?? null,
+  };
+}
+
+export function todoPlanWorkPanelTab(): WorkPanelTab {
+  return {
+    id: "todo-plan",
+    kind: "todo-plan",
   };
 }

@@ -74,12 +74,9 @@ export function UsagesPage() {
     void loadData();
 
     // Auto-refresh when sessions / messages update
-    if (window.piDesktop?.on) {
-      const cleanup = window.piDesktop.on("pi-desktop/event/sessionsChanged", () => {
-        void loadData();
-      });
-      return cleanup;
-    }
+    return api.onSessionsChanged(() => {
+      void loadData();
+    });
   }, []);
 
   const timeframesMap = summary?.timeframes;
