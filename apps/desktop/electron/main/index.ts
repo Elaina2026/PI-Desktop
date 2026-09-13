@@ -7561,8 +7561,7 @@ function registerIpc() {
           for (const file of files) {
             try {
               const fileContent = readFileSync(join(sessionsDir, file), "utf8");
-              const lines = fileContent.split("
-");
+              const lines = fileContent.split(/\r?\n/);
               for (const line of lines) {
                 if (!line.trim()) continue;
                 try {
