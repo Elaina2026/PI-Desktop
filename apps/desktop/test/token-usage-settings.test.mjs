@@ -14,21 +14,18 @@ const settingsPage = await readFile(
 );
 const api = await readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8");
 
-test("settings has no usage destination; host token history stays available", () => {
-  assert.doesNotMatch(search, /id: "usage"/);
-  assert.doesNotMatch(search, /settings\.nav\.usage/);
-  assert.doesNotMatch(settingsPage, /TokenUsagePage/);
-  assert.doesNotMatch(settingsPage, /tab === "usage"/);
+test("settings has usages destination and API methods", () => {
+  assert.match(search, /id: "usages"/);
+  assert.match(search, /settings\.nav\.usages/);
+  assert.match(settingsPage, /UsagesPage/);
+  assert.match(settingsPage, /tab === "usages"|settingsTab === "usages"/);
   assert.match(api, /getTokenUsageHistory/);
+  assert.match(api, /getModelUsageSummary/);
 });
 
-test("settings usage page component is gone", async () => {
-  await assert.rejects(
-    () =>
-      access(
-        new URL("../src/components/settings/TokenUsagePage.tsx", import.meta.url),
-        constants.F_OK,
-      ),
-    { code: "ENOENT" },
+test("settings UsagesPage component exists", async () => {
+  await access(
+    new URL("../src/components/settings/UsagesPage.tsx", import.meta.url),
+    constants.F_OK,
   );
 });

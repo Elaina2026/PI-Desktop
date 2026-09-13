@@ -851,6 +851,10 @@ export const api = {
     invoke<{ behavior: CloseBehavior }>(IPC.invoke.closeBehaviorSet, {
       behavior,
     }),
+  getModelUsageSummary: () =>
+    invoke<import("@pi-desktop/shared").ModelUsageSummaryResult>(
+      IPC.invoke.statsGetModelUsageSummary,
+    ),
   getTokenUsageHistory: (query?: { startDate?: number; endDate?: number; bucket?: "day" | "week" | "month" }) =>
     invoke<import("@pi-desktop/shared").TokenUsageHistoryResult>(
       IPC.invoke.statsGetTokenUsageHistory,

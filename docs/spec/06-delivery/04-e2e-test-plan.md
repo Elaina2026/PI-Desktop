@@ -10028,3 +10028,12 @@ sample extensions under `apps/desktop/test/fixtures/pi-extensions/`.
 - **Milestone**: M5
 - **Status**: Unit-covered (`context-usage.test.mjs`,
   `settings-general.test.mjs`); full scenario Draft
+
+### E2E-187: Settings Usages Dashboard and Model Pricing
+- **Surface**: Settings → Usages
+- **Assertions**:
+  1. Usages tab is reachable in Settings navigation under Preferences.
+  2. 5 timeframe KPI cards (Today, 7 Days, 1 Month, 2 Months, All Time) display token counts and USD costs.
+  3. GitHub-style contribution graph renders with 7 weekday rows and interactive cell selection.
+  4. Per-model table lists model IDs, input/output tokens, rates, and USD costs.
+  5. Timeframe summary table shows totals and USD pricing.

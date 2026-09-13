@@ -2028,3 +2028,47 @@ export type TokenUsageHistoryResult = {
     turnCount: number;
   };
 };
+
+export type ModelUsageSummaryItem = {
+  modelId: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  turnCount: number;
+  costUsd: number;
+  rates: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
+};
+
+export type TimeframeUsageItem = {
+  id: "today" | "sevenDays" | "thirtyDays" | "sixtyDays" | "allTime";
+  labelKey: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  turnCount: number;
+  costUsd: number;
+};
+
+export type ModelUsageSummaryResult = {
+  timeframes: {
+    today: TimeframeUsageItem;
+    sevenDays: TimeframeUsageItem;
+    thirtyDays: TimeframeUsageItem;
+    sixtyDays: TimeframeUsageItem;
+    allTime: TimeframeUsageItem;
+  };
+  models: ModelUsageSummaryItem[];
+  daily: Array<{
+    date: string;
+    timestamp: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    turnCount: number;
+    costUsd: number;
+  }>;
+};

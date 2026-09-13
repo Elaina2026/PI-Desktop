@@ -32,6 +32,7 @@ import {
 } from "../lib/settings-search";
 import { resolveContextUsageDisplay } from "../lib/context-usage";
 import {
+  IconActivity,
   IconArchive,
   IconBookOpen,
   IconBot,
@@ -46,6 +47,7 @@ import {
   IconSparkles,
 } from "../components/icons";
 import { ModelConfigPage } from "../components/settings/ModelConfigPage";
+import { UsagesPage } from "../components/settings/UsagesPage";
 import { KeyboardShortcutsSection } from "../components/settings/KeyboardShortcutsSection";
 import { FontFamilyRow } from "../components/settings/FontFamilyRow";
 import { FontSizeRow } from "../components/settings/FontSizeRow";
@@ -1280,6 +1282,7 @@ export function SettingsPage() {
       general: <IconSliders size={14} />,
       ai: <IconSparkles size={14} />,
       shortcuts: <IconKeyboard size={14} />,
+      usages: <IconActivity size={14} />,
       instructions: <IconFileText size={14} />,
       agent: <IconBot size={14} />,
       skills: <IconBookOpen size={14} />,
@@ -1597,6 +1600,8 @@ export function SettingsPage() {
           {tab === "import" && <ImportSection />}
 
           {tab === "projects" && <ProjectsPage />}
+
+          {tab === "usages" && <UsagesPage />}
 
           {tab === "about" && (
             <div className="settings-stack">

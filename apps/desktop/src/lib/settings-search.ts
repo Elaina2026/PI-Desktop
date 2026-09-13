@@ -9,6 +9,7 @@ export type SettingsTabId =
   | "general"
   | "ai"
   | "shortcuts"
+  | "usages"
   | "instructions"
   | "agent"
   | "skills"
@@ -44,6 +45,22 @@ export type SettingsNavEntry = {
 };
 
 export const SETTINGS_NAV: SettingsNavEntry[] = [
+  {
+    id: "usages",
+    labelKey: "settings.nav.usages",
+    titleKey: "settings.usages",
+    group: "preferences",
+    keywordKeys: [
+      "settings.usages",
+      "settings.usageActivity",
+      "settings.usageTotal",
+      "settings.usageInput",
+      "settings.usageOutput",
+      "settings.usageTimeframes",
+      "settings.usageModels",
+      "settings.usageCostUsd",
+    ],
+  },
   {
     id: "general",
     labelKey: "settings.nav.general",

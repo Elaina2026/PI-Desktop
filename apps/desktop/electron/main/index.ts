@@ -18,6 +18,8 @@ import { homedir } from "node:os";
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
+  readFileSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -7312,6 +7314,151 @@ function registerIpc() {
     async (input: { sessionId: string; snapshotId: string }) => {
       if (!host) throw new Error("host unavailable");
       return host.call("review.rollback", input);
+    },
+  );
+
+  handle(
+    IPC.invoke.statsGetModelUsageSummary,
+    async () => {
+      const MODEL_RATES: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
+        "gemini-3.8-flash": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
+        "ag/gemini-3.8-flash": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
+        "ag/gemini-3.8-flash-high": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
+        "gemini-3.7-flash": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
+        "gemini-3.7-flash-tiered": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
+        "gemini-3.6-flash": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
+        "gemini-3.6-flash-tiered": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
+        "claude-sonnet-4-6": { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 },
+        "ag/claude-sonnet-4-6": { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 },
+        "claude-3-5-sonnet": { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 },
+        "claude-opus-4-6": { input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },
+        "claude-opus-4-6-thinking": { input: 15.00, output: 75.00, cacheRead: 1.50, cacheWrite: 18.75 },
+        "claude-haiku-4-5": { input: 1.00, output: 5.00, cacheRead: 0.10, cacheWrite: 1.25 },
+        "gpt-4o": { input: 2.50, output: 10.00, cacheRead: 1.25, cacheWrite: 0 },
+        "gpt-4o-mini": { input: 0.15, output: 0.60, cacheRead: 0.075, cacheWrite: 0 },
+        "gpt-5.6-sol": { input: 4.00, output: 20.00, cacheRead: 0.40, cacheWrite: 5.00 },
+        "deepseek-ai/deepseek-v4-flash-0731": { input: 0.14, output: 0.28, cacheRead: 0.014, cacheWrite: 0 },
+        "glm-5.3": { input: 1.40, output: 4.40, cacheRead: 0.14, cacheWrite: 0 },
+      };
+
+      function resolveRate(modelId: string) {
+        if (MODEL_RATES[modelId]) return MODEL_RATES[modelId];
+        const lower = (modelId || "").toLowerCase();
+        for (const [k, v] of Object.entries(MODEL_RATES)) {
+          if (lower.includes(k.toLowerCase()) || k.toLowerCase().includes(lower)) return v;
+        }
+        return { input: 1.00, output: 4.00, cacheRead: 0.1, cacheWrite: 0 };
+      }
+
+      function computeCost(usage: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }, rates: { input: number; output: number; cacheRead: number; cacheWrite: number }) {
+        const inp = ((usage.inputTokens || 0) * (rates.input || 0)) / 1e6;
+        const out = ((usage.outputTokens || 0) * (rates.output || 0)) / 1e6;
+        const cr = ((usage.cacheReadTokens || 0) * (rates.cacheRead || 0)) / 1e6;
+        const cw = ((usage.cacheWriteTokens || 0) * (rates.cacheWrite || 0)) / 1e6;
+        return inp + out + cr + cw;
+      }
+
+      const sessionsDir = join(dataDir, "sessions");
+      const now = Date.now();
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayStartMs = todayStart.getTime();
+      const sevenDaysMs = now - 7 * 86400 * 1000;
+      const thirtyDaysMs = now - 30 * 86400 * 1000;
+      const sixtyDaysMs = now - 60 * 86400 * 1000;
+
+      const modelStats: Record<string, any> = {};
+      const dailyMap: Record<string, any> = {};
+      const timeframes = {
+        today: { id: "today" as const, labelKey: "settings.usageToday", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, turnCount: 0 },
+        sevenDays: { id: "sevenDays" as const, labelKey: "settings.usage7Days", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, turnCount: 0 },
+        thirtyDays: { id: "thirtyDays" as const, labelKey: "settings.usage1Month", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, turnCount: 0 },
+        sixtyDays: { id: "sixtyDays" as const, labelKey: "settings.usage2Months", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, turnCount: 0 },
+        allTime: { id: "allTime" as const, labelKey: "settings.usageAllTime", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0, turnCount: 0 },
+      };
+
+      function addUsageItem(target: any, u: any, cost: number) {
+        target.inputTokens += u.inputTokens || 0;
+        target.outputTokens += u.outputTokens || 0;
+        target.cacheReadTokens += u.cacheReadTokens || 0;
+        target.cacheWriteTokens += u.cacheWriteTokens || 0;
+        target.totalTokens += u.totalTokens || (u.inputTokens || 0) + (u.outputTokens || 0);
+        target.costUsd += cost;
+        target.turnCount += 1;
+      }
+
+      if (existsSync(sessionsDir)) {
+        try {
+          const files = readdirSync(sessionsDir).filter(
+            (f) => f.endsWith(".jsonl") && !f.includes(".revisions.")
+          );
+          for (const file of files) {
+            try {
+              const fileContent = readFileSync(join(sessionsDir, file), "utf8");
+              const lines = fileContent.split("\n");
+              for (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                  const rec = JSON.parse(line);
+                  if (rec.type === "message" && rec.role === "assistant" && rec.meta?.usage) {
+                    const modelId = rec.meta.modelId || "unknown";
+                    const u = rec.meta.usage;
+                    const ts = rec.createdAt ? new Date(rec.createdAt).getTime() : now;
+                    const dateStr = rec.createdAt ? rec.createdAt.slice(0, 10) : new Date(now).toISOString().slice(0, 10);
+                    const rates = resolveRate(modelId);
+                    const cost = computeCost(u, rates);
+
+                    if (!modelStats[modelId]) {
+                      modelStats[modelId] = {
+                        modelId,
+                        inputTokens: 0,
+                        outputTokens: 0,
+                        cacheReadTokens: 0,
+                        cacheWriteTokens: 0,
+                        totalTokens: 0,
+                        costUsd: 0,
+                        turnCount: 0,
+                        rates,
+                      };
+                    }
+                    modelStats[modelId].inputTokens += u.inputTokens || 0;
+                    modelStats[modelId].outputTokens += u.outputTokens || 0;
+                    modelStats[modelId].cacheReadTokens += u.cacheReadTokens || 0;
+                    modelStats[modelId].cacheWriteTokens += u.cacheWriteTokens || 0;
+                    modelStats[modelId].totalTokens += u.totalTokens || (u.inputTokens || 0) + (u.outputTokens || 0);
+                    modelStats[modelId].costUsd += cost;
+                    modelStats[modelId].turnCount += 1;
+
+                    if (!dailyMap[dateStr]) {
+                      dailyMap[dateStr] = { date: dateStr, timestamp: ts, inputTokens: 0, outputTokens: 0, totalTokens: 0, turnCount: 0, costUsd: 0 };
+                    }
+                    dailyMap[dateStr].inputTokens += u.inputTokens || 0;
+                    dailyMap[dateStr].outputTokens += u.outputTokens || 0;
+                    dailyMap[dateStr].totalTokens += u.totalTokens || (u.inputTokens || 0) + (u.outputTokens || 0);
+                    dailyMap[dateStr].costUsd += cost;
+                    dailyMap[dateStr].turnCount += 1;
+
+                    addUsageItem(timeframes.allTime, u, cost);
+                    if (ts >= sixtyDaysMs) addUsageItem(timeframes.sixtyDays, u, cost);
+                    if (ts >= thirtyDaysMs) addUsageItem(timeframes.thirtyDays, u, cost);
+                    if (ts >= sevenDaysMs) addUsageItem(timeframes.sevenDays, u, cost);
+                    if (ts >= todayStartMs) addUsageItem(timeframes.today, u, cost);
+                  }
+                } catch {}
+              }
+            } catch {}
+          }
+        } catch {}
+      }
+
+      const models = Object.values(modelStats).sort((a: any, b: any) => b.totalTokens - a.totalTokens);
+      const daily = Object.values(dailyMap).sort((a: any, b: any) => a.date.localeCompare(b.date));
+
+      return {
+        timeframes,
+        models,
+        daily,
+      };
     },
   );
 
