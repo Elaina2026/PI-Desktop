@@ -15,6 +15,7 @@ import {
   IconArrowUp,
   IconCheck,
   IconChevronDown,
+  IconFileText,
   IconImage,
   IconPlus,
   IconSparkles,
@@ -105,46 +106,84 @@ export function ComposerToolbar({
   abort,
   submit,
 }: ComposerToolbarProps) {
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [modeOpen, setModeOpen] = useState(false);
   const platform = (window.piDesktop?.platform ?? "darwin") as ShortcutPlatform;
   const steeringShortcut = keybindingDisplayParts("Alt+Enter", platform).join("+");
   return (
     <div className="composer-toolbar">
       <div className="composer-left">
-        <div className="composer-plus">
-          <TooltipButton
-            type="button"
-            className="icon-btn"
-            tooltip={t("chat.addFiles")}
-            ariaLabel={t("chat.addFiles")}
-            disabled={controlsBlocked || pasting}
-            onClick={() => {
-              setModeOpen(false);
-              setPermissionOpen(false);
-              void pickAndAttach();
-            }}
-          >
-            <IconPlus size={15} aria-hidden="true" />
-          </TooltipButton>
-        </div>
-        {supportsVision && pickAndAttachPhotos ? (
-          <div className="composer-plus">
-            <TooltipButton
+        <AnchoredMenu
+          className="composer-add-anchor"
+          open={addMenuOpen}
+          onClose={() => setAddMenuOpen(false)}
+          menuClassName="composer-permission-menu composer-add-menu"
+          label={t("chat.addFiles")}
+          role="menu"
+          align="start"
+          side="top"
+          trigger={(ref) => (
+            <div className="composer-plus">
+              <TooltipButton
+                ref={ref}
+                type="button"
+                className={`icon-btn ${addMenuOpen ? "active" : ""}`}
+                tooltip={t("chat.addFiles")}
+                ariaLabel={t("chat.addFiles")}
+                disabled={controlsBlocked || pasting}
+                aria-haspopup="menu"
+                aria-expanded={addMenuOpen}
+                onClick={() => {
+                  modelMenu.setOpen(false);
+                  setModeOpen(false);
+                  setPermissionOpen(false);
+                  setAddMenuOpen((open) => !open);
+                }}
+              >
+                <IconPlus size={15} aria-hidden="true" />
+              </TooltipButton>
+            </div>
+          )}
+        >
+          <div className="composer-menu-root">
+            <button
               type="button"
-              className="icon-btn"
-              tooltip={t("chat.addImages", "Đính kèm hình ảnh")}
-              ariaLabel={t("chat.addImages", "Đính kèm hình ảnh")}
+              role="menuitem"
               disabled={controlsBlocked || pasting}
+              className="composer-plus-item"
               onClick={() => {
-                setModeOpen(false);
-                setPermissionOpen(false);
-                void pickAndAttachPhotos();
+                setAddMenuOpen(false);
+                void pickAndAttach();
               }}
             >
-              <IconImage size={15} aria-hidden="true" />
-            </TooltipButton>
+              <span className="composer-model-thinking-icon">
+                <IconFileText size={14} aria-hidden="true" />
+              </span>
+              <span className="flex-1 text-left">
+                {t("chat.addFilesOption", "Thêm tệp tin")}
+              </span>
+            </button>
+            {supportsVision && pickAndAttachPhotos ? (
+              <button
+                type="button"
+                role="menuitem"
+                disabled={controlsBlocked || pasting}
+                className="composer-plus-item"
+                onClick={() => {
+                  setAddMenuOpen(false);
+                  void pickAndAttachPhotos();
+                }}
+              >
+                <span className="composer-model-thinking-icon">
+                  <IconImage size={14} aria-hidden="true" />
+                </span>
+                <span className="flex-1 text-left">
+                  {t("chat.addMediaOption", "Thêm hình ảnh / Media")}
+                </span>
+              </button>
+            ) : null}
           </div>
-        ) : null}
+        </AnchoredMenu>
         <AnchoredMenu
           className="composer-mode-anchor"
           open={modeOpen}
@@ -169,6 +208,7 @@ export function ComposerToolbar({
               aria-expanded={modeOpen}
               onClick={() => {
                 modelMenu.setOpen(false);
+                setAddMenuOpen(false);
                 setPermissionOpen(false);
                 setModeOpen((open) => !open);
               }}
@@ -178,7 +218,6 @@ export function ComposerToolbar({
                 <span className="composer-mode-chip-label text-sm">
                   {t(MODE_LABEL_KEYS[mode])}
                 </span>
-                <IconChevronDown size={12} />
               </span>
             </TooltipButton>
           )}
@@ -251,6 +290,7 @@ export function ComposerToolbar({
               onClick={() => {
                 modelMenu.setOpen(false);
                 setModeOpen(false);
+                setAddMenuOpen(false);
                 setPermissionOpen((open) => !open);
               }}
             >
@@ -306,7 +346,11 @@ export function ComposerToolbar({
           selectedProviderId={providerId}
           selectedModelId={modelId}
           controlsBlocked={controlsBlocked}
-          onCloseOtherMenus={() => setPermissionOpen(false)}
+          onCloseOtherMenus={() => {
+            setPermissionOpen(false);
+            setModeOpen(false);
+            setAddMenuOpen(false);
+          }}
         />
         <TooltipButton
           type="button"

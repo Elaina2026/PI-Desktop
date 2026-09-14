@@ -46,7 +46,8 @@
 }
 
 .composer-permission-menu,
-.composer-mode-menu {
+.composer-mode-menu,
+.composer-add-menu {
   position: fixed;
   top: 0;
   left: 0;
@@ -90,6 +91,7 @@
 
 .composer-permission-menu.is-open,
 .composer-mode-menu.is-open,
+.composer-add-menu.is-open,
 .composer-model-menu.is-open {
   opacity: 1;
   pointer-events: auto;
