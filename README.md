@@ -2,26 +2,25 @@
 
 <img src="docs/image/readme/logo.png" alt="PI-Desktop" width="108" />
 
-# PI-Desktop
+# PI-Desktop (Enhanced v0.14.8)
 
 ### The desktop workspace for AI coding agents.
 
 **Bring your own model. Open any local project. Let agents work — while you stay in control.**
 
-Local-first · Model-agnostic · Extensible · macOS / Windows / Linux
+Local-first · Model-agnostic · Antigravity OAuth · Live Usages · Todo & Plan · macOS / Windows / Linux
 
 <br />
 
-[![Release](https://img.shields.io/github/v/release/vastsa/PI-Desktop?label=release)](https://github.com/vastsa/PI-Desktop/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/vastsa/PI-Desktop/total?label=downloads)](https://github.com/vastsa/PI-Desktop/releases)
-[![Stars](https://img.shields.io/github/stars/vastsa/PI-Desktop?style=flat&label=stars)](https://github.com/vastsa/PI-Desktop/stargazers)
-[![CI](https://github.com/vastsa/PI-Desktop/actions/workflows/ci.yml/badge.svg)](https://github.com/vastsa/PI-Desktop/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Elaina2026/PI-Desktop?label=release)](https://github.com/Elaina2026/PI-Desktop/releases/latest)
+[![Stars](https://img.shields.io/github/stars/Elaina2026/PI-Desktop?style=flat&label=stars)](https://github.com/Elaina2026/PI-Desktop/stargazers)
 [![License](https://img.shields.io/github/license/vastsa/PI-Desktop)](LICENSE)
 
 <br />
 
-**[Download](https://github.com/vastsa/PI-Desktop/releases/latest)** ·
+**[Download Latest Build](https://github.com/Elaina2026/PI-Desktop/releases/latest)** ·
 [Documentation](https://pi-docs.aiuo.net/) ·
+[Changelog](CHANGELOG.md) ·
 [Screenshots](docs/guide/screenshots.md) ·
 [Build a Plugin](docs/plugin-development.md) ·
 [简体中文](README.zh-CN.md)
@@ -38,11 +37,39 @@ Local-first · Model-agnostic · Extensible · macOS / Windows / Linux
 
 <br /><br />
 
-<a href="https://trendshift.io/repositories/178787?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-178787" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/178787" alt="vastsa/PI-Desktop | Trendshift" width="230" height="51"/></a>
-&nbsp;
-<a href="https://www.producthunt.com/products/pi-desktop?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-pi-desktop" target="_blank" rel="noopener noreferrer"><img alt="PI-Desktop on Product Hunt" width="230" height="50" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1245457&amp;theme=dark&amp;t=1788955688339"/></a>
-
 </div>
+
+---
+
+## ✨ Enhanced Features (Custom Edition)
+
+This fork updates PI-Desktop to upstream **v0.14.8** while extending it with powerful capabilities for professional development:
+
+- **🚀 Antigravity (Google Cloud Code Assist) OAuth & Quota System**:
+  - One-click Google OAuth sign-in for Antigravity models (Gemini 3.8 Flash / Pro, Claude 3.5 Sonnet via Code Assist).
+  - Multi-account connection pool with live 4-group quota monitoring (5-hour rolling & weekly reset countdowns).
+  - Automatic quota exhaustion handling (`0% Đã khóa / Hết hạn mức`) and transparent token refresh on HTTP 401.
+  - Automatic vendor account failover on rate limits (`HTTP 429`) or quota exhaustion without interrupting ongoing turns.
+
+- **📊 9Router-Style Usages Dashboard & Activity Analytics**:
+  - Dedicated **Usages** view with responsive SVG contribution calendar heatmap.
+  - Comprehensive model catalog pricing calculations for prompt, completion, and cache tokens.
+  - Model key prefix normalization (`ag/`, `google/`, `anthropic/`) eliminating duplicate statistics.
+  - Live session token consumption bar directly in the conversation topbar.
+
+- **📝 Native Todo Checklist & Plan Workflow**:
+  - WorkPanel `todo-plan` tab with markdown preview and single-click task synchronization.
+  - Automated checklist extraction from plan documents (`extractTodosFromPlanMarkdown`).
+  - Standalone natural Todo checklist in Chat Transcript (completed, in-progress with `*`, and pending states) rendered outside collapsible tool groups.
+  - Global plan persistence in `~/.pi-desktop/plans/` (mirrored to `~/.pi/plan/`) and auto-binding workspace to sessions in SQLite to prevent `PLAN_WORKSPACE_REQUIRED` errors.
+
+- **🤖 Subagent File Inspection & Output Cleaning**:
+  - Open and inspect subagent markdown files (`~/.agents/subagents/developer.md`) and project skills directly from chat.
+  - Automatic path resolution and `fsExtraRoots` expansion for dot-directories.
+  - Clean rendering of subagent XML tags (`<review_report>`, `<verdict>`, `<vuln>`, `<finding>`) in Markdown output.
+
+- **⚡ Productivity Personas & Compressors**:
+  - Built-in prompt engineering modes: **Caveman** (high-signal terse output), **Ponytail** (minimal diffs, YAGNI, standard library first), and **RTK compressor** for maximum token efficiency.
 
 ---
 
