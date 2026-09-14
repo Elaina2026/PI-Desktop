@@ -15,6 +15,7 @@ import {
   IconArrowUp,
   IconCheck,
   IconChevronDown,
+  IconImage,
   IconPlus,
   IconSparkles,
   IconStop,
@@ -45,6 +46,8 @@ export type ComposerToolbarProps = {
   controlsBlocked: boolean;
   pasting: boolean;
   pickAndAttach: () => Promise<void>;
+  pickAndAttachPhotos?: () => Promise<void>;
+  supportsVision?: boolean;
   configureActiveSession: AppState["configureActiveSession"];
   showToast: AppState["showToast"];
   modelMenu: ModelMenuController;
@@ -80,6 +83,8 @@ export function ComposerToolbar({
   controlsBlocked,
   pasting,
   pickAndAttach,
+  pickAndAttachPhotos,
+  supportsVision,
   configureActiveSession,
   showToast,
   modelMenu,
@@ -120,6 +125,23 @@ export function ComposerToolbar({
             <IconPlus size={15} aria-hidden="true" />
           </TooltipButton>
         </div>
+        {supportsVision && pickAndAttachPhotos ? (
+          <div className="composer-plus">
+            <TooltipButton
+              type="button"
+              className="icon-btn"
+              tooltip={t("chat.addImages", "Add images")}
+              ariaLabel={t("chat.addImages", "Add images")}
+              disabled={controlsBlocked || pasting}
+              onClick={() => {
+                setPermissionOpen(false);
+                void pickAndAttachPhotos();
+              }}
+            >
+              <IconImage size={15} aria-hidden="true" />
+            </TooltipButton>
+          </div>
+        ) : null}
         <TooltipButton
           type="button"
           className="icon-btn mode-chip composer-mode-chip"

@@ -1,5 +1,6 @@
 import { IPC, trustedExtensionCommandId, type ComposerCommand } from "@pi-desktop/shared";
 import { builtinSkills } from "../builtin-skills";
+import { scanExternalSkills } from "../external-skills";
 import { builtinComposerCommands } from "../builtin-commands";
 import type { AgentExtensionBridge } from "../agent-extensions";
 import type { PluginRuntime } from "../plugin-runtime";
@@ -57,8 +58,13 @@ export function createComposerCommandService({
       name: skill.name,
       description: skill.description,
     }));
+    const externalSkills = scanExternalSkills(root).map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+    }));
     const seen = new Set<string>();
-    return [...builtins, ...pluginSkills, ...userSkills].flatMap((skill) => {
+    return [...builtins, ...pluginSkills, ...userSkills, ...externalSkills].flatMap((skill) => {
       if (!skill.id || seen.has(skill.id)) return [];
       seen.add(skill.id);
       return [

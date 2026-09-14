@@ -263,8 +263,11 @@ export function registerUsagesIpc(
     IPC.invoke.statsGetModelUsageSummary,
     async (input?: { force?: boolean }): Promise<ModelUsageSummaryResult> => {
       const nowMs = Date.now();
-      if (
-        !input?.force &&
+      if (input?.force) {
+        cachedModelUsageSummary = null;
+        cachedModelUsageSummaryTimestamp = 0;
+        sessionUsageScanCache.clear();
+      } else if (
         cachedModelUsageSummary &&
         nowMs - cachedModelUsageSummaryTimestamp < MODEL_USAGE_CACHE_TTL_MS
       ) {
@@ -365,6 +368,7 @@ export function registerUsagesIpc(
                 totalTokens: 0,
                 turnCount: 0,
                 costUsd: 0,
+                models: {},
               };
             }
             dailyMap[dateStr].inputTokens += inp;
@@ -373,6 +377,20 @@ export function registerUsagesIpc(
             dailyMap[dateStr].totalTokens += tot;
             dailyMap[dateStr].costUsd += cost;
             dailyMap[dateStr].turnCount += 1;
+            if (!dailyMap[dateStr].models) dailyMap[dateStr].models = {};
+            if (!dailyMap[dateStr].models![modelId]) {
+              dailyMap[dateStr].models![modelId] = {
+                totalTokens: 0,
+                costUsd: 0,
+                inputTokens: 0,
+                outputTokens: 0,
+              };
+            }
+            const dm = dailyMap[dateStr].models![modelId];
+            dm.totalTokens += tot;
+            dm.costUsd += cost;
+            dm.inputTokens += inp;
+            dm.outputTokens += out;
           }
 
           let hasNewScannedFiles = false;

@@ -85,17 +85,33 @@ export function VendorAccountsSection() {
   const [quotas, setQuotas] = useState<Record<string, AccountQuotaInfo>>({});
   const [refreshingQuota, setRefreshingQuota] = useState<string | null>(null);
 
-  const fetchAccountQuota = useCallback(async (providerId: string) => {
-    setRefreshingQuota(providerId);
-    try {
-      const quota = await api.getOauthAccountQuota(providerId);
-      setQuotas((prev) => ({ ...prev, [providerId]: quota }));
-    } catch {
-      // Best effort
-    } finally {
-      setRefreshingQuota(null);
-    }
-  }, []);
+  const fetchAccountQuota = useCallback(
+    async (providerId: string, force = false) => {
+      setRefreshingQuota(providerId);
+      try {
+        const quota = await api.getOauthAccountQuota(providerId, { force });
+        setQuotas((prev) => ({ ...prev, [providerId]: quota }));
+        if (force) {
+          if (quota.error) {
+            showToast(quota.error, { variant: "error" });
+          } else {
+            showToast(t("settings.quotaRefreshed", "Đã cập nhật hạn mức"), {
+              variant: "success",
+            });
+          }
+        }
+      } catch (e) {
+        if (force) {
+          showToast(e instanceof Error ? e.message : String(e), {
+            variant: "error",
+          });
+        }
+      } finally {
+        setRefreshingQuota(null);
+      }
+    },
+    [showToast, t],
+  );
 
   const loadVendors = useCallback(async () => {
     try {
@@ -450,8 +466,16 @@ export function VendorAccountsSection() {
                             </>
                           )
                         ) : (
-                          <div style={{ fontSize: "11px", opacity: 0.5 }}>
-                            {refreshingQuota === account.providerId ? "Checking quota…" : ""}
+                          <div style={{ fontSize: "11px", opacity: 0.7 }}>
+                            {quotas[account.providerId]?.error ? (
+                              <span style={{ color: "var(--ds-danger, #ef4444)" }}>
+                                {quotas[account.providerId].error}
+                              </span>
+                            ) : refreshingQuota === account.providerId ? (
+                              "Checking quota…"
+                            ) : (
+                              ""
+                            )}
                           </div>
                         )}
                       </div>
@@ -472,7 +496,7 @@ export function VendorAccountsSection() {
                       tooltip="Refresh Quota"
                       ariaLabel="Refresh Quota"
                       disabled={rowBusy || !provider || !connected}
-                      onClick={() => void fetchAccountQuota(account.providerId)}
+                      onClick={() => void fetchAccountQuota(account.providerId, true)}
                     >
                       <IconRefresh size={14} />
                     </TooltipButton>

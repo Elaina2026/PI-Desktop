@@ -370,6 +370,12 @@ export function Composer({
     provider.enabled &&
     !!modelId &&
     (provider.hasSecret || provider.authKind === "none");
+  const currentModelBinding = provider?.models?.find((m) => m.id === modelId);
+  const supportsVision = Boolean(
+    currentModelBinding?.supportsImages ??
+      provider?.supportsVision ??
+      (modelId && /gemini|claude-3|gpt-4|o1|o3|vision|sonnet|opus/i.test(modelId)),
+  );
   const enterToSend = settings?.enterToSend ?? true;
   // Chips occupy sentinel characters, which `trim()` preserves — text and
   // attachments share one content check.
@@ -561,6 +567,8 @@ export function Composer({
             controlsBlocked={controlsBlocked}
             pasting={pasting}
             pickAndAttach={pickAndAttach}
+            pickAndAttachPhotos={attachments.pickAndAttachPhotos}
+            supportsVision={supportsVision}
             configureActiveSession={configureActiveSession}
             showToast={showToast}
             modelMenu={modelMenu}

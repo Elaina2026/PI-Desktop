@@ -451,7 +451,7 @@ export class VendorOAuth {
   /**
    * Fetch live quota status for an OAuth account.
    */
-  async getQuota(providerId: string): Promise<AccountQuotaInfo> {
+  async getQuota(providerId: string, force = false): Promise<AccountQuotaInfo> {
     const raw = await this.readCredential(providerId);
     if (!raw) return { providerId, status: "unknown", error: "Not signed in" };
 
@@ -465,12 +465,11 @@ export class VendorOAuth {
 
     let token = cred.access_token;
     if (
-      cred.expires_at &&
-      Date.now() > cred.expires_at - 60_000 &&
+      (force || (cred.expires_at && Date.now() > cred.expires_at - 60_000)) &&
       cred.refresh_token
     ) {
       try {
-        const auth = await this.resolveAntigravityAuth(providerId);
+        const auth = await this.resolveAntigravityAuth(providerId, force);
         token = auth.apiKey || token;
       } catch {}
     }
@@ -513,7 +512,7 @@ export class VendorOAuth {
 
       if (quotaRes.status === 401 && cred.refresh_token) {
         try {
-          const auth = await this.resolveAntigravityAuth(providerId);
+          const auth = await this.resolveAntigravityAuth(providerId, true);
           token = auth.apiKey || token;
           quotaRes = await fetch(
             "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
@@ -800,7 +799,7 @@ export class VendorOAuth {
     }
   }
 
-  private async resolveAntigravityAuth(providerId: string): Promise<ModelAuth> {
+  private async resolveAntigravityAuth(providerId: string, forceRefresh = false): Promise<ModelAuth> {
     const raw = await this.readCredential(providerId);
     if (!raw) throw new Error(`vendor account not signed in: ${providerId}`);
     const cred = (typeof raw === "string" ? JSON.parse(raw) : raw) as {
@@ -813,8 +812,9 @@ export class VendorOAuth {
 
     let accessToken = cred.access_token;
     if (
-      cred.expires_at &&
-      Date.now() > cred.expires_at - 60_000 &&
+      (forceRefresh ||
+        !cred.expires_at ||
+        Date.now() > cred.expires_at - 60_000) &&
       cred.refresh_token
     ) {
       try {

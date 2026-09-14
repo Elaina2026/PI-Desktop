@@ -515,8 +515,13 @@ export function registerWorkspaceIpc({
     join(dataDir, "plans"),
     join(homedir(), ".agents"),
     join(homedir(), ".pi"),
+    join(homedir(), ".claude"),
+    join(homedir(), ".codex"),
     ...(currentWorkspacePath() ? [
       join(currentWorkspacePath()!, ".agents"),
+      join(currentWorkspacePath()!, ".claude"),
+      join(currentWorkspacePath()!, ".codex"),
+      join(currentWorkspacePath()!, ".pi"),
       join(currentWorkspacePath()!, ".pi-desktop", "plans")
     ] : []),
   ];

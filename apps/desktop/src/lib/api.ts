@@ -470,8 +470,8 @@ export const api = {
     invoke<{ ok: boolean }>(IPC.invoke.providersOauthCancel, loginId),
   deleteOauthAccount: (providerId: string) =>
     invoke<{ ok: boolean }>(IPC.invoke.providersOauthDelete, providerId),
-  getOauthAccountQuota: (providerId: string) =>
-    invoke<AccountQuotaInfo>(IPC.invoke.providersOauthQuota, providerId),
+  getOauthAccountQuota: (providerId: string, opts?: { force?: boolean }) =>
+    invoke<AccountQuotaInfo>(IPC.invoke.providersOauthQuota, { providerId, force: opts?.force }),
   getProject: () =>
     invoke<{ workspace: ProjectWorkspace | null }>(IPC.invoke.projectGet),
   listProjects: () =>

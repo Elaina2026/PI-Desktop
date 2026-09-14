@@ -155,6 +155,15 @@ export type HeatmapCalendarCell = {
   totalTokens: number;
   costUsd?: number;
   turnCount?: number;
+  models?: Record<
+    string,
+    {
+      totalTokens: number;
+      costUsd: number;
+      inputTokens: number;
+      outputTokens: number;
+    }
+  >;
 };
 
 export function mergeUsageDailyAndHistory(
@@ -166,6 +175,15 @@ export function mergeUsageDailyAndHistory(
     totalTokens?: number;
     turnCount?: number;
     costUsd?: number;
+    models?: Record<
+      string,
+      {
+        totalTokens: number;
+        costUsd: number;
+        inputTokens: number;
+        outputTokens: number;
+      }
+    >;
   }> = [],
   history: Array<{
     date: string;
@@ -190,6 +208,7 @@ export function mergeUsageDailyAndHistory(
       totalTokens: item.totalTokens ?? ((item.inputTokens ?? 0) + (item.outputTokens ?? 0)),
       costUsd: item.costUsd ?? 0,
       turnCount: item.turnCount ?? 0,
+      models: item.models ? { ...item.models } : undefined,
     });
   }
 

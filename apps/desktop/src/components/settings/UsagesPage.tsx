@@ -49,18 +49,33 @@ export function UsagesPage() {
     output: number;
     cost?: number;
     turns?: number;
+    models?: Record<
+      string,
+      {
+        totalTokens: number;
+        costUsd: number;
+        inputTokens: number;
+        outputTokens: number;
+      }
+    >;
   } | null>(null);
 
   const draftConfiguration = useAppStore((s) => s.draftConfiguration);
   const settings = useAppStore((s) => s.settings);
+  const sessions = useAppStore((s) => s.sessions);
+  const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const showToast = useAppStore((s) => s.showToast);
+
+  const activeSession = sessions.find((s) => s.id === activeSessionId);
   const activeModelId =
+    activeSession?.modelId ||
     draftConfiguration?.modelId ||
     settings?.defaultModelId ||
     "gemini-3.8-flash";
 
   const inFlightRef = useRef(false);
   const loadData = async (silent = false, force = false) => {
-    if (inFlightRef.current) return;
+    if (inFlightRef.current && !force) return;
     inFlightRef.current = true;
     if (!silent) setLoading(true);
     setError(false);
@@ -74,8 +89,18 @@ export function UsagesPage() {
         setHistoryItems(histRes.items);
       }
       setSelectedCell(null);
+      if (force && !silent) {
+        showToast(t("settings.usageRefreshed", "Đã làm mới dữ liệu token"), {
+          variant: "success",
+        });
+      }
     } catch {
       setError(true);
+      if (force && !silent) {
+        showToast(t("settings.usageRefreshFailed", "Không thể làm mới dữ liệu token"), {
+          variant: "error",
+        });
+      }
     } finally {
       inFlightRef.current = false;
       setLoading(false);
@@ -407,6 +432,7 @@ export function UsagesPage() {
                               output: item.outputTokens,
                               cost: item.costUsd,
                               turns: item.turnCount,
+                              models: item.models,
                             })
                           }
                         >
@@ -427,26 +453,41 @@ export function UsagesPage() {
         )}
 
         {selectedCell ? (
-          <div className="token-usage-detail text-xs text-text-primary">
-            <span className="font-semibold">{selectedCell.date}</span>
-            {selectedCell.turns !== undefined ? (
-              <span className="text-text-muted">
-                {t("settings.usageTurns")}: {selectedCell.turns.toLocaleString()}
+          <div className="token-usage-detail text-xs text-text-primary" style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "center" }}>
+              <span className="font-semibold">{selectedCell.date}</span>
+              {selectedCell.turns !== undefined ? (
+                <span className="text-text-muted">
+                  {t("settings.usageTurns")}: {selectedCell.turns.toLocaleString()}
+                </span>
+              ) : null}
+              <span>
+                {t("settings.usageInput")}: {selectedCell.input.toLocaleString()}
               </span>
-            ) : null}
-            <span>
-              {t("settings.usageInput")}: {selectedCell.input.toLocaleString()}
-            </span>
-            <span>
-              {t("settings.usageOutput")}: {selectedCell.output.toLocaleString()}
-            </span>
-            <span>
-              {t("settings.usageTotal")}: {selectedCell.total.toLocaleString()}
-            </span>
-            {selectedCell.cost !== undefined ? (
-              <span className="font-medium text-ds-accent">
-                {t("settings.usageCostUsd")}: ${selectedCell.cost.toFixed(4)}
+              <span>
+                {t("settings.usageOutput")}: {selectedCell.output.toLocaleString()}
               </span>
+              <span>
+                {t("settings.usageTotal")}: {selectedCell.total.toLocaleString()}
+              </span>
+              {selectedCell.cost !== undefined ? (
+                <span className="font-medium text-ds-accent">
+                  {t("settings.usageCostUsd")}: ${selectedCell.cost.toFixed(4)}
+                </span>
+              ) : null}
+            </div>
+            {selectedCell.models && Object.keys(selectedCell.models).length > 0 ? (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "4px" }}>
+                {Object.entries(selectedCell.models).map(([mId, mData]) => (
+                  <span
+                    key={mId}
+                    className="token-usage-model-tag"
+                    style={{ fontSize: "11px", padding: "2px 6px" }}
+                  >
+                    <strong>{mId}</strong>: {formatTokenCount(mData.totalTokens)} (${mData.costUsd.toFixed(4)})
+                  </span>
+                ))}
+              </div>
             ) : null}
           </div>
         ) : null}

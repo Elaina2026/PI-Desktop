@@ -60,3 +60,25 @@ test("Markdown.tsx sanitizes subagent xml tags outside code fences", async () =>
   assert.match(markdown, /review_report/);
   assert.match(markdown, /verdict/);
 });
+
+test("external skills scan from claude and codex directories", async () => {
+  const { scanExternalSkills, loadExternalSkillBody } = await import(
+    "../electron/main/external-skills.ts"
+  );
+  assert.equal(typeof scanExternalSkills, "function");
+  assert.equal(typeof loadExternalSkillBody, "function");
+
+  const mainSource = await readMainSource();
+  assert.match(mainSource, /scanExternalSkills/);
+  assert.match(mainSource, /loadExternalSkillBody/);
+});
+
+test("composer toolbar supports image attachment when model supports vision", async () => {
+  const toolbarCode = await readFile(
+    new URL("../src/features/chat/composer/ComposerToolbar.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(toolbarCode, /supportsVision/);
+  assert.match(toolbarCode, /pickAndAttachPhotos/);
+  assert.match(toolbarCode, /IconImage/);
+});

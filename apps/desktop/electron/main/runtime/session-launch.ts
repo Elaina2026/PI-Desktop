@@ -26,6 +26,7 @@ import {
   type UserSubagentDocument,
 } from "@pi-desktop/agent-runtime";
 import { builtinSkills } from "../builtin-skills";
+import { scanExternalSkills } from "../external-skills";
 import { OAUTH_AUTH_KIND, type VendorOAuth } from "../oauth";
 import {
   modelConfigFromModelsDev,
@@ -388,6 +389,11 @@ export function createSessionLaunchRuntime({
           description: skill.description,
         })),
       ...userSkills.map((skill) => ({
+        id: skill.id,
+        name: skill.name,
+        description: skill.description,
+      })),
+      ...scanExternalSkills(projectPath).map((skill) => ({
         id: skill.id,
         name: skill.name,
         description: skill.description,

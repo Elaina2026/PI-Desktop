@@ -239,6 +239,15 @@ export type ModelUsageDailyItem = {
   totalTokens: number;
   turnCount: number;
   costUsd: number;
+  models?: Record<
+    string,
+    {
+      totalTokens: number;
+      costUsd: number;
+      inputTokens: number;
+      outputTokens: number;
+    }
+  >;
 };
 
 export type ModelUsageSummaryResult = {

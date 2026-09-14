@@ -189,11 +189,20 @@ export function registerProviderIpc({
     await vendorOAuth.deleteAccount(providerId);
     return { ok: true };
   });
-  handle(IPC.invoke.providersOauthQuota, async (providerId: unknown) => {
-    if (typeof providerId !== "string" || !providerId) {
+  handle(IPC.invoke.providersOauthQuota, async (input: unknown, opts?: { force?: boolean }) => {
+    let providerId = "";
+    let force = false;
+    if (typeof input === "string") {
+      providerId = input;
+      force = !!opts?.force;
+    } else if (input && typeof input === "object") {
+      providerId = String((input as any).providerId ?? "");
+      force = !!(input as any).force;
+    }
+    if (!providerId) {
       throw new Error("providerId required");
     }
-    return vendorOAuth.getQuota(providerId);
+    return vendorOAuth.getQuota(providerId, force);
   });
   handle(
     IPC.invoke.providersListModels,

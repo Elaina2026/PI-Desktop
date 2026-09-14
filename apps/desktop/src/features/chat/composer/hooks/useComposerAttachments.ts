@@ -50,7 +50,8 @@ export type ComposerAttachmentsController = {
   dropTargetActive: boolean;
   setDropTargetActive: (active: boolean) => void;
   droppedDirectories: ComposerDropItem[];
-  pickAndAttach: () => Promise<void>;
+  pickAndAttach: (isPhotos?: boolean) => Promise<void>;
+  pickAndAttachPhotos: () => Promise<void>;
   pasteClipboardFiles: (event: ClipboardEvent<HTMLDivElement>) => void;
   attachDroppedItems: (items: ComposerDropItem[]) => Promise<void>;
   onComposerDragEnter: (event: ReactDragEvent<HTMLDivElement>) => void;
@@ -83,11 +84,11 @@ export function useComposerAttachments({
   const snapshotReferences = (sourceSessionId: string) =>
     draft.snapshotReferences(sourceSessionId);
 
-  const pickAndAttach = async () => {
+  const pickAndAttach = async (isPhotos = false) => {
     try {
       // The picker accepts regular files; the importer classifies images from
       // MIME/extension metadata after selection.
-      const result = await api.pickFiles();
+      const result = isPhotos ? await api.pickPhotos() : await api.pickFiles();
       if (result.canceled || !result.token || isInputBlocked) return;
 
       const editor = draft.ref.current;
@@ -403,6 +404,7 @@ export function useComposerAttachments({
     setDropTargetActive,
     droppedDirectories,
     pickAndAttach,
+    pickAndAttachPhotos: () => pickAndAttach(true),
     pasteClipboardFiles,
     attachDroppedItems,
     onComposerDragEnter,

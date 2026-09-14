@@ -7,6 +7,7 @@ import {
   subagentProviderLookupError,
 } from "@pi-desktop/agent-runtime";
 import { loadBuiltinSkillBody } from "../builtin-skills";
+import { loadExternalSkillBody } from "../external-skills";
 import { registerPluginDevTools } from "../plugin-dev-tools";
 import { resolveLocalFile } from "../browser-view";
 import { modelConfigFromModelsDev } from "../models-dev-catalog";
@@ -354,6 +355,7 @@ export function createSidecarRuntime({
       const skill =
         loadBuiltinSkillBody(id) ??
         (await loadUserSkillBody(id, projectPath)) ??
+        loadExternalSkillBody(id, projectPath) ??
         plugins.loadSkillBody(id);
       return {
         ok: true,
