@@ -160,7 +160,7 @@ export function ComposerToolbar({
                 <IconFileText size={14} aria-hidden="true" />
               </span>
               <span className="flex-1 text-left">
-                {t("chat.addFilesOption", "Thêm tệp tin")}
+                {t("chat.addFilesOption", "Files")}
               </span>
             </button>
             {supportsVision && pickAndAttachPhotos ? (
@@ -178,7 +178,7 @@ export function ComposerToolbar({
                   <IconImage size={14} aria-hidden="true" />
                 </span>
                 <span className="flex-1 text-left">
-                  {t("chat.addMediaOption", "Thêm hình ảnh / Media")}
+                  {t("chat.addMediaOption", "Photos & Media")}
                 </span>
               </button>
             ) : null}

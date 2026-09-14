@@ -149,7 +149,7 @@ export function PlanApprovalBar({ proposal }: { proposal: PlanProposal }) {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       if (msg.includes("PLAN_WORKSPACE_REQUIRED")) {
-        showToast("Cần mở một thư mục dự án (Open Folder) để duyệt và thực thi Plan.", {
+        showToast(t("plan.openWorkspaceRequired", "Please open a project folder to approve and execute the plan."), {
           variant: "error",
         });
       } else {

@@ -90,14 +90,14 @@ export function UsagesPage() {
       }
       setSelectedCell(null);
       if (force && !silent) {
-        showToast(t("settings.usageRefreshed", "Đã làm mới dữ liệu token"), {
+        showToast(t("settings.usageRefreshed", "Usage data refreshed"), {
           variant: "success",
         });
       }
     } catch {
       setError(true);
       if (force && !silent) {
-        showToast(t("settings.usageRefreshFailed", "Không thể làm mới dữ liệu token"), {
+        showToast(t("settings.usageRefreshFailed", "Failed to refresh usage data"), {
           variant: "error",
         });
       }

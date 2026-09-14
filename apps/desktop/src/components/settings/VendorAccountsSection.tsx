@@ -95,7 +95,7 @@ export function VendorAccountsSection() {
           if (quota.error) {
             showToast(quota.error, { variant: "error" });
           } else {
-            showToast(t("settings.quotaRefreshed", "Đã cập nhật hạn mức"), {
+            showToast(t("settings.quotaRefreshed", "Quota updated"), {
               variant: "success",
             });
           }

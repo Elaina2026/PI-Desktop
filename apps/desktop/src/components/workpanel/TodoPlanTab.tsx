@@ -292,7 +292,7 @@ export function TodoPlanTab() {
     const next = [...newItems, ...todos];
     setTodos(next);
     await api.saveTodos(next).catch(() => undefined);
-    showToast(`Đã tạo ${newItems.length} công việc từ Plan vào Todo list!`, { variant: "success" });
+    showToast(t("workpanel.todosCreatedFromPlan", "Created {{count}} task(s) from plan into Todo list!", { count: newItems.length }), { variant: "success" });
   };
 
   // Plan approval handler
@@ -333,7 +333,7 @@ export function TodoPlanTab() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("PLAN_WORKSPACE_REQUIRED")) {
-        showToast("Cần mở một thư mục dự án để duyệt và thực thi Plan.", {
+        showToast(t("workpanel.openFolderToExecutePlan", "Please open a project folder to approve and execute the plan."), {
           variant: "error",
         });
       } else {
@@ -346,7 +346,7 @@ export function TodoPlanTab() {
     const promptText = newPlanPrompt.trim();
     if (!promptText || !activeSessionId || creatingPlan) return;
     if (!workspace?.path) {
-      showToast("Vui lòng mở một thư mục dự án (Open Folder) trước khi tạo Plan.", {
+      showToast(t("workpanel.openFolderToCreatePlan", "Please open a project folder before creating a plan."), {
         variant: "warning",
       });
       return;
@@ -372,7 +372,7 @@ export function TodoPlanTab() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("PLAN_WORKSPACE_REQUIRED")) {
-        showToast("Cần mở một thư mục dự án để tạo Plan.", {
+        showToast(t("workpanel.openFolderToCreatePlanRequired", "Please open a project folder to create a plan."), {
           variant: "error",
         });
       } else {
@@ -679,7 +679,7 @@ export function TodoPlanTab() {
                       className="plan-selector-select"
                       value={selectedPlanPath || ""}
                       onChange={(e) => handleSelectPlanPath(e.target.value)}
-                      title="Chọn plan từ ~/.pi-desktop/plans/"
+                      title={t("workpanel.selectPlanTooltip", "Select plan from ~/.pi-desktop/plans/")}
                     >
                       {savedPlans.map((p) => (
                         <option key={p.path} value={p.path}>
@@ -701,7 +701,7 @@ export function TodoPlanTab() {
                       void syncTodosFromPlan(currentPlan.markdown);
                       setActiveSubTab("todo");
                     }}
-                    title="Tạo Todo list từ Plan này"
+                    title={t("workpanel.syncTodosFromPlanTooltip", "Tạo Todo list từ Plan này")}
                   >
                     <IconListChecks size={12} className="mr-1 inline" />
                     Todo
@@ -711,19 +711,19 @@ export function TodoPlanTab() {
                     variant="ghost"
                     className="text-text-muted hover:text-text-primary px-2"
                     onClick={() => handleCopyPlan(currentPlan.markdown)}
-                    title="Copy Markdown plan"
+                    title={t("common.copy", "Copy")}
                   >
                     <IconCopy size={12} className="mr-1 inline" />
-                    {copiedPlan ? "Đã copy" : "Copy"}
+                    {copiedPlan ? t("common.copied", "Copied") : t("common.copy", "Copy")}
                   </Button>
                   <Button
                     size="sm"
                     variant="secondary"
                     className="px-2"
                     onClick={() => setShowCreateForm(true)}
-                    title="Tạo plan mới"
+                    title={t("workpanel.createPlanTooltip", "Create new plan")}
                   >
-                    + Tạo Plan
+                    + {t("workpanel.createPlan", "Create Plan")}
                   </Button>
                 </div>
               </div>
@@ -770,11 +770,11 @@ export function TodoPlanTab() {
                   {/* Khu để ghi đáp án */}
                   <div className="plan-answer-box mb-3">
                     <label className="text-3xs font-mono text-text-muted mb-1 block">
-                      Đáp án / Ghi chú cho plan (Answer / Instructions):
+                      {t("workpanel.planAnswerInstructions", "Answer / Instructions:")}
                     </label>
                     <textarea
                       className="plan-answer-textarea"
-                      placeholder="Ghi đáp án hoặc chỉ dẫn bổ sung trước khi duyệt plan..."
+                      placeholder={t("workpanel.planAnswerPlaceholder", "Enter answers or additional instructions before approving plan...")}
                       value={planAnswer}
                       onChange={(e) => setPlanAnswer(e.target.value)}
                       rows={2}
@@ -786,7 +786,7 @@ export function TodoPlanTab() {
                       size="sm"
                       variant="primary"
                       onClick={() => void handleResolvePlan("accept-edits")}
-                      title="Tự động chấp nhận chỉnh sửa khi thực thi plan"
+                      title={t("workpanel.autoAcceptEditsTooltip", "Auto-accept edits when executing plan")}
                     >
                       <IconCheck size={12} className="mr-1 inline" />
                       Auto Accept-Edit
@@ -795,7 +795,7 @@ export function TodoPlanTab() {
                       size="sm"
                       variant="secondary"
                       onClick={() => void handleResolvePlan("auto")}
-                      title="Chạy tự động hoàn toàn, không cần phê duyệt (No Approval)"
+                      title={t("workpanel.noApprovalTooltip", "Run fully automatically without approval (No Approval)")}
                     >
                       <IconSparkles size={12} className="mr-1 inline text-ds-accent" />
                       No Approve
@@ -804,7 +804,7 @@ export function TodoPlanTab() {
                       size="sm"
                       variant="secondary"
                       onClick={() => void handleResolvePlan("ask")}
-                      title="Hỏi trước mỗi bước thay đổi"
+                      title={t("workpanel.askEachStepTooltip", "Ask before each step")}
                     >
                       Ask
                     </Button>
@@ -832,20 +832,20 @@ export function TodoPlanTab() {
                   <div className="w-10 h-10 rounded-full bg-ds-tile flex items-center justify-center text-text-secondary">
                     <IconSparkles size={20} className="text-ds-accent" />
                   </div>
-                  <div className="font-semibold text-sm text-text-primary">Tạo Plan Mới (Create Plan)</div>
+                  <div className="font-semibold text-sm text-text-primary">{t("workpanel.createNewPlanTitle", "Create New Plan")}</div>
                   <p className="text-xs text-text-muted">
-                    Lập kế hoạch các bước kỹ thuật chi tiết lưu vào ~/.pi-desktop/plans/ trước khi chỉnh sửa file.
+                    {t("workpanel.createNewPlanDesc", "Plan technical steps into ~/.pi-desktop/plans/ before editing files.")}
                   </p>
                 </div>
 
                 {/* Khu để ghi đáp án / yêu cầu tạo plan */}
                 <div className="plan-create-input-box">
                   <label className="text-3xs font-mono text-text-muted mb-1 block">
-                    Yêu cầu / Đáp án cho Plan:
+                    {t("workpanel.planRequirementsLabel", "Requirements / Answers for Plan:")}
                   </label>
                   <textarea
                     className="plan-answer-textarea"
-                    placeholder="Ghi đáp án hoặc yêu cầu cần lập plan, ví dụ: 'Refactor module auth và bổ sung tests'..."
+                    placeholder={t("workpanel.planRequirementsPlaceholder", "Enter requirements or prompt to plan, e.g. 'Refactor auth module and add tests'...")}
                     value={newPlanPrompt}
                     onChange={(e) => setNewPlanPrompt(e.target.value)}
                     rows={3}
@@ -858,7 +858,7 @@ export function TodoPlanTab() {
                     variant="primary"
                     disabled={!newPlanPrompt.trim() || creatingPlan}
                     onClick={() => void handleCreatePlan("accept-edits")}
-                    title="Tạo plan với chế độ Auto Accept-Edit"
+                    title={t("workpanel.createPlanAutoAcceptTooltip", "Create plan with Auto Accept-Edit mode")}
                   >
                     <IconCheck size={12} className="mr-1 inline" />
                     Auto Accept-Edit
@@ -868,7 +868,7 @@ export function TodoPlanTab() {
                     variant="secondary"
                     disabled={!newPlanPrompt.trim() || creatingPlan}
                     onClick={() => void handleCreatePlan("auto")}
-                    title="Tạo plan với chế độ No Approve (tự động)"
+                    title={t("workpanel.createPlanNoApproveTooltip", "Create plan with No Approval (auto) mode")}
                   >
                     <IconSparkles size={12} className="mr-1 inline text-ds-accent" />
                     No Approve
@@ -880,7 +880,7 @@ export function TodoPlanTab() {
                       className="ml-auto text-xs"
                       onClick={() => setShowCreateForm(false)}
                     >
-                      ← Xem plan đã lưu
+                      ← {t("workpanel.viewSavedPlans", "View saved plans")}
                     </Button>
                   )}
                 </div>
