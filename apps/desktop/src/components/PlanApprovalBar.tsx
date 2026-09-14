@@ -147,9 +147,16 @@ export function PlanApprovalBar({ proposal }: { proposal: PlanProposal }) {
       );
       focusComposer();
     } catch (error) {
-      showToast(error instanceof Error ? error.message : String(error), {
-        variant: "error",
-      });
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes("PLAN_WORKSPACE_REQUIRED")) {
+        showToast("Cần mở một thư mục dự án (Open Folder) để duyệt và thực thi Plan.", {
+          variant: "error",
+        });
+      } else {
+        showToast(msg, {
+          variant: "error",
+        });
+      }
       setResolving(false);
     }
   };

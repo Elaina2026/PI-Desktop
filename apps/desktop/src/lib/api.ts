@@ -857,6 +857,26 @@ export const api = {
     ),
   saveTodos: (todos: import("@pi-desktop/shared").TodoItem[]) =>
     invoke<{ ok: boolean; count: number }>(IPC.invoke.todoSave, { todos }),
+  listPlanFiles: () =>
+    invoke<{ ok: boolean; plans: import("@pi-desktop/shared").PlanFileInfo[] }>(
+      IPC.invoke.planListFiles,
+    ),
+  readPlanFile: (path: string) =>
+    invoke<{ ok: boolean; content: string; title: string; path: string }>(
+      IPC.invoke.planReadFile,
+      { path },
+    ),
+  savePlanFile: (title: string, markdown: string, filename?: string) =>
+    invoke<{ ok: boolean; path: string; filename: string }>(
+      IPC.invoke.planSaveFile,
+      { title, markdown, filename },
+    ),
+  getMemory: (sessionId?: string) =>
+    invoke<{ ok: boolean; memory: unknown }>(IPC.invoke.memoryGet, { sessionId }),
+  rememberMemory: (note: string, sessionId?: string) =>
+    invoke<{ ok: boolean; count?: number; reason?: string }>(IPC.invoke.memoryRemember, { note, sessionId }),
+  forgetMemory: (sessionId?: string, clearAll?: boolean) =>
+    invoke<{ ok: boolean }>(IPC.invoke.memoryForget, { sessionId, clearAll }),
   getModelUsageSummary: () =>
     invoke<import("@pi-desktop/shared").ModelUsageSummaryResult>(
       IPC.invoke.statsGetModelUsageSummary,

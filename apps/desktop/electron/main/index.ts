@@ -12,10 +12,11 @@ import {
   shell,
   Tray,
 } from "electron";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import {
+  createReadStream,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -23,7 +24,8 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import * as readline from "node:readline";
 import { listInstalledFonts } from "./system-fonts";
 import {
   applyNetworkProxyFromAppSettings,
@@ -161,6 +163,17 @@ import { ClipboardHistory } from "./clipboard-history";
 import { createFsConsentService } from "./plugin-fs-consent";
 import { createDesktopConsentService } from "./plugin-desktop-consent";
 import { UserMcpRuntime } from "./user-mcp";
+import {
+  type ProjectMemory,
+  emptyMemory,
+  loadMemory,
+  saveMemory,
+  mergeMemory,
+  memoryToInstruction,
+  syncAgentsMd,
+  memoryExtractUserMessage,
+  MEMORY_EXTRACT_SYSTEM,
+} from "./agent-memory";
 import {
   MCP_CALL_TIMEOUT_MS,
   MCP_CONNECT_TIMEOUT_MS,
@@ -881,6 +894,16 @@ const pluginScopes = new Map<string, ActivationScope>();
  * can hold sessions on different projects, so this cannot be a single value.
  */
 const sessionProjects = new Map<string, string | null>();
+/** sessionId → last provider config used, for memory extraction one-shots. */
+const sessionProviders = new Map<string, RuntimeProviderConfig>();
+/** sessionId → number of agent_end events since last memory extraction. */
+const sessionTurnCounts = new Map<string, number>();
+const MEMORY_EXTRACT_EVERY_N_TURNS = 3;
+/** Cache for aggregated model token usage summary in Settings */
+let cachedModelUsageSummary: any = null;
+let cachedModelUsageSummaryTimestamp = 0;
+const MODEL_USAGE_CACHE_TTL_MS = 20_000;
+let inFlightModelUsageSummaryPromise: Promise<any> | null = null;
 const emitBrowserState = (state: BrowserState) => {
   sendToRenderer(IPC.event.browserState, state);
   pluginPanels.broadcast("browser:state", state);
@@ -959,6 +982,190 @@ const IMPORT_SOURCES = new Set<ExternalSource>([
 const dataDir =
   process.env.PI_DESKTOP_DATA_DIR || join(homedir(), ".pi-desktop");
 
+/**
+ * Ensures a session is associated with a persisted project workspace in host-core / pi.sqlite.
+ * If the session was created without a project, automatically binds it to the currently active
+ * workspace so that tools and Plan mode have a valid workspace root.
+ */
+async function ensureSessionProject(sessionId: string): Promise<string | null> {
+  const sid = sessionId.trim();
+  if (!sid) return currentWorkspacePath();
+  try {
+    const res = (await host?.call("session.get", { id: sid })) as
+      | { session: { projectPath?: string } | null }
+      | undefined;
+    const existing = res?.session?.projectPath?.trim();
+    if (existing) {
+      sessionProjects.set(sid, existing);
+      return existing;
+    }
+  } catch {}
+
+  const fallback = sessionProjects.get(sid) || currentWorkspacePath();
+  if (fallback) {
+    try {
+      const { DatabaseSync } = await import("node:sqlite");
+      const dbPath = join(dataDir, "pi.sqlite");
+      const db = new DatabaseSync(dbPath);
+      const normPath = fallback.replace(/\\/g, "/").replace(/\/+$/, "");
+      const altPath = fallback.replace(/\\/g, "/");
+      let proj = db.prepare("SELECT id FROM projects WHERE path = ? OR path = ?").get(normPath, altPath) as { id: number } | undefined;
+      if (!proj) {
+        const name = fallback.split(/[\\/]/).filter(Boolean).pop() || "workspace";
+        const info = db.prepare("INSERT INTO projects (path, name, created_at, last_opened_at) VALUES (?, ?, datetime('now'), datetime('now'))").run(normPath, name);
+        proj = { id: Number(info.lastInsertRowid) };
+      }
+      if (proj?.id) {
+        db.prepare("UPDATE sessions SET project_id = ? WHERE id = ? AND project_id IS NULL").run(proj.id, sid);
+      }
+      db.close();
+      sessionProjects.set(sid, fallback);
+      return fallback;
+    } catch (e) {
+      logger.app("session", "warn", "failed to auto-bind project to session", { sessionId: sid, data: { error: String(e) } });
+    }
+  }
+  return fallback ?? null;
+}
+
+function getPlanDirectory(workspacePath?: string | null): string {
+  const ws = workspacePath || currentWorkspacePath();
+  if (ws) {
+    return join(ws, ".pi-desktop", "plans");
+  }
+  return join(dataDir, "plans");
+}
+
+async function savePlanToDisk(
+  title: string,
+  markdown: string,
+  preferredFilename?: string,
+  workspacePath?: string | null,
+): Promise<{ path: string; filename: string; relativePath: string }> {
+  const dir = getPlanDirectory(workspacePath);
+  if (!existsSync(dir)) {
+    await mkdir(dir, { recursive: true });
+  }
+  const globalDir = join(dataDir, "plans");
+  if (!existsSync(globalDir)) {
+    await mkdir(globalDir, { recursive: true });
+  }
+
+  let filename = preferredFilename?.trim();
+  if (!filename) {
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+    const cleanTitle = (title || "plan")
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_]+/g, "-")
+      .replace(/[^\p{L}\p{N}-]+/gu, "")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60);
+    filename = `${cleanTitle || "plan"}-${dateStr}.md`;
+  }
+  if (!filename.endsWith(".md")) filename += ".md";
+
+  const filePath = join(dir, filename);
+  await writeFile(filePath, markdown, "utf8");
+
+  const globalFilePath = join(globalDir, filename);
+  await writeFile(globalFilePath, markdown, "utf8").catch(() => undefined);
+
+  const ws = workspacePath || currentWorkspacePath();
+  if (ws) {
+    const legacyPiPlanDir = join(ws, ".pi", "plan");
+    if (existsSync(legacyPiPlanDir)) {
+      try {
+        const files = await readdir(legacyPiPlanDir);
+        for (const f of files) {
+          if (f.endsWith(".md")) {
+            const src = join(legacyPiPlanDir, f);
+            const dst = join(dir, f);
+            if (!existsSync(dst)) {
+              await copyFile(src, dst).catch(() => undefined);
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+
+  sendToRenderer(IPC.event.sessionsChanged, { reason: "plan" });
+  return {
+    path: filePath,
+    filename,
+    relativePath: `.pi-desktop/plans/${filename}`,
+  };
+}
+
+async function listPlanFilesInDisk(): Promise<import("@pi-desktop/shared").PlanFileInfo[]> {
+  const ws = currentWorkspacePath();
+  const dirsToScan = [
+    ws ? join(ws, ".pi-desktop", "plans") : null,
+    join(dataDir, "plans"),
+  ].filter(Boolean) as string[];
+
+  const seen = new Set<string>();
+  const plans: import("@pi-desktop/shared").PlanFileInfo[] = [];
+
+  for (const dir of dirsToScan) {
+    if (!existsSync(dir)) continue;
+    try {
+      const files = await readdir(dir);
+      for (const filename of files) {
+        if (!filename.endsWith(".md") || seen.has(filename)) continue;
+        seen.add(filename);
+        const fullPath = join(dir, filename);
+        const st = await stat(fullPath);
+        let title = filename.replace(/\.md$/, "");
+        try {
+          const head = await readFile(fullPath, "utf8");
+          const firstHeading = head.match(/^#\s+(.+)$/m);
+          if (firstHeading?.[1]) {
+            title = firstHeading[1].trim();
+          }
+        } catch {}
+        plans.push({
+          filename,
+          title,
+          path: fullPath,
+          relativePath: ws && fullPath.startsWith(ws)
+            ? relative(ws, fullPath).replace(/\\/g, "/")
+            : `.pi-desktop/plans/${filename}`,
+          updatedAt: st.mtimeMs,
+          size: st.size,
+        });
+      }
+    } catch {}
+  }
+
+  plans.sort((a, b) => b.updatedAt - a.updatedAt);
+  return plans;
+}
+
+async function readPlanFromDisk(reqPath: string): Promise<{ ok: boolean; content: string; title: string; path: string }> {
+  let fullPath = reqPath;
+  const ws = currentWorkspacePath();
+  if (!isAbsolute(reqPath)) {
+    fullPath = ws ? join(ws, reqPath) : join(dataDir, reqPath);
+  }
+  if (!existsSync(fullPath)) {
+    const fname = basename(reqPath);
+    const candidates = [
+      ws ? join(ws, ".pi-desktop", "plans", fname) : null,
+      join(dataDir, "plans", fname),
+    ].filter(Boolean) as string[];
+    const found = candidates.find((c) => existsSync(c));
+    if (found) fullPath = found;
+    else throw new Error(`Plan file not found: ${reqPath}`);
+  }
+  const content = await readFile(fullPath, "utf8");
+  const heading = content.match(/^#\s+(.+)$/m);
+  const title = heading?.[1]?.trim() || basename(fullPath, ".md");
+  return { ok: true, content, title, path: fullPath };
+}
+
 // Agent extensions (D387/D388, ADR 0214): plugins contribute the modules,
 // the sidecar loads them; this bridge carries commands, diagnostics, and
 // prompts between the two.
@@ -981,6 +1188,73 @@ const logger = new Logger(
   dataDir,
   process.env.NODE_ENV === "production" ? "info" : "debug",
 );
+
+type SessionUsageScanCacheEntry = {
+  mtimeMs: number;
+  size: number;
+  records: Array<{ modelId: string; u: any; rawCreated: string }>;
+};
+
+const sessionUsageScanCache = new Map<string, SessionUsageScanCacheEntry>();
+let sessionUsageScanCacheLoaded = false;
+let sessionUsageCacheDebounceTimer: NodeJS.Timeout | null = null;
+
+async function loadSessionUsageScanCache(): Promise<void> {
+  if (sessionUsageScanCacheLoaded) return;
+  sessionUsageScanCacheLoaded = true;
+  try {
+    const cacheFile = join(dataDir, "cache", "token-usage-cache.json");
+    if (existsSync(cacheFile)) {
+      const content = await readFile(cacheFile, "utf8");
+      const parsed = JSON.parse(content);
+      if (parsed && typeof parsed === "object") {
+        for (const [key, val] of Object.entries(parsed)) {
+          if (
+            val &&
+            typeof val === "object" &&
+            typeof (val as any).mtimeMs === "number" &&
+            Array.isArray((val as any).records)
+          ) {
+            sessionUsageScanCache.set(key, val as SessionUsageScanCacheEntry);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    logger.app("session", "warn", "failed to load session usage scan cache", { data: String(err) });
+  }
+}
+
+async function saveSessionUsageScanCacheNow(): Promise<void> {
+  if (sessionUsageCacheDebounceTimer) {
+    clearTimeout(sessionUsageCacheDebounceTimer);
+    sessionUsageCacheDebounceTimer = null;
+  }
+  try {
+    const cacheDir = join(dataDir, "cache");
+    if (!existsSync(cacheDir)) {
+      await mkdir(cacheDir, { recursive: true });
+    }
+    const data: Record<string, SessionUsageScanCacheEntry> = {};
+    for (const [key, val] of sessionUsageScanCache.entries()) {
+      data[key] = val;
+    }
+    await writeFile(join(cacheDir, "token-usage-cache.json"), JSON.stringify(data), "utf8");
+  } catch (err) {
+    logger.app("session", "warn", "failed to save session usage scan cache", { data: String(err) });
+  }
+}
+
+function debouncedSaveSessionUsageScanCache(): void {
+  if (sessionUsageCacheDebounceTimer) {
+    clearTimeout(sessionUsageCacheDebounceTimer);
+  }
+  // ponytail: 1s debounce on saving session usage disk cache | Flush on quit/shutdown if unpersisted records need immediate flush
+  sessionUsageCacheDebounceTimer = setTimeout(async () => {
+    sessionUsageCacheDebounceTimer = null;
+    await saveSessionUsageScanCacheNow();
+  }, 1000);
+}
 const persistenceOutbox = new PersistenceOutbox(dataDir, (level, message, data) => {
   logger.app("persistence", level, message, { data });
 });
@@ -1616,10 +1890,20 @@ async function resolveAgentRuntimeLaunch(
     ),
   );
   const projectPath =
-    typeof session.projectPath === "string" && session.projectPath.trim()
+    (await ensureSessionProject(sessionId)) ??
+    (typeof session.projectPath === "string" && session.projectPath.trim()
       ? session.projectPath.trim()
-      : undefined;
-  const projectInstructions = await loadInstructionChain(projectPath);
+      : currentWorkspacePath()) ??
+    undefined;
+  const projectInstructions = (await loadInstructionChain(projectPath)) ?? { entries: [] };
+  // Agent memory: inject per-project dynamic context into this session's instructions.
+  if (projectPath) {
+    const mem = await loadMemory(projectPath);
+    if (mem) {
+      const entry = memoryToInstruction(mem);
+      if (entry) projectInstructions.entries.push(entry);
+    }
+  }
   sessionProjects.set(sessionId, projectPath ?? null);
   // Everything below is filtered by activation scope: a plugin, MCP server or
   // skill limited to certain projects must be invisible to a session on any
@@ -2423,6 +2707,9 @@ const turnSettlements = new Map<string, Set<() => void>>();
 const turnFinalizations = new Map<string, Promise<void>>();
 /** sessionId -> last assistant usage recorded for active turn */
 const activeTurnUsages = new Map<string, MessageUsage>();
+/** sessionId -> accumulated assistant text for memory extraction (max 8 KB) */
+const activeTurnTexts = new Map<string, string>();
+const TURN_TEXT_CAP = 8 * 1024;
 
 function addActiveTurnUsage(sessionId: string, usage: MessageUsage | undefined) {
   if (!usage) return;
@@ -4717,6 +5004,18 @@ function wireHost(h: HostProcess) {
         }),
       );
     } else if (method === "plans.changed") {
+      const p = params as {
+        sessionId?: string;
+        proposal?: { title?: string; markdown?: string };
+      };
+      if (p?.proposal?.markdown) {
+        void savePlanToDisk(
+          p.proposal.title || "Execution Plan",
+          p.proposal.markdown,
+          undefined,
+          sessionProjects.get(p.sessionId ?? "") || currentWorkspacePath(),
+        ).catch(() => undefined);
+      }
       sendToRenderer(IPC.event.plansChanged, params);
     }
   });
@@ -4878,6 +5177,10 @@ function wireSidecar(s: AgentSidecar) {
 async function startSidecar(): Promise<void> {
   const s = new AgentSidecar((text) => logger.child("agent", text));
   wireSidecar(s);
+  s.setProjectEnsurer(ensureSessionProject);
+  s.setPlanSaver(async ({ title, markdown, workspacePath }) => {
+    await savePlanToDisk(title, markdown, undefined, workspacePath);
+  });
   s.setProjectInstructionResolver(async ({ projectPath, path }) => {
     // The root is registered by Electron main from the host-owned session
     // record. The sidecar can provide a target path, never an arbitrary root.
@@ -5603,6 +5906,42 @@ function persistAgentEvent(envelope: AgentEventEnvelope): UiMessage | undefined 
         });
       }
     })();
+    // Background memory extraction: every N completed turns, extract facts
+    // from accumulated assistant text and persist to project memory file.
+    void (async () => {
+      const sid = envelope.sessionId;
+      const cwd = sessionProjects.get(sid);
+      if (!cwd) return;
+      const count = (sessionTurnCounts.get(sid) ?? 0) + 1;
+      sessionTurnCounts.set(sid, count);
+      if (count % MEMORY_EXTRACT_EVERY_N_TURNS !== 0) return;
+      const turnText = activeTurnTexts.get(sid);
+      activeTurnTexts.delete(sid);
+      if (!turnText) return;
+      const provider = sessionProviders.get(sid);
+      if (!provider) return;
+      try {
+        const existingMem = await loadMemory(cwd);
+        const userMsg = memoryExtractUserMessage(existingMem, turnText);
+        const result = await completeOneShot(
+          provider,
+          { systemPrompt: MEMORY_EXTRACT_SYSTEM, messages: [{ role: "user", content: userMsg, timestamp: Date.now() }] },
+          "low",
+          { sessionId: sid },
+        );
+        const parsed = JSON.parse(result.text.trim()) as { stableFacts?: string[]; dynamicContext?: string[] };
+        if (!Array.isArray(parsed.stableFacts) && !Array.isArray(parsed.dynamicContext)) return;
+        const updated = mergeMemory(existingMem ?? emptyMemory(cwd), {
+          stableFacts: parsed.stableFacts ?? [],
+          dynamicContext: parsed.dynamicContext ?? [],
+        });
+        await saveMemory(updated);
+        await syncAgentsMd(updated);
+        logger.app("session", "info", "project memory updated", { sessionId: sid, data: { cwd, stableFacts: updated.stableFacts.length, dynamicContext: updated.dynamicContext.length } });
+      } catch (err) {
+        logger.app("session", "warn", "memory extraction failed", { sessionId: sid, data: String(err) });
+      }
+    })();
     return;
   }
   if (event.type === "turn_end" && !envelope.parentToolCallId) {
@@ -5611,6 +5950,15 @@ function persistAgentEvent(envelope: AgentEventEnvelope): UiMessage | undefined 
   if (event.type === "message_end" && event.message.role === "assistant") {
     if (!envelope.parentToolCallId && event.message.usage) {
       addActiveTurnUsage(envelope.sessionId, event.message.usage);
+    }
+    // Accumulate assistant text for memory extraction (top-level turns only).
+    if (!envelope.parentToolCallId) {
+      const msgText = (event.message.content ?? "").trim();
+      if (msgText) {
+        const prev = activeTurnTexts.get(envelope.sessionId) ?? "";
+        const next = prev ? `${prev}\n${msgText}` : msgText;
+        activeTurnTexts.set(envelope.sessionId, next.slice(-TURN_TEXT_CAP));
+      }
     }
     // Checkpoint the finished snapshot before the outbox append (D327).
     // Settling first dropped the last interval of text, and endTurn used to
@@ -6209,12 +6557,22 @@ function registerIpc() {
   handle(IPC.invoke.sessionCreate, async (input = {}) => {
     if (!host) throw new Error("host unavailable");
     const capabilityPromise = sessionCapabilityContext();
+    const effectiveProjectPath =
+      typeof input.projectPath === "string" && input.projectPath.trim()
+        ? input.projectPath.trim()
+        : currentWorkspacePath() ?? undefined;
     const res = await host.call<{ session?: (RuntimeSession & { id?: string }) | null }>(
       "session.create",
-      input,
+      {
+        ...input,
+        ...(effectiveProjectPath ? { projectPath: effectiveProjectPath } : {}),
+      },
     );
     logger.app("session", "info", "session created", { sessionId: res.session?.id });
     if (!res.session) return res;
+    if (res.session?.id && effectiveProjectPath) {
+      sessionProjects.set(res.session.id, effectiveProjectPath);
+    }
     const { providers, defaults } = await capabilityPromise;
     return { ...res, session: enrichSession(res.session, providers, defaults) };
   });
@@ -7345,9 +7703,86 @@ function registerIpc() {
     return { ok: true, count: payload.todos.length };
   });
 
+  handle(IPC.invoke.planListFiles, async () => {
+    const plans = await listPlanFilesInDisk();
+    return { ok: true, plans };
+  });
+
+  handle(IPC.invoke.planReadFile, async (input: { path?: string } = {}) => {
+    const reqPath = String(input?.path ?? "").trim();
+    if (!reqPath) throw new Error("path required");
+    return readPlanFromDisk(reqPath);
+  });
+
+  handle(
+    IPC.invoke.planSaveFile,
+    async (input: { title?: string; markdown?: string; filename?: string } = {}) => {
+      const title = String(input?.title ?? "").trim();
+      const markdown = String(input?.markdown ?? "");
+      const res = await savePlanToDisk(title, markdown, input?.filename);
+      return { ok: true, path: res.path, filename: res.filename };
+    },
+  );
+
+  // ─── Agent Memory IPC ──────────────────────────────────────────────────────
+
+  handle(IPC.invoke.memoryGet, async (input: { sessionId?: string } = {}) => {
+    const cwd = input.sessionId ? (sessionProjects.get(input.sessionId) ?? null) : null;
+    if (!cwd) return { ok: true, memory: null };
+    const mem = await loadMemory(cwd);
+    return { ok: true, memory: mem };
+  });
+
+  handle(IPC.invoke.memoryRemember, async (input: { sessionId?: string; note?: string } = {}) => {
+    const cwd = input.sessionId ? (sessionProjects.get(input.sessionId) ?? null) : null;
+    if (!cwd || !input.note?.trim()) return { ok: false, reason: "no active project or empty note" };
+    const mem = (await loadMemory(cwd)) ?? emptyMemory(cwd);
+    mem.rawNotes.push(input.note.trim());
+    mem.updatedAt = new Date().toISOString();
+    await saveMemory(mem);
+    await syncAgentsMd(mem);
+    return { ok: true, count: mem.rawNotes.length };
+  });
+
+  handle(IPC.invoke.memoryForget, async (input: { sessionId?: string; clearAll?: boolean } = {}) => {
+    const cwd = input.sessionId ? (sessionProjects.get(input.sessionId) ?? null) : null;
+    if (!cwd) return { ok: false, reason: "no active project" };
+    const mem = (await loadMemory(cwd)) ?? emptyMemory(cwd);
+    mem.dynamicContext = [];
+    if (input.clearAll) {
+      mem.stableFacts = [];
+      mem.rawNotes = [];
+    }
+    mem.updatedAt = new Date().toISOString();
+    await saveMemory(mem);
+    await syncAgentsMd(mem);
+    return { ok: true };
+  });
+
+  // Rate lookup cache to avoid repeating catalog and string searches
+  const modelRateCache = new Map<
+    string,
+    { input: number; output: number; cacheRead: number; cacheWrite: number }
+  >();
+
+
   handle(
     IPC.invoke.statsGetModelUsageSummary,
     async () => {
+      const nowMs = Date.now();
+      if (
+        cachedModelUsageSummary &&
+        nowMs - cachedModelUsageSummaryTimestamp < MODEL_USAGE_CACHE_TTL_MS
+      ) {
+        return cachedModelUsageSummary;
+      }
+      if (inFlightModelUsageSummaryPromise) {
+        return inFlightModelUsageSummaryPromise;
+      }
+
+      inFlightModelUsageSummaryPromise = (async () => {
+        try {
+          await loadSessionUsageScanCache();
       // Comprehensive model rate catalog ($ / 1M tokens)
       const BASE_RATES: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
         // Google Gemini
@@ -7420,30 +7855,38 @@ function registerIpc() {
 
       function resolveRate(modelId: string) {
         if (!modelId) return { input: 1.00, output: 4.00, cacheRead: 0.1, cacheWrite: 0 };
+        const cached = modelRateCache.get(modelId);
+        if (cached) return cached;
         const clean = modelId.trim().toLowerCase();
         const shortId = clean.includes("/") ? clean.split("/").pop()! : clean;
 
-        // 1. Direct catalog lookup
+        let rate: { input: number; output: number; cacheRead: number; cacheWrite: number } | null = null;
         const catalogHit = modelsDevCatalog.findModel({ modelId });
         if (catalogHit?.cost) {
-          return {
+          rate = {
             input: catalogHit.cost.input ?? 1.00,
             output: catalogHit.cost.output ?? 4.00,
             cacheRead: catalogHit.cost.cacheRead ?? 0.1,
             cacheWrite: catalogHit.cost.cacheWrite ?? 0,
           };
+        } else if (BASE_RATES[clean]) {
+          rate = BASE_RATES[clean];
+        } else if (BASE_RATES[shortId]) {
+          rate = BASE_RATES[shortId];
+        } else {
+          for (const [k, v] of Object.entries(BASE_RATES)) {
+            if (shortId.includes(k) || k.includes(shortId)) {
+              rate = v;
+              break;
+            }
+          }
         }
 
-        // 2. Exact base rate
-        if (BASE_RATES[clean]) return BASE_RATES[clean];
-        if (BASE_RATES[shortId]) return BASE_RATES[shortId];
-
-        // 3. Prefix / Substring match
-        for (const [k, v] of Object.entries(BASE_RATES)) {
-          if (shortId.includes(k) || k.includes(shortId)) return v;
+        if (!rate) {
+          rate = { input: 1.00, output: 4.00, cacheRead: 0.1, cacheWrite: 0 };
         }
-
-        return { input: 1.00, output: 4.00, cacheRead: 0.1, cacheWrite: 0 };
+        modelRateCache.set(modelId, rate);
+        return rate;
       }
 
       function computeCost(
@@ -7464,6 +7907,7 @@ function registerIpc() {
       const todayStartMs = todayStart.getTime();
       const sevenDaysMs = now - 7 * 86400 * 1000;
       const thirtyDaysMs = now - 30 * 86400 * 1000;
+      const sixtyDaysMs = now - 60 * 86400 * 1000;
 
       type Acc = {
         inputTokens: number;
@@ -7493,6 +7937,7 @@ function registerIpc() {
         today: createAcc(),
         sevenDays: createAcc(),
         thirtyDays: createAcc(),
+        sixtyDays: createAcc(),
         allTime: createAcc(),
       };
 
@@ -7538,71 +7983,126 @@ function registerIpc() {
         m.turnCount += 1;
       }
 
-      function processMessageRecord(rec: any) {
-        if (rec.type === "message" && rec.role === "assistant") {
-          const u = rec.meta?.usage || rec.usage;
-          if (!u) return;
-          const modelId = rec.meta?.modelId || rec.modelId || "unknown";
-          const rawCreated = rec.createdAt || rec.created_at;
-          const ts = rawCreated ? new Date(rawCreated).getTime() : now;
-          const dateStr = rawCreated ? rawCreated.slice(0, 10) : new Date(now).toISOString().slice(0, 10);
-          const rates = resolveRate(modelId);
-          const cost = computeCost(u, rates);
-
-          addRecord(accMap.allTime, modelId, u, cost);
-          if (ts >= thirtyDaysMs) addRecord(accMap.thirtyDays, modelId, u, cost);
-          if (ts >= sevenDaysMs) addRecord(accMap.sevenDays, modelId, u, cost);
-          if (ts >= todayStartMs) addRecord(accMap.today, modelId, u, cost);
-
-          const inp = u.inputTokens || u.input || 0;
-          const out = u.outputTokens || u.output || 0;
-          const cr = u.cacheReadTokens || u.cacheRead || 0;
-          const cw = u.cacheWriteTokens || u.cacheWrite || 0;
-          const tot = u.totalTokens || (inp + out + cr + cw);
-
-          if (!dailyMap[dateStr]) {
-            dailyMap[dateStr] = {
-              date: dateStr,
-              timestamp: ts,
-              inputTokens: 0,
-              cacheTokens: 0,
-              outputTokens: 0,
-              totalTokens: 0,
-              turnCount: 0,
-              costUsd: 0,
-            };
-          }
-          dailyMap[dateStr].inputTokens += inp;
-          dailyMap[dateStr].cacheTokens += (cr + cw);
-          dailyMap[dateStr].outputTokens += out;
-          dailyMap[dateStr].totalTokens += tot;
-          dailyMap[dateStr].costUsd += cost;
-          dailyMap[dateStr].turnCount += 1;
+      function toLocalDateStr(dateInput?: string | number | Date): string {
+        if (!dateInput) {
+          const d = new Date();
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
         }
+        if (typeof dateInput === "string") {
+          const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateInput);
+          if (m) return dateInput;
+        }
+        const d = typeof dateInput === "object" ? dateInput : new Date(dateInput);
+        if (isNaN(d.getTime())) return "";
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
       }
 
+      function processExtractedItem(modelId: string, u: any, rawCreated: string) {
+        const ts = rawCreated ? new Date(rawCreated).getTime() : now;
+        const dateStr = toLocalDateStr(rawCreated || now);
+        const rates = resolveRate(modelId);
+        const cost = computeCost(u, rates);
+
+        addRecord(accMap.allTime, modelId, u, cost);
+        if (ts >= sixtyDaysMs) addRecord(accMap.sixtyDays, modelId, u, cost);
+        if (ts >= thirtyDaysMs) addRecord(accMap.thirtyDays, modelId, u, cost);
+        if (ts >= sevenDaysMs) addRecord(accMap.sevenDays, modelId, u, cost);
+        if (ts >= todayStartMs) addRecord(accMap.today, modelId, u, cost);
+
+        const inp = u.inputTokens || u.input || 0;
+        const out = u.outputTokens || u.output || 0;
+        const cr = u.cacheReadTokens || u.cacheRead || 0;
+        const cw = u.cacheWriteTokens || u.cacheWrite || 0;
+        const tot = u.totalTokens || (inp + out + cr + cw);
+
+        if (!dailyMap[dateStr]) {
+          dailyMap[dateStr] = {
+            date: dateStr,
+            timestamp: ts,
+            inputTokens: 0,
+            cacheTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            turnCount: 0,
+            costUsd: 0,
+          };
+        }
+        dailyMap[dateStr].inputTokens += inp;
+        dailyMap[dateStr].cacheTokens += (cr + cw);
+        dailyMap[dateStr].outputTokens += out;
+        dailyMap[dateStr].totalTokens += tot;
+        dailyMap[dateStr].costUsd += cost;
+        dailyMap[dateStr].turnCount += 1;
+      }
+
+      let hasNewScannedFiles = false;
       if (existsSync(sessionsDir)) {
         try {
-          const files = readdirSync(sessionsDir).filter(
+          const files = (await readdir(sessionsDir)).filter(
             (f) => f.endsWith(".jsonl") && !f.includes(".revisions.")
           );
           for (const file of files) {
+            const filePath = join(sessionsDir, file);
             try {
-              const fileContent = readFileSync(join(sessionsDir, file), "utf8");
-              const lines = fileContent.split(/\r?\n/);
-              for (const line of lines) {
-                if (!line.trim()) continue;
+              const fileStat = await stat(filePath);
+              const cached = sessionUsageScanCache.get(file);
+              if (cached && cached.mtimeMs === fileStat.mtimeMs && cached.size === fileStat.size) {
+                for (const r of cached.records) {
+                  processExtractedItem(r.modelId, r.u, r.rawCreated);
+                }
+                continue;
+              }
+
+              if (fileStat.size === 0 || fileStat.size > 50 * 1024 * 1024) continue;
+
+              const extractedRecords: Array<{ modelId: string; u: any; rawCreated: string }> = [];
+              const content = await readFile(filePath, "utf8");
+              let startIdx = 0;
+              let scanOps = 0;
+              while ((startIdx = content.indexOf('"usage"', startIdx)) !== -1) {
+                scanOps++;
+                if (scanOps % 500 === 0) {
+                  await new Promise((resolve) => setImmediate(resolve));
+                }
+                const lineStart = content.lastIndexOf("\n", startIdx) + 1;
+                let lineEnd = content.indexOf("\n", startIdx);
+                if (lineEnd === -1) lineEnd = content.length;
+                const line = content.slice(lineStart, lineEnd);
                 try {
                   const rec = JSON.parse(line);
-                  processMessageRecord(rec);
+                  if (rec.type === "message" && rec.role === "assistant") {
+                    const u = rec.meta?.usage || rec.usage;
+                    if (u) {
+                      const modelId = rec.meta?.modelId || rec.modelId || "unknown";
+                      const rawCreated = rec.createdAt || rec.created_at || "";
+                      const item = { modelId, u, rawCreated };
+                      extractedRecords.push(item);
+                      processExtractedItem(modelId, u, rawCreated);
+                    }
+                  }
                 } catch {}
+                startIdx = lineEnd + 1;
               }
+
+              sessionUsageScanCache.set(file, {
+                mtimeMs: fileStat.mtimeMs,
+                size: fileStat.size,
+                records: extractedRecords,
+              });
+              hasNewScannedFiles = true;
+
+              // Yield after each scanned file to keep UI responsive
+              await new Promise((resolve) => setImmediate(resolve));
             } catch {}
           }
         } catch {}
       }
 
-      function formatTimeframe(id: "today" | "sevenDays" | "thirtyDays" | "allTime", labelKey: string, acc: Acc) {
+      if (hasNewScannedFiles) {
+        await saveSessionUsageScanCacheNow();
+      }
+
+      function formatTimeframe(id: "today" | "sevenDays" | "thirtyDays" | "sixtyDays" | "allTime", labelKey: string, acc: Acc) {
         const modelsList = Object.values(acc.modelStats).sort((a: any, b: any) => b.totalTokens - a.totalTokens);
         const total = acc.totalTokens || 1;
         modelsList.forEach((m: any) => {
@@ -7628,17 +8128,27 @@ function registerIpc() {
         today: formatTimeframe("today", "settings.usageToday", accMap.today),
         sevenDays: formatTimeframe("sevenDays", "settings.usage7Days", accMap.sevenDays),
         thirtyDays: formatTimeframe("thirtyDays", "settings.usage1Month", accMap.thirtyDays),
+        sixtyDays: formatTimeframe("sixtyDays", "settings.usage2Months", accMap.sixtyDays),
         allTime: formatTimeframe("allTime", "settings.usageAllTime", accMap.allTime),
       };
 
       const models = timeframes.allTime.models;
       const daily = Object.values(dailyMap).sort((a: any, b: any) => a.date.localeCompare(b.date));
 
-      return {
-        timeframes,
-        models,
-        daily,
-      };
+          const result = {
+            timeframes,
+            models,
+            daily,
+          };
+          cachedModelUsageSummary = result;
+          cachedModelUsageSummaryTimestamp = Date.now();
+          return result;
+        } finally {
+          inFlightModelUsageSummaryPromise = null;
+        }
+      })();
+
+      return inFlightModelUsageSummaryPromise;
     },
   );
 
@@ -8537,6 +9047,13 @@ function registerIpc() {
 
     let result: { accepted: boolean; turnId: string };
     try {
+      // Track provider for memory extraction one-shots.
+      sessionProviders.set(req.sessionId, {
+        ...launch.sidecarParams.provider,
+        ...(launch.sidecarParams.provider.authKind === OAUTH_AUTH_KIND
+          ? { resolveAuth: () => vendorOAuth.resolveAuth(launch.providerId) }
+          : {}),
+      } as RuntimeProviderConfig);
       result = await sidecar.call<{ accepted: boolean; turnId: string }>(
         "agent.prompt",
         {
@@ -8733,6 +9250,7 @@ function registerIpc() {
       resolution.version > 0
         ? resolution.version
         : undefined;
+    await ensureSessionProject(sessionId);
     const result = await host.call<PlanResolutionResult>("plans.resolve", {
       proposalId,
       sessionId,
@@ -9643,6 +10161,7 @@ app.whenReady().then(async () => {
   // create a window, a tray, or a child process on top of the running app.
   if (!hasSingleInstanceLock) return;
   applyDevelopmentBranding();
+  void loadSessionUsageScanCache();
   // Load the close-behavior preference before the first window exists: the
   // close handler reads `closeBehavior` synchronously, and a window created
   // while it still held the "ask" default would prompt a user who already

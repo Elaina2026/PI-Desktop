@@ -8,6 +8,7 @@ export type ToolAction =
   | "fetch"
   | "fork"
   | "delegate"
+  | "todo"
   | "use";
 
 const SUMMARY_KEYS: Record<ToolAction, string[]> = {
@@ -24,6 +25,7 @@ const SUMMARY_KEYS: Record<ToolAction, string[]> = {
   // tool (ADR 0089) carries only delegation ids, which read as bare UUIDs, so
   // it summarizes from the agent names in its own result roster instead (D268).
   delegate: ["description", "agent"],
+  todo: ["action", "title", "content", "summary"],
   use: [
     "command",
     "cmd",
@@ -114,6 +116,9 @@ export function getToolAction(toolName?: string): ToolAction {
   if (matches(["edit", "editfile", "applypatch", "patch"])) return "edit";
   if (matches(["fork", "forkagent", "forktask", "forksession"])) {
     return "fork";
+  }
+  if (matches(["todo", "todowrite", "todomanage", "pitodo"])) {
+    return "todo";
   }
   if (
     matches(["bash", "shell", "exec", "execcommand", "runcommand", "terminal"])

@@ -4,11 +4,11 @@ import { resolve } from "node:path";
 import test from "node:test";
 
 const cdpSource = readFileSync(
-  resolve("electron/main/browser-cdp.ts"),
+  new URL("../electron/main/browser-cdp.ts", import.meta.url),
   "utf8",
 );
 const hostSource = readFileSync(
-  resolve("electron/main/browser-host.ts"),
+  new URL("../electron/main/browser-host.ts", import.meta.url),
   "utf8",
 );
 

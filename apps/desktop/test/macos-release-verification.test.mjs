@@ -3,6 +3,7 @@ import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const verifyScript = new URL(
@@ -31,15 +32,15 @@ test("macOS release finalization staples the generated DMG", async (t) => {
   );
   await chmod(join(bin, "xcrun"), 0o755);
 
-  const result = spawnSync("bash", [stapleScript.pathname, release], {
+  const result = spawnSync("bash", [fileURLToPath(stapleScript), release], {
     encoding: "utf8",
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STAPLE_LOG: log },
   });
 
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.equal(
-    await readFile(log, "utf8"),
-    `stapler staple ${dmg}\n`,
+    (await readFile(log, "utf8")).replaceAll("\\", "/"),
+    `stapler staple ${dmg}\n`.replaceAll("\\", "/"),
   );
 });
 
@@ -71,7 +72,7 @@ test("macOS release verification requires a notarized Developer ID app and DMG",
     ["codesign", "spctl", "xcrun"].map((name) => chmod(join(bin, name), 0o755)),
   );
 
-  const result = spawnSync("bash", [verifyScript.pathname, release], {
+  const result = spawnSync("bash", [fileURLToPath(verifyScript), release], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -84,8 +85,8 @@ test("macOS release verification requires a notarized Developer ID app and DMG",
   assert.match(result.stdout, /Notarized Developer ID/);
   assert.match(result.stdout, /PI-Desktop-0\.14\.2-arm64\.dmg/);
   assert.equal(
-    await readFile(staplerLog, "utf8"),
-    `stapler validate ${app}\nstapler validate ${dmg}\n`,
+    (await readFile(staplerLog, "utf8")).replaceAll("\\", "/"),
+    `stapler validate ${app}\nstapler validate ${dmg}\n`.replaceAll("\\", "/"),
   );
 });
 
@@ -112,7 +113,7 @@ test("macOS release verification rejects a Developer ID app without notarization
     ["codesign", "spctl", "xcrun"].map((name) => chmod(join(bin, name), 0o755)),
   );
 
-  const result = spawnSync("bash", [verifyScript.pathname, release], {
+  const result = spawnSync("bash", [fileURLToPath(verifyScript), release], {
     encoding: "utf8",
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
   });

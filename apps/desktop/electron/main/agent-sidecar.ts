@@ -129,6 +129,8 @@ export class AgentSidecar {
   // Electron main registers this binding from the host-owned session record
   // immediately before starting a runtime turn.
   private projectInstructionRoots = new Map<string, string>();
+  private projectEnsurer?: (sessionId: string) => Promise<string | null>;
+  private planSaver?: (info: { title: string; markdown: string; workspacePath?: string }) => Promise<void>;
   private vendorAuthResolver: VendorAuthResolver | null = null;
   private trustedExtensionBridge: TrustedExtensionSidecarBridge | null = null;
   // Vendor-account rows this session was launched with. The sidecar can only
@@ -287,6 +289,14 @@ export class AgentSidecar {
 
   clearProjectInstructionRoot(sessionId: string): void {
     this.projectInstructionRoots.delete(sessionId.trim());
+  }
+
+  setProjectEnsurer(ensurer: (sessionId: string) => Promise<string | null>): void {
+    this.projectEnsurer = ensurer;
+  }
+
+  setPlanSaver(saver: (info: { title: string; markdown: string; workspacePath?: string }) => Promise<void>): void {
+    this.planSaver = saver;
   }
 
   setVendorAuthResolver(resolver: VendorAuthResolver): void {
@@ -516,7 +526,23 @@ export class AgentSidecar {
           return;
         }
         if (!this.host) throw new Error("host unavailable");
+        if (method === "plans.submit" || method === "plans.enter" || method === "plans.pending") {
+          const sid = String(params.sessionId ?? "");
+          if (sid && this.projectEnsurer) {
+            const resolved = await this.projectEnsurer(sid).catch(() => null);
+            if (resolved && !params.projectPath) {
+              params.projectPath = resolved;
+            }
+          }
+        }
         const result = await this.host.call(method, params);
+        if (method === "plans.submit" && params.markdown && this.planSaver) {
+          void this.planSaver({
+            title: String(params.title ?? ""),
+            markdown: String(params.markdown ?? ""),
+            workspacePath: String(params.projectPath ?? ""),
+          }).catch(() => undefined);
+        }
         this.writeToChild(
           JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }) + "\n",
         );

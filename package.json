@@ -14,11 +14,11 @@
     "pack": "pnpm --filter @pi-desktop/desktop run pack",
     "dist": "pnpm --filter @pi-desktop/desktop run dist",
     "pi-plugin": "pi-plugin",
-    "build": "pnpm -r --if-present build && cargo build --release -p host-core",
-    "build:js": "pnpm -r --if-present build",
+    "build": "pnpm -r --filter \"!pi-desktop\" --if-present build && cargo build --release -p host-core",
+    "build:js": "pnpm -r --filter \"!pi-desktop\" --if-present build",
     "build:host": "cargo build --release -p host-core",
-    "typecheck": "pnpm -r --if-present build && pnpm -r --if-present typecheck",
-    "test": "pnpm build:js && pnpm -r --if-present test && cargo test -p host-core",
+    "typecheck": "pnpm -r --filter \"!pi-desktop\" --filter \"!@pi-desktop/docs\" --if-present typecheck",
+    "test": "pnpm build:js && pnpm -r --filter \"!pi-desktop\" --if-present test && cargo test -p host-core",
     "test:host": "cargo test -p host-core",
     "test:e2e": "node scripts/e2e-smoke.mjs",
     "test:e2e:plan": "node scripts/e2e-plan.mjs",
@@ -32,16 +32,11 @@
     "docs:build": "pnpm --filter @pi-desktop/docs build",
     "docs:preview": "pnpm --filter @pi-desktop/docs preview",
     "docs:check": "pnpm --filter @pi-desktop/docs check:locales",
-    "lint": "pnpm -r --if-present lint",
+    "lint": "pnpm -r --filter \"!pi-desktop\" --if-present lint",
     "host:dev": "cargo run -p host-core",
-    "clean": "pnpm -r --if-present clean && cargo clean"
+    "clean": "pnpm -r --filter \"!pi-desktop\" --if-present clean && cargo clean"
   },
   "devDependencies": {
     "@pi-desktop/plugin-devkit": "workspace:*"
-  },
-  "pnpm": {
-    "patchedDependencies": {
-      "@earendil-works/pi-ai@0.85.1": "patches/@earendil-works__pi-ai@0.85.1.patch"
-    }
   }
 }

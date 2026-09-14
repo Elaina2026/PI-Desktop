@@ -244,8 +244,7 @@ describe("Antigravity stream adapter", () => {
     expect(decl.parametersJsonSchema).toBeUndefined();
     const serializedDecl = JSON.stringify(decl);
     expect(serializedDecl).not.toContain('"const"');
-    expect(decl.parameters.properties.outputMode.anyOf[0].enum).toEqual(["content"]);
-    expect(decl.parameters.properties.outputMode.anyOf[1].enum).toEqual(["filesWithMatches"]);
+    expect(decl.parameters.properties.outputMode.enum).toEqual(["content", "filesWithMatches"]);
   });
 
   it("collapses anyOf with const literals into a single enum for Claude models", async () => {

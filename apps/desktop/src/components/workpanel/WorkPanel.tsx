@@ -28,6 +28,7 @@ import {
   IconBot,
   IconDiff,
   IconFileText,
+  IconListChecks,
   IconPanel,
   IconPlug,
 } from "../icons";
@@ -49,6 +50,7 @@ const TAB_ICONS = {
   review: IconDiff,
   file: IconFileText,
   plugin: IconPlug,
+  "todo-plan": IconListChecks,
 } as const;
 
 type WorkPanelResizeState = {
@@ -741,6 +743,17 @@ export function WorkPanel({
               aria-labelledby={`work-panel-title-${activeTab.id}`}
             >
               <FilesTab />
+            </div>
+          )}
+          {!subagentPanel && activeTab?.kind === "todo-plan" && (
+            <div
+              key={activeTab.id}
+              id={`work-panel-surface-${activeTab.id}`}
+              className="work-panel-tabpane"
+              role="tabpanel"
+              aria-labelledby={`work-panel-title-${activeTab.id}`}
+            >
+              <TodoPlanTab />
             </div>
           )}
           {/* A plugin view is remounted per ref so switching between two views

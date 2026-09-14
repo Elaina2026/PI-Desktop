@@ -115,3 +115,184 @@ export function formatTokenCount(value: number): string {
   if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
   return String(value);
 }
+
+export function formatYMD(year: number, month: number, day: number): string {
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+export function parseLocalMidnightMs(dateStr: string): number {
+  if (!dateStr || typeof dateStr !== "string") return 0;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+  if (m) {
+    const year = parseInt(m[1], 10);
+    const month = parseInt(m[2], 10);
+    const day = parseInt(m[3], 10);
+    return new Date(year, month - 1, day, 0, 0, 0, 0).getTime();
+  }
+  const d = new Date(dateStr);
+  return isNaN(d.getTime()) ? 0 : d.getTime();
+}
+
+export function toLocalDateStr(dateInput?: string | number | Date): string {
+  if (!dateInput) {
+    const d = new Date();
+    return formatYMD(d.getFullYear(), d.getMonth() + 1, d.getDate());
+  }
+  if (typeof dateInput === "string") {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateInput);
+    if (m) return dateInput;
+  }
+  const d = typeof dateInput === "object" ? dateInput : new Date(dateInput);
+  if (isNaN(d.getTime())) return "";
+  return formatYMD(d.getFullYear(), d.getMonth() + 1, d.getDate());
+}
+
+export type HeatmapCalendarCell = {
+  date: string;
+  timestamp: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd?: number;
+  turnCount?: number;
+};
+
+export function mergeUsageDailyAndHistory(
+  daily: Array<{
+    date: string;
+    timestamp?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+    turnCount?: number;
+    costUsd?: number;
+  }> = [],
+  history: Array<{
+    date: string;
+    timestamp?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+    turnCount?: number;
+    costUsd?: number;
+  }> = [],
+): Map<string, HeatmapCalendarCell> {
+  const map = new Map<string, HeatmapCalendarCell>();
+
+  for (const item of daily) {
+    const key = toLocalDateStr(item.date || item.timestamp);
+    if (!key) continue;
+    map.set(key, {
+      date: key,
+      timestamp: item.timestamp ?? parseLocalMidnightMs(key),
+      inputTokens: item.inputTokens ?? 0,
+      outputTokens: item.outputTokens ?? 0,
+      totalTokens: item.totalTokens ?? ((item.inputTokens ?? 0) + (item.outputTokens ?? 0)),
+      costUsd: item.costUsd ?? 0,
+      turnCount: item.turnCount ?? 0,
+    });
+  }
+
+  for (const item of history) {
+    const key = toLocalDateStr(item.date || item.timestamp);
+    if (!key) continue;
+    const existing = map.get(key);
+    if (existing) {
+      existing.inputTokens = Math.max(existing.inputTokens, item.inputTokens ?? 0);
+      existing.outputTokens = Math.max(existing.outputTokens, item.outputTokens ?? 0);
+      existing.totalTokens = Math.max(existing.totalTokens, item.totalTokens ?? 0);
+      if (item.timestamp && !existing.timestamp) {
+        existing.timestamp = item.timestamp;
+      }
+      if (existing.costUsd === undefined && item.costUsd !== undefined) {
+        existing.costUsd = item.costUsd;
+      }
+      if (existing.turnCount === undefined && item.turnCount !== undefined) {
+        existing.turnCount = item.turnCount;
+      }
+    } else {
+      map.set(key, {
+        date: key,
+        timestamp: item.timestamp ?? parseLocalMidnightMs(key),
+        inputTokens: item.inputTokens ?? 0,
+        outputTokens: item.outputTokens ?? 0,
+        totalTokens: item.totalTokens ?? ((item.inputTokens ?? 0) + (item.outputTokens ?? 0)),
+        costUsd: item.costUsd,
+        turnCount: item.turnCount,
+      });
+    }
+  }
+
+  return map;
+}
+
+export function buildContinuousCalendarGrid(
+  mergedMap: Map<string, HeatmapCalendarCell>,
+  refDate: Date = new Date(),
+  locale: string = "en-US",
+): {
+  weeks: Array<Array<HeatmapCalendarCell>>;
+  monthLabels: Array<{ col: number; name: string; x: number }>;
+  maxTokens: number;
+} {
+  // ponytail: End fixed to local current week Sunday | Add arbitrary start/end date range controls when custom query view is introduced
+  const d = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate());
+  const dayOfWeek = d.getDay(); // 0 is Sunday, 1 is Monday, ..., 6 is Saturday
+  const monIndex = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  const daysUntilSunday = 6 - monIndex;
+
+  const endSunday = new Date(d.getFullYear(), d.getMonth(), d.getDate() + daysUntilSunday);
+  const startMonday = new Date(endSunday.getFullYear(), endSunday.getMonth(), endSunday.getDate() - 370);
+
+  const weeks: Array<Array<HeatmapCalendarCell>> = [];
+  let maxTokens = 1;
+
+  for (let w = 0; w < 53; w++) {
+    const week: Array<HeatmapCalendarCell> = [];
+    for (let day = 0; day < 7; day++) {
+      const offsetDays = w * 7 + day;
+      const cellDate = new Date(startMonday.getFullYear(), startMonday.getMonth(), startMonday.getDate() + offsetDays);
+      const dateStr = formatYMD(cellDate.getFullYear(), cellDate.getMonth() + 1, cellDate.getDate());
+      const existing = mergedMap.get(dateStr);
+      const cell: HeatmapCalendarCell = existing
+        ? { ...existing }
+        : {
+            date: dateStr,
+            timestamp: cellDate.getTime(),
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            costUsd: 0,
+            turnCount: 0,
+          };
+      if (cell.totalTokens > maxTokens) {
+        maxTokens = cell.totalTokens;
+      }
+      week.push(cell);
+    }
+    weeks.push(week);
+  }
+
+  const monthLabels: Array<{ col: number; name: string; x: number }> = [];
+  let lastM = -1;
+  weeks.forEach((week, col) => {
+    for (const cell of week) {
+      const parts = cell.date.split("-").map(Number);
+      const m = parts[1];
+      if (m !== undefined && !isNaN(m) && m !== lastM) {
+        const monthDate = new Date(parts[0], m - 1, 1);
+        let name = "";
+        try {
+          name = monthDate.toLocaleDateString(locale, { month: "short" });
+        } catch {
+          name = monthDate.toLocaleDateString("en-US", { month: "short" });
+        }
+        monthLabels.push({ col, name, x: 28 + col * 13 });
+        lastM = m;
+        break;
+      }
+    }
+  });
+
+  return { weeks, monthLabels, maxTokens };
+}

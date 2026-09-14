@@ -3164,6 +3164,7 @@ Delegation rules:
           turnId: this.turnId,
           toolCallId,
           kind,
+          ...(this.projectPath ? { projectPath: this.projectPath } : {}),
         });
         // The host is authoritative. Rebuild the live prompt and tool set only
         // after plans.enter has committed the new mode.
@@ -4247,6 +4248,7 @@ Delegation rules:
             title,
             markdown,
             question,
+            ...(this.projectPath ? { projectPath: this.projectPath } : {}),
           });
         } catch (error) {
           const errorCode =

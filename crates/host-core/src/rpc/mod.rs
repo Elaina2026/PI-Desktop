@@ -2227,7 +2227,32 @@ async fn handle_request(
             let proposal = {
                 let guard = state.lock().await;
                 let st = &*guard;
-                let workspace = resolve_plan_workspace(st, session_id)?;
+                let workspace = match resolve_plan_workspace(st, session_id) {
+                    Ok(ws) => ws,
+                    Err(e) => {
+                        let fallback = params
+                            .get("projectPath")
+                            .and_then(|v| v.as_str())
+                            .filter(|p| !p.trim().is_empty())
+                            .map(String::from)
+                            .or_else(|| st.workspace.get().map(|w| w.path));
+                        if let Some(path) = fallback {
+                            let p = PathBuf::from(&path);
+                            if !p.exists() {
+                                let _ = std::fs::create_dir_all(&p);
+                            }
+                            if let Ok(project_id) = st.db.ensure_project(&path, true) {
+                                let _ = st.db.conn().execute(
+                                    "UPDATE sessions SET project_id = ?1 WHERE id = ?2 AND project_id IS NULL",
+                                    rusqlite::params![project_id, session_id],
+                                );
+                            }
+                            p
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                };
                 st.plans
                     .submit(
                         &st.db,
@@ -2286,7 +2311,32 @@ async fn handle_request(
                 let guard = state.lock().await;
                 let st = &*guard;
                 let workspace = if action == "approve" {
-                    resolve_plan_workspace_if_available(st, session_id)?
+                    match resolve_plan_workspace_if_available(st, session_id)? {
+                        Some(ws) => Some(ws),
+                        None => {
+                            let fallback = params
+                                .get("projectPath")
+                                .and_then(|v| v.as_str())
+                                .filter(|p| !p.trim().is_empty())
+                                .map(String::from)
+                                .or_else(|| st.workspace.get().map(|w| w.path));
+                            if let Some(path) = fallback {
+                                let p = PathBuf::from(&path);
+                                if !p.exists() {
+                                    let _ = std::fs::create_dir_all(&p);
+                                }
+                                if let Ok(project_id) = st.db.ensure_project(&path, true) {
+                                    let _ = st.db.conn().execute(
+                                        "UPDATE sessions SET project_id = ?1 WHERE id = ?2 AND project_id IS NULL",
+                                        rusqlite::params![project_id, session_id],
+                                    );
+                                }
+                                Some(p)
+                            } else {
+                                None
+                            }
+                        }
+                    }
                 } else {
                     None
                 };

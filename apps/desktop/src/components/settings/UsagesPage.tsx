@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   ModelUsageSummaryItem,
@@ -10,7 +10,13 @@ import { api } from "../../lib/api";
 import { Button } from "../ui";
 import { IconActivity, IconBot, IconReview } from "../icons";
 import { useAppStore } from "../../stores/app-store";
-import { formatTokenCount } from "../../lib/model-pricing";
+import {
+  formatTokenCount,
+  mergeUsageDailyAndHistory,
+  buildContinuousCalendarGrid,
+  parseLocalMidnightMs,
+  type HeatmapCalendarCell,
+} from "../../lib/model-pricing";
 
 function cellFill(value: number, max: number): string {
   if (value <= 0) return "var(--ds-tile)";
@@ -19,9 +25,11 @@ function cellFill(value: number, max: number): string {
   return `color-mix(in oklab, var(--ds-success) ${mix}%, transparent)`;
 }
 
-function mondayIndex(dateStr: string): number {
-  const [year, month, day] = dateStr.split("-").map(Number);
-  const weekday = new Date(year, month - 1, day).getDay();
+function mondayIndex(dateStr?: string): number {
+  if (!dateStr || typeof dateStr !== "string") return 0;
+  const parts = dateStr.split("-").map(Number);
+  if (parts.length < 3 || isNaN(parts[0]) || isNaN(parts[1]) || isNaN(parts[2])) return 0;
+  const weekday = new Date(parts[0], parts[1] - 1, parts[2]).getDay();
   return weekday === 0 ? 6 : weekday - 1;
 }
 
@@ -50,15 +58,18 @@ export function UsagesPage() {
     settings?.defaultModelId ||
     "gemini-3.8-flash";
 
-  const loadData = async () => {
-    setLoading(true);
+  const inFlightRef = useRef(false);
+  const loadData = async (silent = false) => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    if (!silent) setLoading(true);
     setError(false);
     try {
       const [sumRes, histRes] = await Promise.all([
         api.getModelUsageSummary().catch(() => null),
         api.getTokenUsageHistory({ bucket: "day" }).catch(() => null),
       ]);
-      setSummary(sumRes);
+      if (sumRes) setSummary(sumRes);
       if (histRes?.items) {
         setHistoryItems(histRes.items);
       }
@@ -66,6 +77,7 @@ export function UsagesPage() {
     } catch {
       setError(true);
     } finally {
+      inFlightRef.current = false;
       setLoading(false);
     }
   };
@@ -73,10 +85,18 @@ export function UsagesPage() {
   useEffect(() => {
     void loadData();
 
-    // Auto-refresh when sessions / messages update
-    return api.onSessionsChanged(() => {
-      void loadData();
+    // Auto-refresh when sessions / messages update (debounced by 3s)
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const unsub = api.onSessionsChanged(() => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        void loadData(true);
+      }, 3000);
     });
+    return () => {
+      if (timer) clearTimeout(timer);
+      unsub();
+    };
   }, []);
 
   const timeframesMap = summary?.timeframes;
@@ -112,46 +132,21 @@ export function UsagesPage() {
     return currentModels.slice(0, 5);
   }, [currentModels]);
 
-  // Contribution graph data
-  const rawItems = historyItems.length > 0 ? historyItems : (summary?.daily ?? []);
+  // Continuous 53-week heatmap calendar data merged by local date string
+  const mergedMap = useMemo(() => {
+    return mergeUsageDailyAndHistory(summary?.daily ?? [], historyItems ?? []);
+  }, [summary?.daily, historyItems]);
 
   const { weeks, monthLabels, maxTokens } = useMemo(() => {
-    if (!rawItems.length) {
-      return { weeks: [], monthLabels: [], maxTokens: 1 };
+    return buildContinuousCalendarGrid(mergedMap, new Date(), i18n.language);
+  }, [mergedMap, i18n.language]);
+
+  const hasAnyTokens = useMemo(() => {
+    for (const v of mergedMap.values()) {
+      if ((v.totalTokens || 0) > 0) return true;
     }
-
-    const pad = mondayIndex(rawItems[0].date);
-    const padded: Array<any | null> = [...Array(pad).fill(null), ...rawItems];
-
-    const wks: Array<Array<any | null>> = [];
-    for (let i = 0; i < padded.length; i += 7) {
-      wks.push(padded.slice(i, i + 7));
-    }
-
-    const max = Math.max(...rawItems.map((i: any) => i.totalTokens), 1);
-
-    const labels: Array<{ col: number; name: string; x: number }> = [];
-    let lastM = -1;
-    wks.forEach((w, col) => {
-      const day = w.find((d) => d !== null);
-      if (day) {
-        const [y, m] = day.date.split("-").map(Number);
-        if (m !== lastM) {
-          const d = new Date(y, m - 1, 1);
-          let name = "";
-          try {
-            name = d.toLocaleDateString(i18n.language, { month: "short" });
-          } catch {
-            name = d.toLocaleDateString("en-US", { month: "short" });
-          }
-          labels.push({ col, name, x: 28 + col * 13 });
-          lastM = m;
-        }
-      }
-    });
-
-    return { weeks: wks, monthLabels: labels, maxTokens: max };
-  }, [rawItems, i18n.language]);
+    return false;
+  }, [mergedMap]);
 
   const timeframeCutoffMs = useMemo(() => {
     const now = Date.now();
@@ -176,7 +171,7 @@ export function UsagesPage() {
   ];
 
   return (
-    <div className="token-usage-page">
+    <div className="usages-page">
       {/* Top Header & Timeframe Selector Bar */}
       <div className="token-usage-toolbar">
         <div>
@@ -344,9 +339,12 @@ export function UsagesPage() {
 
         {error ? (
           <div className="py-10 text-center text-xs text-text-muted">{t("settings.usageLoadError")}</div>
-        ) : loading && !weeks.length ? (
-          <div className="py-10 text-center text-xs text-text-muted">{t("settings.usageRefresh")}</div>
-        ) : !rawItems.length || rawItems.every((item: any) => item.totalTokens === 0) ? (
+        ) : loading && !summary ? (
+          <div className="py-10 text-center text-xs text-text-muted flex items-center justify-center gap-2">
+            <IconReview className="animate-spin" size={14} />
+            <span>{t("settings.usageRefresh")}...</span>
+          </div>
+        ) : !hasAnyTokens ? (
           <div className="py-10 text-center text-xs text-text-muted">{t("settings.usageEmpty")}</div>
         ) : (
           <div className="token-usage-heatmap-layout">
@@ -381,7 +379,7 @@ export function UsagesPage() {
                       const isSelected = selectedCell?.date === item.date;
                       const inActiveWindow =
                         timeframeCutoffMs === 0 ||
-                        (item.timestamp ? item.timestamp >= timeframeCutoffMs : new Date(item.date).getTime() >= timeframeCutoffMs);
+                        (item.timestamp ? Math.max(item.timestamp, parseLocalMidnightMs(item.date)) >= timeframeCutoffMs : parseLocalMidnightMs(item.date) >= timeframeCutoffMs);
 
                       return (
                         <rect

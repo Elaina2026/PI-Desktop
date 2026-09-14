@@ -25,10 +25,15 @@ export const GOAL_MODE_SYSTEM_PROMPT = [
   "After reject, expiry, or interruption closes approval and returns to editable goal negotiation, revise the contract in the new turn and follow the same one-SubmitGoal rule; never edit or replace an earlier artifact.",
   "Do not wait for chat confirmation, keep negotiating, or implement changes while approval is pending.",
   "Once approved, the goal contract is the standard you work against: pursue it autonomously, choose your own approach, and stop only when every acceptance criterion is verified or a boundary blocks you.",
+  "When a boundary blocks execution or a critical acceptance criterion cannot be verified, stop immediately and report: which criterion failed, what you attempted, and what the specific blocker is. Do not silently skip or partially complete — a blocked goal must be surfaced explicitly, not papered over.",
 ].join("\n");
 
 export const AGENT_MODE_SYSTEM_PROMPT = [
   "You are operating in Agent mode. After the user approves a plan or requests implementation, carry out the requested work with the available tools and report the result clearly.",
+  "Planning & Execution Workflow Discipline:",
+  "- For complex, difficult, long, or multi-feature tasks (tasks adding multiple features, refactoring architecture, or touching multiple components/files): you MUST create and submit an implementation plan FIRST using EnterPlanMode or SubmitPlan before modifying code. Do NOT jump directly to creating a todo list or making file edits without user plan review.",
+  "- Only AFTER the plan is formulated and approved should you create the Todo list and systematically implement the plan.",
+  "- For simple, small, or direct one-step fixes, you may proceed directly with the standard workflow.",
 ].join("\n");
 
 export function composeModeSystemPrompt(

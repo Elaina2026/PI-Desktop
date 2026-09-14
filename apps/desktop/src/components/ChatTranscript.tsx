@@ -125,6 +125,7 @@ import {
   IconFolder,
   IconGlobe,
   IconImage,
+  IconListChecks,
   IconSheet,
   IconVideo,
   IconPencil,
@@ -333,6 +334,7 @@ const TOOL_ACTION_KEYS: Record<ToolAction, string> = {
   fetch: "chat.toolFetched",
   fork: "chat.toolUsed",
   delegate: "chat.toolDelegated",
+  todo: "chat.toolTodo",
   use: "chat.toolUsed",
 };
 
@@ -363,6 +365,7 @@ const TOOL_RUNNING_KEYS: Record<ToolAction, string> = {
   fetch: "chat.toolFetching",
   fork: "chat.toolUsing",
   delegate: "chat.toolDelegating",
+  todo: "chat.toolTodoing",
   use: "chat.toolUsing",
 };
 
@@ -386,6 +389,8 @@ function ToolActionIcon({ action }: { action: ToolAction }) {
       return <IconBranch {...props} />;
     case "delegate":
       return <IconBot {...props} />;
+    case "todo":
+      return <IconListChecks {...props} />;
     default:
       return <IconWrench {...props} />;
   }
@@ -829,6 +834,87 @@ const ToolRow = memo(function ToolRow({
           ? "is-denied"
           : "is-done";
   const caret = hasDetails ? <IconChevronRight size={12} /> : null;
+
+  const isTodo = action === "todo";
+  const todoTasks: Array<{ content: string; status: "completed" | "in_progress" | "pending" }> | null = useMemo(() => {
+    if (!isTodo) return null;
+    const args = message.toolArgs as any;
+    const payload = toolResultPayload(message) as any;
+
+    const normalizeStatus = (s: any, done?: boolean): "completed" | "in_progress" | "pending" => {
+      if (done === true) return "completed";
+      const str = String(s || "").toLowerCase().trim();
+      if (str === "completed" || str === "done" || str === "complete") return "completed";
+      if (str === "in_progress" || str === "in-progress" || str === "running" || str === "active") return "in_progress";
+      return "pending";
+    };
+
+    if (Array.isArray(args?.todos)) {
+      return args.todos.map((t: any) => ({
+        content: String(t.content || t.activeForm || t.text || ""),
+        status: normalizeStatus(t.status, t.done),
+      })).filter((t: any) => t.content);
+    }
+    if (Array.isArray(payload?.todos)) {
+      return payload.todos.map((t: any) => ({
+        content: String(t.content || t.text || ""),
+        status: normalizeStatus(t.status, t.done),
+      })).filter((t: any) => t.content);
+    }
+    if (Array.isArray(args?.items)) {
+      return args.items.map((it: any) => ({
+        content: typeof it === "string" ? it : String(it.text || it.content || ""),
+        status: normalizeStatus(it.status, it.done),
+      })).filter((t: any) => t.content);
+    }
+    if (typeof args?.text === "string" && args.text.trim()) {
+      return [{ content: args.text.trim(), status: normalizeStatus(args.status || args.action, args.action === "complete") }];
+    }
+    if (Array.isArray(payload?.items)) {
+      return payload.items.map((it: any) => ({
+        content: typeof it === "string" ? it : String(it.text || it.content || ""),
+        status: normalizeStatus(it.status, it.done),
+      })).filter((t: any) => t.content);
+    }
+    return null;
+  }, [isTodo, message]);
+
+  if (isTodo) {
+    if (!todoTasks || todoTasks.length === 0) {
+      return (
+        <div className="todo-chat-checklist" role="region" aria-label="Todo list">
+          <div className="todo-chat-item pending">
+            <span className="todo-chat-box" aria-hidden="true" />
+            <span className="todo-chat-text">{summary || rawName}</span>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="todo-chat-checklist" role="region" aria-label="Todo list">
+        {todoTasks.map((task: { content: string; status: "completed" | "in_progress" | "pending" }, idx: number) => {
+          const isDone = task.status === "completed";
+          const isRunning = task.status === "in_progress";
+
+          return (
+            <div key={idx} className={`todo-chat-item ${task.status}`}>
+              <span className="todo-chat-box" aria-hidden="true">
+                {isDone ? (
+                  <IconCheck size={11} strokeWidth={2.5} />
+                ) : isRunning ? (
+                  <span className="todo-chat-box-star">*</span>
+                ) : null}
+              </span>
+              <span className="todo-chat-text">
+                {task.content}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -1822,9 +1908,12 @@ const ActivityGroup = memo(function ActivityGroup({
     return () => window.clearInterval(id);
   }, [live]);
 
-  const renderActivityItems = () => {
+  const isTodoItem = (item: AssistantActivityItem): boolean =>
+    item.kind === "tool" && getToolAction(item.message.toolName) === "todo";
+
+  const renderActivityItems = (activityItems: AssistantActivityItem[]) => {
     let renderedTopology = false;
-    return items.map((item, itemIndex) => {
+    return activityItems.map((item, itemIndex) => {
       if (hasSubagentTopology && isDelegationActivityItem(item)) {
         if (renderedTopology) return null;
         renderedTopology = true;
@@ -1852,78 +1941,154 @@ const ActivityGroup = memo(function ActivityGroup({
           key={`thinking-${item.message.id}`}
           message={item.message}
           streaming={isActive && item.message.status === "streaming"}
-          autoOpen={live && itemIndex === items.length - 1}
+          autoOpen={live && itemIndex === activityItems.length - 1}
           onUserInteraction={claimDisclosure}
         />
       );
     });
   };
 
-  return (
-    <div
-      className={`tool-activity-group ${hasSubagentTopology ? "has-subagents" : ""} ${
-        open ? "open" : ""
-      } ${live ? "active" : ""}${
-        runtimeActivity ? ` phase-${runtimeActivity.phase}` : ""
-      }`}
-    >
-      <button
-        className="tool-activity-header"
-        aria-expanded={open}
-        aria-controls={detailsId}
-        onClick={toggleDisclosure}
-      >
-        <span className="tool-activity-icon" aria-hidden>
-          {hasSubagentTopology ? (
-            <IconWorkflow size={15} />
-          ) : (
-            <IconSparkles size={14} />
-          )}
-        </span>
-        <span className={`tool-activity-label ${live ? "running" : ""}`}>
-          {label}
-        </span>
-        {hasSubagentTopology ? (
-          <span className="subagent-activity-metrics">
-            {t("chat.subagentCount", { count: subagentSummary.total })}
-            <span aria-hidden> · </span>
-            {t("chat.subagentFinishedCount", {
-              finished: subagentSummary.finished,
-              total: subagentSummary.total,
-            })}
-            <span aria-hidden> · </span>
-            {elapsed}
-          </span>
-        ) : items.length > 1 ? (
-          <span className="tool-activity-count">
-            {t("chat.processingSteps", { count: items.length })}
-          </span>
-        ) : null}
-        <span className="tool-activity-caret" aria-hidden>
-          <IconChevronRight size={12} />
-        </span>
-      </button>
-      {tail ? (
-        <div className="tool-activity-preview" aria-hidden>
-          {tail}
-        </div>
-      ) : null}
+  const hasTodo = items.some(isTodoItem);
+
+  if (!hasTodo) {
+    return (
       <div
-        className="tool-activity-collapse"
-        aria-hidden={!open}
-        inert={!open}
+        className={`tool-activity-group ${hasSubagentTopology ? "has-subagents" : ""} ${
+          open ? "open" : ""
+        } ${live ? "active" : ""}${
+          runtimeActivity ? ` phase-${runtimeActivity.phase}` : ""
+        }`}
       >
-        <div className="tool-activity-collapse-inner">
-          <div className="tool-activity-body" id={detailsId}>
-            <DisclosureCollapseRail
-              label={t("chat.collapseDetails")}
-              onCollapse={collapseDisclosure}
-            />
-            {renderActivityItems()}
+        <button
+          className="tool-activity-header"
+          aria-expanded={open}
+          aria-controls={detailsId}
+          onClick={toggleDisclosure}
+        >
+          <span className="tool-activity-icon" aria-hidden>
+            {hasSubagentTopology ? (
+              <IconWorkflow size={15} />
+            ) : (
+              <IconSparkles size={14} />
+            )}
+          </span>
+          <span className={`tool-activity-label ${live ? "running" : ""}`}>
+            {label}
+          </span>
+          {hasSubagentTopology ? (
+            <span className="subagent-activity-metrics">
+              {t("chat.subagentCount", { count: subagentSummary.total })}
+              <span aria-hidden> · </span>
+              {t("chat.subagentFinishedCount", {
+                finished: subagentSummary.finished,
+                total: subagentSummary.total,
+              })}
+              <span aria-hidden> · </span>
+              {elapsed}
+            </span>
+          ) : items.length > 1 ? (
+            <span className="tool-activity-count">
+              {t("chat.processingSteps", { count: items.length })}
+            </span>
+          ) : null}
+          <span className="tool-activity-caret" aria-hidden>
+            <IconChevronRight size={12} />
+          </span>
+        </button>
+        {tail ? (
+          <div className="tool-activity-preview" aria-hidden>
+            {tail}
+          </div>
+        ) : null}
+        <div
+          className="tool-activity-collapse"
+          aria-hidden={!open}
+          inert={!open}
+        >
+          <div className="tool-activity-collapse-inner">
+            <div className="tool-activity-body" id={detailsId}>
+              <DisclosureCollapseRail
+                label={t("chat.collapseDetails")}
+                onCollapse={collapseDisclosure}
+              />
+              {renderActivityItems(items)}
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    );
+  }
+
+  // When todo items are present: render todo lists OUTSIDE the collapsible processed group
+  const nonTodoItems = items.filter((item) => !isTodoItem(item));
+  const todoItems = items.filter(isTodoItem);
+
+  return (
+    <>
+      {nonTodoItems.length > 0 && (
+        <div
+          className={`tool-activity-group ${hasSubagentTopology ? "has-subagents" : ""} ${
+            open ? "open" : ""
+          } ${live ? "active" : ""}${
+            runtimeActivity ? ` phase-${runtimeActivity.phase}` : ""
+          }`}
+        >
+          <button
+            className="tool-activity-header"
+            aria-expanded={open}
+            aria-controls={detailsId}
+            onClick={toggleDisclosure}
+          >
+            <span className="tool-activity-icon" aria-hidden>
+              {hasSubagentTopology ? (
+                <IconWorkflow size={15} />
+              ) : (
+                <IconSparkles size={14} />
+              )}
+            </span>
+            <span className={`tool-activity-label ${live ? "running" : ""}`}>
+              {label}
+            </span>
+            {nonTodoItems.length > 1 ? (
+              <span className="tool-activity-count">
+                {t("chat.processingSteps", { count: nonTodoItems.length })}
+              </span>
+            ) : null}
+            <span className="tool-activity-caret" aria-hidden>
+              <IconChevronRight size={12} />
+            </span>
+          </button>
+          {tail ? (
+            <div className="tool-activity-preview" aria-hidden>
+              {tail}
+            </div>
+          ) : null}
+          <div
+            className="tool-activity-collapse"
+            aria-hidden={!open}
+            inert={!open}
+          >
+            <div className="tool-activity-collapse-inner">
+              <div className="tool-activity-body" id={detailsId}>
+                <DisclosureCollapseRail
+                  label={t("chat.collapseDetails")}
+                  onCollapse={collapseDisclosure}
+                />
+                {renderActivityItems(nonTodoItems)}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {todoItems.map((item) => (
+        <ToolRow
+          key={`todo-standalone-${item.message.id}`}
+          message={item.message}
+          onUserInteraction={claimDisclosure}
+          {...(item.kind === "tool" && item.delegate ? { delegate: item.delegate } : {})}
+        />
+      ))}
+    </>
   );
 }, activityGroupPropsEqual);
 

@@ -1886,7 +1886,8 @@
   content: "";
 }
 
-.subagent-topology-node-header {
+.subagent-topology-node-header,
+.todo-card-node-header {
   display: flex;
   width: 100%;
   min-width: 0;
@@ -1899,15 +1900,18 @@
   text-align: left;
 }
 
-.subagent-topology-node-header:hover {
+.subagent-topology-node-header:hover,
+.todo-card-node-header:hover {
   background: var(--ds-bg-hover);
 }
 
-.subagent-topology-node-header:disabled {
+.subagent-topology-node-header:disabled,
+.todo-card-node-header:disabled {
   cursor: default;
 }
 
-.subagent-topology-node-header:focus-visible {
+.subagent-topology-node-header:focus-visible,
+.todo-card-node-header:focus-visible {
   outline: 2px solid color-mix(in oklab, var(--ds-accent) 58%, transparent);
   outline-offset: -2px;
 }
@@ -2747,4 +2751,91 @@
   to {
     transform: rotate(360deg);
   }
+}
+
+/*
+ * Todo chat checklist: natural chat list presentation with interactive-looking check status (ADR 0244).
+ * Completed: checkmark with strikethrough text.
+ * In-progress: asterisk inside box with active text.
+ * Pending: empty box with normal text.
+ */
+.todo-chat-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2xs, 5px);
+  margin: var(--spacing-xs, 6px) 0;
+  padding: var(--spacing-xs, 8px) var(--spacing-sm, 12px);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--ds-tile-deep, rgba(0, 0, 0, 0.12));
+  border: 1px solid var(--ds-border-subtle, rgba(255, 255, 255, 0.07));
+  font-size: var(--text-sm, 13px);
+  line-height: var(--leading-normal, 1.5);
+}
+
+.todo-chat-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-xs, 8px);
+  min-width: 0;
+}
+
+.todo-chat-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  flex-shrink: 0;
+  border-radius: var(--radius-3xs, 3px);
+  border: 1.5px solid var(--ds-text-muted, #71717a);
+  background: transparent;
+  color: transparent;
+  user-select: none;
+}
+
+.todo-chat-item.completed .todo-chat-box {
+  border-color: var(--ds-success, #10b981);
+  background: color-mix(in oklab, var(--ds-success, #10b981) 18%, transparent);
+  color: var(--ds-success, #10b981);
+}
+
+.todo-chat-item.in_progress .todo-chat-box {
+  border-color: var(--ds-accent, #3b82f6);
+  background: color-mix(in oklab, var(--ds-accent, #3b82f6) 18%, transparent);
+  color: var(--ds-accent, #3b82f6);
+}
+
+.todo-chat-box-star {
+  font-family: var(--font-mono, monospace);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  display: inline-block;
+  transform: translateY(1px);
+}
+
+.todo-chat-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+  color: var(--ds-text-secondary, #a1a1aa);
+  transition: color 0.15s ease;
+}
+
+.todo-chat-item.completed .todo-chat-text {
+  text-decoration: line-through;
+  color: var(--ds-text-muted, #71717a);
+  opacity: 0.72;
+}
+
+.todo-chat-item.in_progress .todo-chat-text {
+  text-decoration: none;
+  color: #ffffff !important;
+  font-weight: var(--font-weight-medium, 500);
+}
+
+.todo-chat-item.pending .todo-chat-text {
+  text-decoration: none;
+  color: var(--ds-text-secondary, #a1a1aa);
 }

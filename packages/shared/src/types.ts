@@ -57,6 +57,15 @@ export type PlanArtifact = {
   sizeBytes: number;
 };
 
+export type PlanFileInfo = {
+  filename: string;
+  title: string;
+  path: string;
+  relativePath: string;
+  updatedAt: number;
+  size: number;
+};
+
 export type PlanExecutionState =
   | "queued"
   | "running"
