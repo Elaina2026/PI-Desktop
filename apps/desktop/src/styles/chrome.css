@@ -586,6 +586,12 @@
   app-region: no-drag;
 }
 
+.app-work-panel-toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .app-work-panel-toggle[aria-pressed="true"] {
   background: var(--ds-tile-deep);
   color: var(--ds-text-primary);

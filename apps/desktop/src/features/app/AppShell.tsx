@@ -279,8 +279,11 @@ export function AppShell() {
             onClick={togglePresentedWorkPanel}
           >
             <span className="app-work-panel-toggle-icon" aria-hidden>
-              <IconPanel size={15} />
-              <IconPanelOpen size={15} />
+              {presentedWorkPanelOpen || workPanelOpen ? (
+                <IconPanelOpen size={15} />
+              ) : (
+                <IconPanel size={15} />
+              )}
             </span>
           </TooltipButton>
 

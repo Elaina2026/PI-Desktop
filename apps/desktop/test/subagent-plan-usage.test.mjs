@@ -43,6 +43,8 @@ test("oauth and vendor accounts handle disabled quota buckets and 401 refresh", 
     new URL("../src/components/settings/VendorAccountsSection.tsx", import.meta.url),
     "utf8",
   );
+  const mainSource = await readMainSource();
+  assert.match(mainSource, /IPC\.invoke\.providersOauthQuota/);
   assert.match(oauth, /quotaRes\.status === 401 && cred\.refresh_token/);
   assert.match(oauth, /isLocked:\s*isDisabled/);
   assert.match(vendorAccounts, /0% \(Đã khóa \/ Hết hạn mức\)/);
