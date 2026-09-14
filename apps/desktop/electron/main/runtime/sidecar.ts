@@ -355,8 +355,8 @@ export function createSidecarRuntime({
       const skill =
         loadBuiltinSkillBody(id) ??
         (await loadUserSkillBody(id, projectPath)) ??
-        loadExternalSkillBody(id, projectPath) ??
-        plugins.loadSkillBody(id);
+        plugins.loadSkillBody(id) ??
+        loadExternalSkillBody(id, projectPath);
       return {
         ok: true,
         content: `# Skill: ${skill.name} (${skill.id})\n\n${skill.body}`,

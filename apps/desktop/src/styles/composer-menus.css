@@ -46,9 +46,11 @@
 }
 
 .composer-permission-menu {
-  position: absolute;
+  position: fixed;
+  top: 0;
   left: 0;
-  bottom: calc(100% + 8px);
+  right: auto;
+  bottom: auto;
   z-index: 40;
   width: min(120px, calc(100vw - 24px));
   max-height: min(520px, calc(100vh - 92px));
@@ -59,12 +61,17 @@
   box-shadow: var(--ds-shadow-dialog);
   border: 1px solid var(--ds-border-subtle);
   color: var(--ds-text-primary);
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
 }
 
 .composer-model-menu {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 8px);
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: auto;
+  bottom: auto;
   z-index: 40;
   width: min(240px, calc(100vw - 24px));
   max-height: min(520px, calc(100vh - 92px));
@@ -75,11 +82,29 @@
   box-shadow: var(--ds-shadow-dialog);
   border: 1px solid var(--ds-border-subtle);
   color: var(--ds-text-primary);
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.composer-permission-menu.is-open,
+.composer-model-menu.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
 }
 
 .composer-model-thinking-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: auto;
+  bottom: auto;
   z-index: 60;
   width: min(300px, calc(100vw - 24px));
+}
+
+.composer-model-thinking-menu.is-open {
   animation: composer-menu-in var(--motion-duration-fast) var(--motion-ease-out);
   transform-origin: bottom right;
 }

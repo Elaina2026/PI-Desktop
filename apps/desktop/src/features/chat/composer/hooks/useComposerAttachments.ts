@@ -84,68 +84,80 @@ export function useComposerAttachments({
   const snapshotReferences = (sourceSessionId: string) =>
     draft.snapshotReferences(sourceSessionId);
 
-  const pickAndAttach = async (isPhotos = false) => {
+  const attachPickedResult = async (result: { canceled?: boolean; token?: string | null }) => {
+    if (result.canceled || !result.token || isInputBlocked) return;
+    const editor = draft.ref.current;
+    const sourceValue = editor ? readEditorValue(editor) : draft.valueRef.current;
+    const { start: selectionStart, end: selectionEnd } = editor
+      ? editorSelectionRange(editor)
+      : { start: sourceValue.length, end: sourceValue.length };
+    const sourceSessionId = activeSessionId;
+    const sourceDraftKey = draftKey;
+    const previousReferences = snapshotReferences(sourceSessionId ?? "");
+    setPasting(true);
+    try {
+      // A picker action is real input, so a home draft gets a durable owner
+      // before native paths are copied into scratch.
+      const sessionId = sourceSessionId ?? (await materializeDraftSession());
+      if (!sessionId) throw new Error("session unavailable");
+      const imported = await api.importFiles(sessionId, result.token);
+      const chips = imported.files.map((file) => {
+        const token = nextChipToken();
+        return {
+          token,
+          reference: createFileReference(file.path, file.name, sessionId, {
+            kind: file.kind,
+            mimeType: file.mimeType,
+            token,
+          }),
+        };
+      });
+      if (!chips.length) return;
+      const inserted = chips.map((chip) => chip.token).join("");
+      const nextText =
+        sourceValue.slice(0, selectionStart) +
+        inserted +
+        sourceValue.slice(selectionEnd);
+      const nextReferences = [
+        ...previousReferences.map((reference) =>
+          createFileReference(reference.path, reference.name, sessionId, reference),
+        ),
+        ...chips.map((chip) => chip.reference),
+      ];
+      writeComposerDraft(sessionId, {
+        text: nextText,
+        fileReferences: [
+          ...previousReferences,
+          ...chips.map((chip) => toDraftReference(chip.reference)),
+        ],
+      });
+      const currentSessionId = useAppStore.getState().activeSessionId;
+      if (currentSessionId === sessionId) {
+        draft.applyEditorDraft(nextText, nextReferences, selectionStart + inserted.length);
+      } else if (sourceDraftKey === HOME_DRAFT_KEY) {
+        deleteComposerDraft(HOME_DRAFT_KEY);
+      }
+      showToast(t, "chat.filesAttached", { count: chips.length }, "success");
+    } finally {
+      setPasting(false);
+    }
+  };
+
+  const pickAndAttach = async () => {
     try {
       // The picker accepts regular files; the importer classifies images from
       // MIME/extension metadata after selection.
-      const result = isPhotos ? await api.pickPhotos() : await api.pickFiles();
-      if (result.canceled || !result.token || isInputBlocked) return;
+      const result = await api.pickFiles();
+      await attachPickedResult(result);
+    } catch (error) {
+      showErrorToast(t, error);
+    }
+  };
 
-      const editor = draft.ref.current;
-      const sourceValue = editor ? readEditorValue(editor) : draft.valueRef.current;
-      const { start: selectionStart, end: selectionEnd } = editor
-        ? editorSelectionRange(editor)
-        : { start: sourceValue.length, end: sourceValue.length };
-      const sourceSessionId = activeSessionId;
-      const sourceDraftKey = draftKey;
-      const previousReferences = snapshotReferences(sourceSessionId ?? "");
-      setPasting(true);
-      try {
-        // A picker action is real input, so a home draft gets a durable owner
-        // before native paths are copied into scratch.
-        const sessionId = sourceSessionId ?? (await materializeDraftSession());
-        if (!sessionId) throw new Error("session unavailable");
-        const imported = await api.importFiles(sessionId, result.token);
-        const chips = imported.files.map((file) => {
-          const token = nextChipToken();
-          return {
-            token,
-            reference: createFileReference(file.path, file.name, sessionId, {
-              kind: file.kind,
-              mimeType: file.mimeType,
-              token,
-            }),
-          };
-        });
-        if (!chips.length) return;
-        const inserted = chips.map((chip) => chip.token).join("");
-        const nextText =
-          sourceValue.slice(0, selectionStart) +
-          inserted +
-          sourceValue.slice(selectionEnd);
-        const nextReferences = [
-          ...previousReferences.map((reference) =>
-            createFileReference(reference.path, reference.name, sessionId, reference),
-          ),
-          ...chips.map((chip) => chip.reference),
-        ];
-        writeComposerDraft(sessionId, {
-          text: nextText,
-          fileReferences: [
-            ...previousReferences,
-            ...chips.map((chip) => toDraftReference(chip.reference)),
-          ],
-        });
-        const currentSessionId = useAppStore.getState().activeSessionId;
-        if (currentSessionId === sessionId) {
-          draft.applyEditorDraft(nextText, nextReferences, selectionStart + inserted.length);
-        } else if (sourceDraftKey === HOME_DRAFT_KEY) {
-          deleteComposerDraft(HOME_DRAFT_KEY);
-        }
-        showToast(t, "chat.filesAttached", { count: chips.length }, "success");
-      } finally {
-        setPasting(false);
-      }
+  const pickAndAttachPhotos = async () => {
+    try {
+      const result = await api.pickPhotos();
+      await attachPickedResult(result);
     } catch (error) {
       showErrorToast(t, error);
     }
@@ -404,7 +416,7 @@ export function useComposerAttachments({
     setDropTargetActive,
     droppedDirectories,
     pickAndAttach,
-    pickAndAttachPhotos: () => pickAndAttach(true),
+    pickAndAttachPhotos,
     pasteClipboardFiles,
     attachDroppedItems,
     onComposerDragEnter,
