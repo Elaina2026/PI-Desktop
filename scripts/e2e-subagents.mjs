@@ -193,11 +193,43 @@ try {
     /report the first real failure/.test(read.result?.body ?? ""),
     JSON.stringify((read.result?.body ?? "").slice(0, 40)),
   );
+  const inherited = await call("agents.create", {
+    name: "Worker",
+    description: "Use the parent tool catalog.",
+    tools: ["inherit"],
+    body: "You are worker.\n",
+  });
+  const inheritedRecord = inherited.result?.subagent;
+  check(
+    "agents.create preserves tools: inherit",
+    inheritedRecord?.id === "worker" &&
+      JSON.stringify(inheritedRecord?.tools) === JSON.stringify(["inherit"]),
+    JSON.stringify(inheritedRecord),
+  );
+  const inheritedDocument = readFileSync(join(agentsDir, "worker.md"), "utf8");
+  check(
+    "the on-disk document keeps the inherit frontmatter token",
+    /^---\n/.test(inheritedDocument) && /tools: inherit\n/.test(inheritedDocument),
+    JSON.stringify(inheritedDocument.split("\n").slice(0, 5).join(" | ")),
+  );
+  const inheritedRead = await call("agents.read", { id: "worker" });
+  check(
+    "agents.read keeps the inherit token and body",
+    JSON.stringify(inheritedRead.result?.subagent?.tools) === JSON.stringify(["inherit"]) &&
+      /You are worker/.test(inheritedRead.result?.body ?? ""),
+    JSON.stringify(inheritedRead.result?.subagent),
+  );
+  const activeWithInherited = await call("agents.active", { projectPath: projectA });
+  check(
+    "tools: inherit remains active",
+    activeWithInherited.result?.subagents?.some((entry) => entry.id === "worker"),
+    activeWithInherited.result?.subagents?.map((entry) => entry.id).join(", "),
+  );
 
   // The registry allows 64 user documents; the runtime catalog remains capped
   // separately at 16 definitions when it builds the model-facing menu.
   let capError = null;
-  for (let i = 0; i < 64; i += 1) {
+  for (let i = 0; i < 63; i += 1) {
     const extra = await call("agents.create", {
       name: `filler-${i}`,
       description: "Filler.",
@@ -211,15 +243,15 @@ try {
   const full = await call("agents.list");
   check(
     "the global registry caps at 64 documents",
-    full.result?.subagents?.length === 64 && capError?.at === 63,
+    full.result?.subagents?.length === 64 && capError?.at === 62,
     `${full.result?.subagents?.length} stored, refused on filler ${capError?.at}: ${capError?.error?.message}`,
   );
 
-  for (let i = 0; i < 63; i += 1) await call("agents.remove", { id: `filler-${i}` });
+  for (let i = 0; i < 62; i += 1) await call("agents.remove", { id: `filler-${i}` });
   const trimmed = await call("agents.list");
   check(
     "remove deletes the record and its document",
-    trimmed.result?.subagents?.length === 1 && !readdirSync(agentsDir).includes("filler-0.md"),
+    trimmed.result?.subagents?.length === 2 && !readdirSync(agentsDir).includes("filler-0.md"),
     readdirSync(agentsDir).join(", "),
   );
 
@@ -237,17 +269,46 @@ try {
   const userDocuments = await readActive(projectA);
   const merged = await loadSubagentDefinitions(projectA, { userDocuments });
   const byName = new Map(merged.definitions.map((definition) => [definition.name, definition]));
+  const builtinNames = ["explorer", "code-reviewer", "test-runner", "fixer", "ui-designer"];
   check(
     "the global registry document reaches the loader as a user definition",
     byName.get("log-reader")?.source === "user",
     `source=${byName.get("log-reader")?.source}`,
   );
   check(
-    "the four builtins remain available beside it",
-    ["explorer", "code-reviewer", "test-runner", "fixer"].every(
-      (name) => byName.get(name)?.source === "builtin",
-    ),
+    "the five builtins remain available beside it",
+    merged.definitions.filter((definition) => definition.source === "builtin").length ===
+      builtinNames.length &&
+      builtinNames.every((name) => byName.get(name)?.source === "builtin"),
     [...byName.keys()].join(", "),
+  );
+  const loadedWorker = byName.get("worker");
+  check(
+    "the loader preserves inheritTools for the inherit-only document",
+    loadedWorker?.source === "user" && loadedWorker.inheritTools === true &&
+      JSON.stringify(loadedWorker.tools) === JSON.stringify([]),
+    JSON.stringify({ source: loadedWorker?.source, inheritTools: loadedWorker?.inheritTools, tools: loadedWorker?.tools }),
+  );
+  const builtinExplorer = byName.get("explorer");
+  check(
+    "builtin explorer keeps its whitelist and does not inherit",
+    builtinExplorer?.source === "builtin" &&
+      JSON.stringify(builtinExplorer.tools) === JSON.stringify(["Read", "Glob", "Grep", "Bash"]) &&
+      builtinExplorer.inheritTools !== true,
+    JSON.stringify({ source: builtinExplorer?.source, tools: builtinExplorer?.tools, inheritTools: builtinExplorer?.inheritTools }),
+  );
+  const designer = byName.get("ui-designer");
+  check(
+    "the UI designer grants preview and editing, caps turns, and inherits permissions",
+    JSON.stringify(designer?.tools) ===
+      JSON.stringify(["Read", "Glob", "Grep", "BrowserPreview", "Bash", "Edit", "Write"]) &&
+      designer?.maxTurns === 80 &&
+      (designer?.permission ?? "inherit") === "inherit",
+    JSON.stringify({
+      tools: designer?.tools,
+      maxTurns: designer?.maxTurns,
+      permission: designer?.permission ?? "inherit",
+    }),
   );
   check(
     "the declared tools survive the round trip to the loader",
@@ -282,7 +343,11 @@ try {
   });
   check(
     "a malformed user document becomes a diagnostic without losing builtins",
-    broken.diagnostics.length === 1 && broken.definitions.length === 4,
+    broken.diagnostics.length === 1 &&
+      broken.definitions.length === builtinNames.length &&
+      builtinNames.every((name) => broken.definitions.some(
+        (definition) => definition.name === name && definition.source === "builtin",
+      )),
     `${broken.diagnostics.length} diagnostic(s), ${broken.definitions.length} definitions: ${broken.diagnostics[0]}`,
   );
 } catch (error) {

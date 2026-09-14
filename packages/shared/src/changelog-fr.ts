@@ -2,6 +2,22 @@ import type { ChangelogEntry } from "./changelog.js";
 
 export const frEntries: ChangelogEntry[] = [
   {
+    "version": "0.14.8",
+    "date": "2026-09-14",
+    "highlights": [
+      "Parcourez et installez des serveurs MCP depuis le registre officiel et des sources configurées par l'utilisateur dans le marché MCP.",
+      "Parcourez et installez des skills depuis des catalogues sélectionnés et GitHub dans le marché des Skills, avec HTTPS public et limites de taille.",
+      "Livre la vue fichiers comme plugin File Manager intégré, et laisse un plugin fourni conserver une mise à jour du marketplace.",
+      "Ajoute un mode aperçu du panneau de travail, relève le plancher de la colonne de chat à 450px et priorise MainChat dans la disposition à trois colonnes.",
+      "Découvre des sessions indépendantes, envoie des messages de collaboration appartenant à l'hôte et ouvre les liens de collaboration.",
+      "Les sous-agents peuvent hériter des outils du parent, les builtins fournis apparaissent dans Réglages, un builtin UI-designer est ajouté, et l'état de création est distinct.",
+      "Oriente un tour en cours avec Alt+Entrée et développe les fichiers texte collés dans le compositeur pour les modifier.",
+      "Refonte de la création de projet : espaces de travail multi-dossiers, mémoire du projet et éditeur visuel de mémoire.",
+      "Installe les dépendances et skills déclarées des paquets pi importés derrière une frontière de sécurité de l'hôte.",
+      "Ajoute des pastilles prédéfinies pour la fenêtre de contexte et la sortie maximale, affiche les plages de lignes Read sur les pastilles d'outils et conserve le contexte récupérable après une compaction échouée.",
+    ],
+  },
+  {
     "version": "0.14.6",
     "date": "2026-09-10",
     "highlights": [
@@ -76,7 +92,6 @@ export const frEntries: ChangelogEntry[] = [
     "version": "0.13.11",
     "date": "2026-09-07",
     "highlights": [
-      "Activez le plug-in Advisor fourni pour qu'un deuxième modèle examine la conversation en cours.",
       "Laissez les plugins répertorier les modèles, lire le contexte de la session en cours et demander des achèvements appartenant à l'hôte sans recevoir d'informations d'identification."
     ]
   },

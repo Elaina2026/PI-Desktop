@@ -40,6 +40,7 @@
 - 正在运行的 PI-Desktop 版本；
 - 插件的空文件夹；和
 - 文本编辑器。
+- 若要导入带 npm 依赖的 pi 扩展目录，`PATH` 中必须有系统 `npm` 可执行文件。发布版不附带独立 Node/npm；缺少 npm 时，PI-Desktop 会报告警告，导入扩展的依赖无法加载。
 
 对于存储库 CLI 路径，您还需要 Node.js 22.19 或更高版本、pnpm 10 或
 较新，并签出此存储库。 devkit 和 SDK 目前已
@@ -397,7 +398,8 @@ root 本身。`net.fetch` 接受 HTTP(S)，并且只能到达 `manifest.net.doma
 因为 Electron 没有公开跨平台只读操作系统权限 API；
 `unknown` 表示平台尚未上报结果，且
 `unsupported` 表示桌面通知不可用。原生插件
-通知不会添加到 PI-Desktop 的持久任务通知收件箱中。
+通知不会添加到 PI-Desktop 的持久任务通知收件箱中。点击已交付的通知会恢复并聚焦主窗口，
+但不会激活会话。
 
 面板桥还暴露 `ui.showToast`、`ui.closePanel`、
 `plugin.getSettings` 和 `workspace.get`。主机自己没有实现的通道会被转发到
@@ -632,9 +634,14 @@ export default function (pi) {
   `ctx.ui.input` / `select` / `confirm` 打开原生对话框；`ui.notify` 是 toast。
 - **受支持的成员**见规格 07-plugins/16 §5。不支持的成员（`setWidget`、
   `registerMessageRenderer`、`navigateTree` 及其他仅终端可用的界面）是空操作，在插件行
-  的详情里报告，绝不抛出。
 - **已有的 pi 扩展**无需修改：插件页 → 溢出菜单 →“导入 pi 扩展”会把文件或目录包成
-  生成的插件。
+  生成的插件。若目录声明了生产或可选依赖，PI-Desktop 会先运行
+  `npm install --package-lock-only --omit=dev --legacy-peer-deps --no-audit --no-fund
+  --ignore-scripts`，校验生成的 registry-only lockfile，再以相同安全参数运行 `npm ci`。
+  生产、可选、开发和 peer 字段中的直接依赖 spec 都会校验，git 解析会被禁用，绝不运行
+  第三方生命周期脚本。需要构建脚本的原生模块会以诊断形式加载失败——在插件目录内用
+  Electron 头重建（`npx @electron/rebuild -v <electron 版本>`）即可修复。安装失败会清理
+  部分依赖并显示警告 toast，不会阻塞导入；只有扩展实际加载失败时插件行才显示 load error。
 
 ## 7.权限设计
 

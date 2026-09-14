@@ -46,6 +46,7 @@ crates/host-core (tool execution + permissions)
 ```ts
 interface AgentRuntime {
  prompt(input: PromptInput): Promise<{ turnId: string }>
+ steer(input: RuntimePrompt, expectedTurnId: string, message: UiMessage): { accepted: boolean; turnId: string }
  requestGracefulStop(): { requested: boolean }
  abort(turnId?: string): Promise<void>
  getStatus(): RuntimeStatus
@@ -60,6 +61,29 @@ tool batch have completed, and emits a normal `agent_end` before another model
 request. It does not cancel an active provider stream or running tool. An idle
 runtime returns `{ requested: false }`; immediate `abort()` remains the
 separate cancellation path.
+
+### 4.0 Active-turn steering
+
+`steer` validates the current turn identity before changing any state, then
+queues user input through pi-agent-core's native steering queue in `all` mode.
+The current provider request and any started tool batch finish first; all
+accepted input is included at the next model-request boundary within the same
+durable turn. A live provider request is not rewritten or aborted. Main owns
+attachment validation and transcript persistence as for ordinary prompts.
+
+Queued input retains its renderer message id when pi consumes it, including
+when another input arrives before the initial user message has been consumed.
+An admission after pi's last queue poll suppresses the terminal event and
+continues once pi has released the run, with the same turn identity and without
+a second public `agent_start`. Existing context/provider recovery takes
+precedence over that continuation. Steering also wakes a parent that is idle
+waiting for background delegates; it does not cancel those delegates.
+
+Abort, graceful stop, fatal errors and terminal settlement close admission.
+Accepted but unconsumed input remains transcript/context history and is removed
+from pi's steering queue so it cannot execute independently on a later turn.
+An ordinary follow-up stays in the separate Host-owned FIFO until durable turn
+finalization. A steering failure must not terminate the active run.
 
 ### 4.1 Session title summarization
 
@@ -535,6 +559,10 @@ criterion-by-criterion report of what was met and the evidence observed.
 - Pi `thinking` blocks become `UiMessage.thinking` and
   `message_update.deltaThinking`. They never append to `content` or
   `deltaText`.
+- Append-only `message_update` events set `stream: \"delta\"` and carry only the
+  new chunk. The runtime keeps the full `currentAssistant` in memory, coalesces
+  deltas every 16ms, and flushes before tool/terminal/abort/error/retry
+  boundaries. `message_end` is the authoritative snapshot (D412).
 - Restored assistant history reconstructs separate text and thinking blocks
   before the next turn.
 - Restored history also reconstructs tool call/result pairs from persisted
@@ -571,9 +599,9 @@ criterion-by-criterion report of what was met and the evidence observed.
 The session Agent can hand separable pieces of work to delegates that run in
 their own context, in the background, and report back on demand.
 
-**Catalog.** Definitions are Markdown documents from two sources: the four
+**Catalog.** Definitions are Markdown documents from two sources: the five
 builtins shipped inline in `agent-runtime` (`explorer`, `code-reviewer`,
-`test-runner`, `fixer`) and the global user documents under
+`test-runner`, `fixer`, `ui-designer`) and the global user documents under
 `~/.agents/subagents/*.md`. There is no project-level subagent directory and
 `.pi/agents` is not scanned for capabilities. User documents are filtered by
 the app-local enabled state before they reach the loader. Electron main loads
@@ -585,19 +613,21 @@ the launch.
 
 Frontmatter adds `permission: inherit | ask | accept-edits | auto` (default
 `inherit`), which controls the scope the delegate's tool calls resolve under
-instead of the session mode (§5f.1). `idle-timeout` and `max-duration` still
-parse for compatibility but no longer kill a run (D328). Only builtin and user definitions may
-declare a permission scope —
+instead of the session mode (§5f.1). `tools: inherit` (alone or with assignable
+extras) opts a definition into the parent session's live tool catalog minus a
+deny list (ADR 0246 / D415); builtins stay on today's whitelist. `idle-timeout`
+and `max-duration` still parse for compatibility but no longer kill a run
+(D328). Only builtin and user definitions may declare a permission scope —
 both express a choice the user already made, whereas a project definition
 arrives with the repository, so honoring its scope would let cloned code grant
 itself `auto`. A project document that declares a non-`inherit` scope keeps
 loading with a warning and its delegates run under the session's effective
 mode; a user who wants the scope copies the document into their own agents
-directory. Builtins, including `fixer`, do not override the parent session by
-default, so the one write-capable builtin follows `auto` completely (including
-explicit external paths) while `ask` and `accept-edits` retain their normal
-approval behavior. An explicit builtin or user scope remains an intentional
-override.
+directory. Builtins, including the write-capable `fixer` and `ui-designer`, do
+not override the parent session by default: they follow `auto` completely
+(including explicit external paths) while `ask` and `accept-edits` retain
+their normal approval behavior. An explicit builtin or user scope remains an
+intentional override.
 
 **Tools (ADR 0089).** Delegation is a four-tool lifecycle, built only in Agent
 mode and only when the catalog is non-empty, and all four belong to the Agent
@@ -616,10 +646,22 @@ core set rather than the on-demand catalog of §7.1:
   session model. The parent agent sees a model summary in the system prompt
   listing all models marked `availableForSubagents` in provider settings. If
   the delegation catalog is empty, the prompt tells the model to omit `model`
-  and inherit the session model; an explicit key that exactly names the current
-  session provider/model is treated as the same inheritance case. Other
-  explicit model keys must be configured and enabled for delegation. When a
-  model key is not pre-resolved, the runtime asks Electron main to resolve it
+  and use the definition pin, or inherit the session model when unpinned; an
+  explicit key that exactly names the current session provider/model is treated as the same inheritance case. Other
+  explicit model keys must be configured and enabled for delegation. Electron
+  sends `subagentModelKeys` separately from `subagentProviders`: the latter may
+  include definition-only pins, while only the former authorizes cached
+  overrides and the model summary. Missing keys default to an empty list;
+  successful on-demand resolution is cached separately from launch opt-in and
+  does not rewrite definition pins or runtime reuse matching. On-demand
+  provider matching uses the same unique id/vendor/name rule as pin resolution.
+  A changed opt-in list retires the idle runtime on the next launch. Pins remain usable
+  by their own definitions when `model` is omitted or when `Task.model` repeats
+  that definition's own pin key, even without an opt-in.
+  The Task definition catalog displays each default model and treats omitting
+  or repeating that key as keeping the default. See
+  [ADR subagent-model-opt-in](../../adr/subagent-model-opt-in.md).
+  When a model key is not pre-resolved, the runtime asks Electron main to resolve it
   on-demand via the `provider.resolveSubagentModel` RPC. The started `Task`
   result details record the effective `modelId` and resolved `thinkingLevel`
   used for that run. The level is resolved after inheritance and target-model
@@ -645,6 +687,20 @@ core set rather than the on-demand catalog of §7.1:
   waits for each abort to settle, then persists `status: "stopped"` with
   `completedAt` on `details.stopped[]`. Stopped delegations read as `stopped`.
 
+**Live settlement.** When a delegate settles, the runtime refreshes its original
+`Task` transcript row with the terminal delegation summary (`status`,
+`completedAt`, counters, and failure details when present), using the existing
+full `message_end` snapshot. This does not depend on the parent calling
+`TaskWait` / `TaskList` / `TaskStop` or on other delegates finishing. The
+snapshot retains the Task call's identity, arguments, tool timing, and token
+usage; it does not execute the tool again or add usage to the parent turn.
+The initial Task result is emitted first even if the delegate settles before
+that result arrives. Electron persists the refreshed row through the normal
+message outbox so session switching and history reload preserve the outcome.
+An outbox write acknowledges only the snapshot sent to the host; a newer
+snapshot replacing the same message ID during that write remains queued.
+No new event type or storage schema is required.
+
 **Delegate loop.** A `SubagentRun` is a second pi `Agent` in the same sidecar
 process with the definition's system prompt, its (possibly pinned)
 provider/model, its declared tools, and the same host connection. A pinned or
@@ -654,7 +710,7 @@ the baseline only. It runs under
 the same bounded provider retry policy as the parent. `maxTurns` is an optional
 per-definition backstop (maximum 80); omitted, `none`, or `0` means unlimited
 turns. The built-ins declare one sized to their job — `explorer` 60,
-`code-reviewer` 50, `test-runner` 40, `fixer` 80 — so a delegate that loops
+`code-reviewer` 50, `test-runner` 40, `fixer` 80, `ui-designer` 80 — so a delegate that loops
 without converging ends as `truncated` with its partial report instead of
 running until the duration limit. `maxTokens` is an optional per-definition
 output cap (maximum 200000); omitted, `none`, or `0` follows the model's
@@ -664,7 +720,12 @@ so the adapter's derived `max_tokens` / `max_completion_tokens` /
 the session's requests keep the model binding. A value past the ceiling is a
 typo and is clamped rather than forwarded to the provider.
 The built-in `explorer` declares `Read`,
-`Glob`, `Grep`, and `Bash`, while `code-reviewer` remains read-only. Its statuses are `completed`,
+`Glob`, `Grep`, and `Bash`, while `code-reviewer` remains read-only;
+`fixer` and `ui-designer` write inside the workspace, and `ui-designer` adds
+`BrowserPreview` so it can open and inspect its rendered result before reporting.
+`BrowserPreview` only opens a live-reloading workspace HTML page; responsive,
+keyboard-focus, and reduced-motion checks require project-provided browser
+tests or other tooling. Its statuses are `completed`,
 `truncated`, `failed`, `aborted`, `timed_out` and the registry-only `stopped`;
 the terminal ones surface through `TaskWait`, whose text is
 the report (bounded to `MAX_SUBAGENT_REPORT_CHARS`, 12k) and whose details
@@ -751,12 +812,12 @@ delegate may call), `04-data-storage.md` §4.7a (persisted attribution),
 `04-ux/03-permission-ux.md` §6a (more than one pending request) and
 `04-ux/08-component-spec.md` §9.9 (how a delegation reads).
 
-### 5f.2 No sibling or parent-to-parent channel (D326, ADR 0165)
+### 5f.2 No in-process sibling or parent-to-parent Task channel (D326, ADR 0165)
 
-Concurrent delegates do not message each other, and parent agents do not
-message other conversations. The in-process `Peer` mailbox (ADR 0138 / ADR
-0140) and the host-core A2A broker (ADR 0147 / ADR 0162 / ADR 0164) are
-withdrawn.
+Concurrent `Task` delegates do not message each other, and the parent Task
+runtime does not address other conversations. The in-process `Peer` mailbox
+(ADR 0138 / ADR 0140) and the host-core A2A broker (ADR 0147 / ADR 0162 /
+ADR 0164) are withdrawn.
 
 Coordination stays on the existing delegation contract: the parent writes
 independent briefs, starts `Task`s, and collects self-contained reports through
@@ -764,6 +825,24 @@ independent briefs, starts `Task`s, and collects self-contained reports through
 new `Task` whose brief includes earlier reports. `A2A` and `Peer` are not
 assignable tools; a definition that names either is treated as an unknown
 tool name and dropped with a parse warning.
+
+### 5f.3 Plugin-mediated session collaboration (D409, ADR 0239)
+
+The official `pi.session-orchestrator` plugin is the reviewed exception for
+durable cross-session communication. Its `desktop.control` calls are composed
+outside the `Task` runtime and are admitted only from the plugin's active
+Agent tool invocation. Host-core owns the source/target Session IDs, durable
+delivery ledger, permission ceiling, actual target turn, completion callback,
+cancellation, restart fence, and transcript provenance. Existing sessions keep
+their own project, model, context, and permission configuration; a newly
+spawned worker inherits the initiating session's project and permission
+ceiling.
+
+Session messages are framed as agent-provided task data and never become new
+human authorization. A completion callback is durable and at-most-once, and
+does not automatically trigger another callback. This path does not restore
+the withdrawn `A2A` or `Peer` tools and does not change `Task`, `TaskWait`,
+`TaskList`, or `TaskStop` semantics.
 
 ## 6. Providers & models
 
@@ -889,6 +968,9 @@ registered schema into every provider request. Each new user prompt starts with
 the mode's core set:
 
 - Agent: `Read`, `Bash`, `Edit`, and `Write` (matching pi's coding-agent core)
+- Agent: `Skill` whenever the skill catalog is non-empty (D404, ADR 0230) — the
+  `# Skills` section and a user-typed `/skill-id` both ask the model to call
+  it, and a tool that is missing from the schema cannot be called at all
 - Agent: `Task`, `TaskWait`, `TaskList`, and `TaskStop` as well, whenever the
   subagent catalog is non-empty (§5f) — a capability the model has to go
   looking for is one it will not use, and the delegation lifecycle is worth
@@ -896,7 +978,7 @@ the mode's core set:
 - Plan: `Read`, `Glob`, `Grep`, `BrowserPreview`, and `Bash`
 - both modes: `ToolSearch` when at least one deferred capability exists
 
-In Agent mode, `Glob` and `Grep` join `BrowserPreview`, plugin tools, `Skill`,
+In Agent mode, `Glob` and `Grep` join `BrowserPreview`, plugin tools,
 and plugin-development helpers in the deferred set. Both contract modes keep
 their read/inspection core available, while the kind's submit tool
 (`SubmitPlan` or `SubmitGoal`) is exposed only during the planning state, and
@@ -965,22 +1047,25 @@ boundary blocks it.
 
 A delegate's system prompt is composed in the sidecar from three parts, in this
 order: the delegation framing, the definition's Markdown body, and the tool
-guidance its declared tools earn. The body sits ahead of the workspace guidance
+guidance its resolved tools earn. The body sits ahead of the workspace guidance
 so a project's own instructions still have the last word.
 
 The framing states the shape of the delegate's situation, which is not
 inferable from the body: it is one delegated task, the delegate cannot see the
 user, ask a question, or delegate further, it has exactly the listed tools, and
-its final message is the only thing the main agent receives. A read-only
+its final message is the only thing the main agent receives. Listed names are
+the spawn-time resolved set when `tools: inherit` is on. A read-only
 definition is additionally told never to report an edit it could not have made;
 a write-capable one is told to touch only the files the task is about.
+Mutation framing uses the resolved set, not the raw frontmatter extras.
 
 Guidance blocks are the same text the session prompt uses, included only when
-the definition declares the matching tool: search/read scoping for
+the resolved tools include the matching name: search/read scoping for
 Read/Grep/Glob, edit discipline for Edit/Write, the command shell contract for
-Bash, and the scratch-directory rule when the session has a scratch directory
-and the delegate can write. The project instruction chain (§7.3) is appended
-last, so a delegate follows the same project rules as its session.
+Bash, the `# Skills` catalog when `Skill` is present, and the scratch-directory
+rule when the session has a scratch directory and the delegate can write. The
+project instruction chain (§7.3) is appended last, so a delegate follows the
+same project rules as its session.
 
 ### 7.3 Project instruction chain
 

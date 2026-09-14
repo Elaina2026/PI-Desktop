@@ -16,8 +16,10 @@
   min-height: 0;
   z-index: 20;
   /* The dock is a step lighter than the conversation pane, and that tone
-     change is its only edge (D297): no divider against the chat column. */
-  background: var(--ds-bg-secondary);
+     change is its only edge (D297): no divider against the chat column.
+     `--ds-bg-dock` is a token, not a literal, so a contributed theme can move
+     the whole column (D419). */
+  background: var(--ds-bg-dock);
   /*
    * Animate the allocated dock width as well as its small compositor slide.
    * Transform-only feedback used to leave the flex item at full width before
@@ -67,11 +69,6 @@
     width: 0;
     transform: translateX(8px);
   }
-}
-
-:root[data-theme="light"] .work-panel {
-  /* Quiet inset paper so the dock reads as a tool column on white chat. */
-  background: #fafafa;
 }
 
 .work-panel-main {
@@ -129,11 +126,32 @@
   height: var(--ds-toolbar-height);
   flex: 0 0 auto;
   align-items: center;
-  gap: 8px;
-  /* 12px toggle inset + 28px button + 6px gap keeps the resource switcher
-     clear of the viewport-fixed panel toggle. */
-  padding: 0 46px 0 12px;
+  gap: 4px;
+  background: var(--ds-bg-dock-raised);
+  /* Keep the fixed work-panel toggle in its own hit-target lane. The reserve
+     is shared with the toggle's size/inset tokens and leaves a real gap. */
+  padding: 0
+    calc(
+      var(--ds-work-panel-toggle-size) + var(--ds-work-panel-toggle-inset) +
+        var(--ds-work-panel-toggle-gap)
+    )
+    0 12px;
   -webkit-app-region: drag;
+}
+
+/* In preview mode the panel can move to the window's left edge when the sidebar
+   is collapsed. Keep its first tab clear of both macOS's hiddenInset traffic
+   lights and the preview row's sidebar/new-task action group. */
+:root[data-platform="darwin"]:not([data-fullscreen="true"])
+  .app-shell.work-panel-maximized.sidebar-collapsed
+  .work-panel-header {
+  padding-left: calc(76px + var(--ds-preview-action-lane-width));
+}
+
+:root[data-platform="darwin"][data-fullscreen="true"]
+  .app-shell.work-panel-maximized.sidebar-collapsed
+  .work-panel-header {
+  padding-left: calc(8px + var(--ds-preview-action-lane-width));
 }
 
 :root[data-platform="win32"] .work-panel-header,
@@ -141,216 +159,128 @@
   /* End this header's box — and therefore its native drag rectangle — before
      the viewport-fixed control band. The drag rectangle is the border box, so
      padding the content clear of the band still leaves that rectangle across
-     the controls, and Electron swallows their hover and click. The base 46px
-     right padding keeps the same content inset once the box stops early. */
+     the controls, and Electron swallows their hover and click. The shared
+     right-side control lane keeps the same content inset once the box stops
+     early. */
   margin-right: var(--ds-window-controls-width);
 }
 
-/* The header follows a "context on the left, shell actions on the right"
-   model. Resource close actions live in the context menu, so this row does not
-   put a second X beside Windows' native close control. The gap between context
-   and the optional subagent back action stays a window-drag region. */
-.work-panel-actions {
+/* The header is a clipped tab strip plus a fixed add trigger. On Windows/Linux
+   the shared control lane and 120px margin reserve the toggle and native
+   controls without allowing the strip to claim either hit target. */
+.work-panel-tab-strip-wrap {
   display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  overflow: hidden;
+}
+
+.work-panel-tab-strip {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  height: 32px;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scroll-padding-inline: 2px;
+}
+
+.work-panel-tab-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.work-panel-tab {
+  display: inline-flex;
+  min-width: 92px;
+  max-width: 180px;
+  height: 28px;
   flex: 0 0 auto;
   align-items: center;
-  gap: 4px;
-  margin-left: auto;
-  padding-left: 8px;
-}
-
-:root[data-theme="light"] .work-panel-header {
-  background: #ffffff;
-}
-
-/* The panel header exposes one unified context menu (left trigger). It lists
-   the four tools in a fixed order — each carrying its own open state and close
-   control — and, only when the transcript opened extra resources, a second
-   section for those. No entry is ever listed twice. */
-.work-panel-context {
-  position: relative;
-  display: flex;
-  flex: 0 1 auto;
-  min-width: 0;
-  align-items: center;
-}
-
-.work-panel-context-menu {
-  position: fixed;
-  top: 0;
-  left: 0;
-  z-index: 60;
-  width: max-content;
-  min-width: 200px;
-  max-width: calc(100vw - 16px);
-  max-height: min(420px, calc(100vh - 72px));
-  overflow-y: auto;
-  padding-bottom: 5px;
-  border: 1px solid var(--ds-border-default);
-  border-radius: var(--radius-md);
-  background: var(--ds-bg-elevated-opaque);
-  box-shadow: var(--ds-shadow-dialog);
-  -webkit-app-region: no-drag;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-4px);
-  visibility: hidden;
-}
-
-.work-panel-context-menu.is-open {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0);
-  visibility: visible;
-  animation: work-panel-menu-in var(--motion-duration-fast) var(--motion-ease-out)
-    both;
-}
-
-@keyframes work-panel-menu-in {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .work-panel-context-menu.is-open {
-    animation: none;
-    transform: none;
-  }
-}
-
-/* Menu sections are separated by space, not a rule (D297). */
-.work-panel-context-divider {
-  height: 6px;
-}
-
-.work-panel-menu-group {
-  padding: 0 5px 5px;
-}
-
-.work-panel-menu-title {
-  padding: 9px 5px 6px;
-  color: var(--ds-text-muted);
-  font-size: var(--text-xs);
-  font-weight: var(--font-weight-semibold);
-  line-height: var(--leading-compact);
-  letter-spacing: var(--tracking-normal);
-}
-
-/* One row per entry: the label selects it, the trailing slot closes it. The
-   slot is always reserved so labels and open dots never shift between rows. */
-.work-panel-menu-row {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  align-items: center;
   border-radius: var(--radius-sm);
-  color: var(--ds-text-secondary);
-  transition: background var(--motion-duration-fast) var(--motion-ease-out), color var(--motion-duration-fast) var(--motion-ease-out);
+  color: var(--ds-text-muted);
+  transition:
+    background var(--motion-duration-fast) var(--motion-ease-out),
+    color var(--motion-duration-fast) var(--motion-ease-out);
 }
 
-.work-panel-menu-row:hover,
-.work-panel-menu-row:focus-within,
-.work-panel-menu-row.active {
-  color: var(--ds-text-primary);
+.work-panel-tab:hover,
+.work-panel-tab.active {
   background: var(--ds-bg-hover);
+  color: var(--ds-text-primary);
 }
 
-/* The row is rounded, so an inset box-shadow would bend the marker into a
-   crescent; a pseudo-element keeps it a straight 2px bar. */
-.work-panel-menu-row.active::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 0;
-  width: 2px;
-  height: 16px;
-  border-radius: var(--radius-full);
-  background: var(--ds-text-primary);
-  transform: translateY(-50%);
-}
-
-.work-panel-menu-item {
-  display: flex;
+.work-panel-tab-button {
+  display: inline-flex;
   min-width: 0;
-  height: 32px;
-  flex: 1;
+  height: 28px;
+  flex: 1 1 auto;
   align-items: center;
-  gap: 8px;
-  padding: 0 4px 0 8px;
+  gap: 6px;
+  padding: 0 2px 0 10px;
+  color: inherit;
   text-align: left;
 }
 
-.work-panel-menu-item > svg {
+.work-panel-tab-button > svg {
   flex: 0 0 auto;
 }
 
-/* The label is the only element allowed to absorb slack; the open dot next to
-   it must keep its own 4px box, so target the label by class, not by element. */
-.work-panel-menu-label {
-  flex: 1 1 auto;
+.work-panel-tab-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-md);
+  font-size: var(--text-sm-plus);
+  font-weight: var(--font-weight-medium);
 }
 
-/* Rows take real focus (ARIA menu pattern), so keyboard navigation needs its
-   own ring inside the row fill. */
-.work-panel-menu-item:focus-visible {
+.work-panel-tab-button:focus-visible,
+.work-panel-tab-close:focus-visible {
   outline: 2px solid var(--ds-focus);
   outline-offset: -2px;
   border-radius: var(--radius-sm);
 }
 
-/* An open-but-inactive tool keeps a neutral dot; the active row is carried by
-   fill plus the 2px edge marker, never by color alone. */
-.work-panel-open-dot {
-  width: 4px;
-  height: 4px;
-  flex: 0 0 auto;
-  border-radius: var(--radius-full);
-  background: var(--ds-text-secondary);
-}
-
-.work-panel-menu-slot {
+.work-panel-tab-close {
   display: inline-flex;
-  width: 26px;
-  height: 26px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  margin-right: 3px;
-}
-
-.work-panel-menu-close {
-  display: inline-flex;
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-sm);
   color: var(--ds-text-muted);
-  transition: background var(--motion-duration-fast) var(--motion-ease-out), color var(--motion-duration-fast) var(--motion-ease-out);
+  opacity: 0;
+  transition:
+    background var(--motion-duration-fast) var(--motion-ease-out),
+    color var(--motion-duration-fast) var(--motion-ease-out),
+    opacity var(--motion-duration-fast) var(--motion-ease-out);
 }
 
-/* Menu rows are denser than the current-panel header, so their close buttons
-   narrow the shared 32px target above. */
-.work-panel-menu-close {
-  width: 26px;
-  height: 26px;
+.work-panel-tab:hover .work-panel-tab-close,
+.work-panel-tab.active .work-panel-tab-close,
+.work-panel-tab-close:focus-visible {
+  opacity: 1;
 }
 
-.work-panel-menu-close:hover {
-  color: var(--ds-text-primary);
+.work-panel-tab-close:hover {
   background: var(--ds-bg-active);
+  color: var(--ds-text-primary);
+}
+
+.work-panel-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  margin-right: 8px;
+  padding-right: 8px;
+  border-right: 1px solid var(--ds-border-subtle);
 }
 
 .work-panel-subagent-back {
@@ -372,52 +302,70 @@
   color: var(--ds-text-primary);
 }
 
-.work-panel-switcher-trigger {
-  display: flex;
-  width: min(100%, 280px);
-  min-width: 0;
-  height: 32px;
+.work-panel-new-tab {
+  display: inline-flex;
+  width: var(--ds-work-panel-toggle-size);
+  height: var(--ds-work-panel-toggle-size);
+  flex: 0 0 auto;
   align-items: center;
-  gap: 7px;
-  padding: 0 7px;
-  border-radius: var(--radius-sm);
+  justify-content: center;
+  border-radius: var(--radius-md);
   background: var(--ds-tile);
-  color: var(--ds-text-primary);
-  text-align: left;
+  color: var(--ds-text-secondary);
   transition:
     background var(--motion-duration-fast) var(--motion-ease-out),
     color var(--motion-duration-fast) var(--motion-ease-out);
 }
 
-.work-panel-switcher-trigger:hover,
-.work-panel-switcher-trigger[aria-expanded="true"] {
-  background: var(--ds-tile-hover);
+/* Preview mode: the panel takes MainChat's width as well, so the divider has no
+   second column to trade width with and the dock fills its flex row. */
+.work-panel.is-maximized {
+  flex: 1 1 auto;
+  width: auto;
+  max-width: none;
 }
 
-.work-panel-current-icon {
+.work-panel.is-maximized .work-panel-resize {
+  cursor: default;
+}
+
+.work-panel-maximize {
   display: inline-flex;
+  width: var(--ds-work-panel-toggle-size);
+  height: var(--ds-work-panel-toggle-size);
   flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--ds-tile);
+  color: var(--ds-text-secondary);
+  transition:
+    background var(--motion-duration-fast) var(--motion-ease-out),
+    color var(--motion-duration-fast) var(--motion-ease-out);
+}
+
+.work-panel-new-tab:hover,
+.work-panel-new-tab:focus-visible {
+  background: var(--ds-bg-active);
+  color: var(--ds-text-primary);
+}
+
+.work-panel-subagent-heading {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
   color: var(--ds-text-secondary);
 }
 
-.work-panel-current-label {
+.work-panel-subagent-heading span {
   min-width: 0;
-  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--text-md);
   font-weight: var(--font-weight-medium);
-}
-
-.work-panel-switcher-chevron {
-  flex: 0 0 auto;
-  color: var(--ds-text-muted);
-  transition: transform var(--motion-duration-fast) var(--motion-ease-out);
-}
-
-.work-panel-switcher-chevron.open {
-  transform: rotate(180deg);
 }
 
 .work-panel-body {
@@ -497,11 +445,7 @@
   align-items: center;
   gap: 10px;
   padding: 16px 16px 12px;
-  background: var(--ds-bg-secondary);
-}
-
-:root[data-theme="light"] .work-panel .subagent-detail-hero {
-  background: #fafafa;
+  background: var(--ds-bg-dock);
 }
 
 .subagent-detail-heading {
@@ -531,13 +475,9 @@
   bottom: -1px;
   width: 10px;
   height: 10px;
-  border: 2px solid var(--ds-bg-secondary);
+  border: 2px solid var(--ds-bg-dock);
   border-radius: var(--radius-round);
   background: var(--ds-text-muted);
-}
-
-:root[data-theme="light"] .work-panel .subagent-detail-status {
-  border-color: #fafafa;
 }
 
 .subagent-detail-status.outcome-completed {
@@ -566,7 +506,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .subagent-detail-status.outcome-running {
+  .subagent-detail-status.outcome-running,
+  .subagent-detail-status.outcome-creating {
     animation: none;
   }
 }
@@ -634,6 +575,16 @@
 .subagent-detail-badge.outcome-running {
   background: var(--ds-tile-deep);
   color: var(--ds-text-primary);
+}
+
+.subagent-detail-badge.outcome-creating {
+  background: color-mix(in oklab, var(--ds-purple) 16%, transparent);
+  color: var(--ds-purple);
+}
+
+.subagent-detail-status.outcome-creating {
+  background: var(--ds-purple);
+  animation: subagent-status-pulse 1.6s var(--motion-ease-standard) infinite;
 }
 
 .subagent-detail-badge.outcome-failed,
@@ -799,15 +750,10 @@
   left: -20px;
   width: 7px;
   height: 7px;
-  border: 2px solid var(--ds-bg-secondary);
+  border: 2px solid var(--ds-bg-dock);
   border-radius: var(--radius-round);
   background: var(--ds-text-muted);
   content: "";
-}
-
-:root[data-theme="light"] .work-panel .subagent-detail > .subagent-run .subagent-run-rows.is-panel-flow > div > .tool-row::before,
-:root[data-theme="light"] .work-panel .subagent-detail > .subagent-run .subagent-run-rows.is-panel-flow > div > .subagent-answer::before {
-  border-color: #fafafa;
 }
 
 .subagent-detail > .subagent-run .subagent-run-rows.is-panel-flow > div > .tool-row:last-child::before,
@@ -815,9 +761,7 @@
   background: var(--ds-accent);
 }
 
-/* Empty states borrow the plugin/project page proportions (`.ext-empty`) so the
-   panel reads as part of the same app, just narrower: the panel can be as thin
-   as 244px, so the body wraps at 34ch instead of 48ch. */
+/* Shared per-tool empty state used by Files and plugin fallback surfaces. */
 .work-tab-empty {
   display: flex;
   flex: 1;
@@ -851,49 +795,79 @@
 }
 
 .work-tab-empty-body {
-  margin: 0;
   max-width: 34ch;
+  margin: 0;
   color: var(--ds-text-muted);
   font-size: var(--text-md);
   line-height: var(--leading-body);
 }
 
-/* Tool entry points shown only when the panel body has no tab at all. Rows
-   match `.work-panel-menu-item` so the same four tools look the same whether
-   they are reached from the header menu or from the empty body. */
-.work-panel-empty-tools {
+.work-panel-launcher {
   display: flex;
   width: 100%;
-  max-width: 208px;
   flex-direction: column;
-  margin-top: 14px;
+  gap: 8px;
+  padding: 14px 10px;
 }
 
-.work-panel-empty-tool {
+.work-panel-launcher-title {
+  padding: 0 8px 4px;
+  color: var(--ds-text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.work-panel-launcher-list {
   display: flex;
-  height: 28px;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.work-panel-launcher-row {
+  display: flex;
+  min-width: 0;
+  height: 40px;
   align-items: center;
-  gap: 8px;
-  padding: 0 8px;
+  gap: 10px;
+  padding: 0 10px;
   border-radius: var(--radius-sm);
   color: var(--ds-text-primary);
   font-size: var(--text-md);
   text-align: left;
-  transition: background var(--motion-duration-fast) var(--motion-ease-out);
+  transition:
+    background var(--motion-duration-fast) var(--motion-ease-out),
+    color var(--motion-duration-fast) var(--motion-ease-out);
 }
 
-.work-panel-empty-tool > svg {
-  flex: 0 0 auto;
-  color: var(--ds-text-muted);
-}
-
-.work-panel-empty-tool:hover {
+.work-panel-launcher-row:hover {
   background: var(--ds-bg-hover);
 }
 
-.work-panel-empty-tool:focus-visible {
+.work-panel-launcher-row:focus-visible {
   outline: 2px solid var(--ds-focus);
   outline-offset: -2px;
+}
+
+.work-panel-launcher-icon {
+  display: inline-flex;
+  width: 18px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--ds-text-secondary);
+}
+
+.work-panel-launcher-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-panel-launcher-row kbd {
+  margin-left: auto;
+  color: var(--ds-text-muted);
+  font-size: var(--text-2xs);
 }
 
 /* Work panel — review tab */
@@ -1020,11 +994,7 @@
   align-items: center;
   gap: 4px;
   padding: 6px 8px;
-}
-
-:root[data-theme="light"] .work-browser-chrome,
-:root[data-theme="light"] .file-viewer-header {
-  background: #ffffff;
+  background: var(--ds-bg-dock-raised);
 }
 
 .work-browser-url {
@@ -1084,7 +1054,7 @@
 }
 
 /* Fallback for a view whose icon token this build does not know. Sized to the
-   15px icon box the menu rows use so rows never shift between the two. */
+   15px icon box the launcher rows use so rows never shift between tools. */
 .work-panel-view-initial {
   display: inline-flex;
   width: 15px;
@@ -1175,6 +1145,7 @@
   align-items: center;
   gap: 6px;
   padding: 6px 8px;
+  background: var(--ds-bg-dock-raised);
 }
 
 .file-viewer-path {

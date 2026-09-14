@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "id": "pi.file-manager",
+  "name": "文件管理器",
+  "version": "0.3.1",
+  "description": "在右侧工作面板中浏览、查看并编辑当前项目的文件：完整目录树（图标随文件类型变化）、左右分栏、代码高亮编辑与保存、Markdown 预览、图片与音视频查看、CSV/JSON 结构化查看，以及右键新建、重命名/移动、按文件名搜索。",
+  "i18n": {
+    "en": {
+      "name": "File Manager",
+      "description": "Browse, view and edit the open project in the right work panel: a full directory tree with per-file-type icons, syntax-highlighted editing, a Markdown preview, image and media viewing, CSV/JSON structured views, read-only SQLite browsing with a SQL query box, a context menu for creating and renaming, and filename search.",
+      "safetyNotes": "Databases are opened strictly read-only (readOnly + PRAGMA query_only) and the query box only accepts single read-only statements, so a database can be browsed but never modified. fs.read is declared only for the two host-mediated actions \"open with default app\" and \"show in folder\" (same permission and scope as the bundled Files view); the plugin's own reading and writing goes through Node's fs inside the plugin's own process — the host permission gateway does not mediate these calls, and the manifest cannot declare a whole-tree write. Access is confined to the project root by the plugin itself: resolved paths must stay inside the root (symlink and junction escapes are refused), credential paths (.env*, .ssh/, *.pem, .git/**) are refused, saves are atomic (temp file + rename), and overwriting a file changed outside the editor asks first. Images and media are read up to their own size limits (8 MiB / 24 MiB) and handed to the view as base64 data URIs; binaries such as zip or exe are never decoded, only reported as unsupported. No network access; the plugin data directory only holds settings and a write audit log."
+    },
+    "zh-CN": {
+      "name": "文件管理器",
+      "description": "在右侧工作面板中浏览、查看并编辑当前项目的文件：完整目录树（图标随文件类型变化）、左右分栏、代码高亮编辑与保存、Markdown 预览、图片与音视频查看、CSV/JSON 结构化查看、SQLite 只读浏览与 SQL 查询，以及右键新建、重命名/移动、按文件名搜索。",
+      "safetyNotes": "数据库一律以只读方式打开（readOnly + PRAGMA query_only），SQL 框只接受单条只读语句，因此只能浏览、绝无修改；fs.read 仅用于「用默认应用打开」与「在文件夹中显示」这两个由宿主代为执行的动作（权限与范围同内置的 Files 视图），插件自身的读写仍走自己进程内的 Node fs——宿主的权限网关不介入这些调用，manifest 也无法申报「整树写入」。访问范围由插件自身限定在项目根目录内：解析后的路径必须仍在根内（拒绝符号链接与 junction 逃逸）、拒绝凭据类路径（.env*、.ssh/、*.pem、.git/**）、保存采用原子写（临时文件 + 重命名）、覆盖在编辑器外被改动过的文件前会先询问。图片与音视频按各自上限（8 MiB / 24 MiB）读取后以 base64 data URI 交给视图；zip、exe 这类二进制只报「不支持预览」，不做任何解码。无网络访问；插件数据目录只保存设置与写入审计日志。"
+    }
+  },
+  "author": "Tioit-Wang",
+  "license": "MIT",
+  "categories": ["productivity", "community"],
+  "changelog": "Release 0.3.1：补齐「用默认应用打开」与「在文件夹中显示」（走宿主的 fs.openDefault / fs.reveal，为此声明 fs.read，权限与范围同内置 Files 视图；目录对这两个动作无效，只对文件提供）。Release 0.3.0：从「只能编辑文本」扩到「看得见各种文件」——图片查看（png/jpg/gif/webp/avif/bmp/ico/svg，适应窗口与实际大小、棋盘格、像素尺寸与体积）、音视频播放（mp4/mov/webm/mkv 与 mp3/wav/flac/ogg 等，不自动播放、编码不支持时明确提示）、CSV/TSV 表格（默认每页 1000 行可调并记住、点表头升/降/取消排序、行号列与表头双向吸顶、数字右对齐、悬停看全值）、JSON 折叠树，以及 SQLite 只读浏览与 SQL 查询框（readOnly + PRAGMA query_only + 单条只读语句白名单三层只读，字节不进视图，可打开几百 MB 的库）。二进制文件（zip/apk/exe 等）明确提示不支持预览。同时修掉保存链路的一个严重缺陷：保存成功后编辑器文档会被重装回打开时的旧内容（现以 loadToken 区分「从磁盘装载」与「保存后更新 mtime」），并修掉「没有改动也写盘」「连按 Ctrl+S 自己撞出冲突」「保存返回时用户已切走文件」「Ctrl+S 焦点不在编辑器就失效」等问题。Release 0.2.0：修复代码没有语法高亮（去掉 basicSetup 自带的 fallback 高亮器）、语言解析改为显式注册表、新增右键菜单与 Markdown 预览/编辑切换。Release 0.1.0：首个版本，右侧工作面板里的完整目录树 + 代码高亮编辑与保存 + 新建/重命名/移动 + 按文件名搜索。",
+  "safetyNotes": "fs.read 仅用于「用默认应用打开」与「在文件夹中显示」这两个由宿主代为执行的动作（权限与范围同内置的 Files 视图：root workspace、scope **）；插件自身的读写走自己进程内的 Node fs——宿主的权限网关不介入这些调用，manifest 也无法申报「整树写入」。访问范围由插件自身限定在项目根目录内：解析后的路径必须仍在根内（拒绝符号链接与 junction 逃逸）、拒绝凭据类路径（.env*、.ssh/、*.pem、.git/**）、保存采用原子写（临时文件 + 重命名）、覆盖在编辑器外被改动过的文件前会先询问。图片与音视频按各自上限（8 MiB / 24 MiB）读取后以 base64 data URI 交给视图；数据库一律以只读方式打开（readOnly + PRAGMA query_only），SQL 框只接受单条只读语句，只能浏览、绝无修改；zip、exe 这类二进制只报「不支持预览」，不做任何解码。无网络访问；插件数据目录只保存设置与写入审计日志。",
+  "main": "main.js",
+  "contributes": {
+    "views": [
+      {
+        "id": "manager",
+        "title": { "en": "File Manager", "zh-CN": "文件管理器" },
+        "icon": "folder",
+        "entry": "views/index.html",
+        "order": 40
+      }
+    ]
+  },
+  "permissions": ["ui.view", "fs.read"],
+  "fs": {
+    "read": {
+      "root": "workspace",
+      "scope": ["**"]
+    }
+  },
+  "engines": { "piDesktop": ">=0.9.0" },
+  "activationEvents": ["onStartup"]
+}

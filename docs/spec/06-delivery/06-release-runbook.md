@@ -96,7 +96,9 @@ Surfaces in scope:
 
 | Surface | Requirement |
 |---|---|
-| `packages/shared/src/changelog.ts` | Newest-first entries for every shipped product locale, matching highlight counts |
+| `apps/desktop/resources/models.dev/api.json` | Refreshed from https://models.dev/api.json before tagging; the release workflow packages this snapshot unchanged |
+| `packages/shared/src/changelog.ts` | Newest-first English, zh-CN, and zh-TW entries, matching highlight counts |
+| `packages/shared/src/changelog-de.ts`, `changelog-es.ts`, `changelog-fr.ts`, `changelog-ko.ts`, `changelog-tr.ts` | Same versions and highlight counts as English |
 | `packages/shared/src/changelog.test.ts` | Version added at the top of the newest-first list |
 | `package.json`, `apps/*/package.json`, `packages/*/package.json`, `docs/package.json` | Same version (`docs` is a third workspace root, not under `apps`/`packages`) |
 | `Cargo.toml` `[workspace.package]`, `Cargo.lock` `host-core` | Same version |
@@ -105,47 +107,65 @@ Surfaces in scope:
 
 Blocking steps:
 
-1. Edit `packages/shared/src/changelog.ts` **before**
+1. Refresh `apps/desktop/resources/models.dev/api.json` **before** tagging.
+   `scripts/release.mjs` does this by default for every bump, including
+   prereleases. A no-op refresh (already current) still counts: the snapshot
+   in the tagged tree is what artifacts ship. Do not treat a minified
+   one-line JSON diff as absent.
+2. Edit `packages/shared/src/changelog.ts` **before**
    `node scripts/release.mjs <version>` / `git tag`:
-   - Add a **newest-first** entry under `en` and every shipped product locale.
+   - Add a **newest-first** entry under `en` and every shipped product locale
+     (`zh-CN` / `zh-TW` in this file; `de` / `es` / `fr` / `ko` / `tr` in
+     `packages/shared/src/changelog-*.ts`).
    - Same `version` string (semver **without** a leading `v`, matching
-     `apps/desktop` / `APP_VERSION`).
+     `apps/desktop` / `APP_VERSION` for a stable cut).
    - Optional ISO `date` (`YYYY-MM-DD`).
    - Matching highlight counts; English is the source of truth (ADR 0009).
    - Each bullet is one short user-facing idea (not raw PR titles).
-2. Do **not** catalog pre-release-only versions (`x.y.z-rc.*`) unless product
-   explicitly ships in-app notes for that channel.
-3. Sync the newest-first version list in
-   `packages/shared/src/changelog.test.ts` (add the new version at the top),
-   then run `pnpm --filter @pi-desktop/shared test` and confirm catalog
+3. Do **not** catalog the prerelease identifier (`x.y.z-rc.*`,
+   `x.y.z-beta.*`) as its own in-app changelog version. When the prerelease
+   is a preview of the next stable line, add that **stable** version's
+   entries (`x.y.z`) so testers can read "what's new" without a network
+   fetch. Omit the catalog only when product explicitly ships no notes for
+   this cut.
+4. Sync the newest-first version list in
+   `packages/shared/src/changelog.test.ts` (add the new stable version at the
+   top), then run `pnpm --filter @pi-desktop/shared test` and confirm catalog
    alignment (version sets + highlight counts) still passes.
-4. Update `README.md` and `README.zh-CN.md` when the release line changes
+5. Update `README.md` and `README.zh-CN.md` when the release line changes
    (`0.10.x` → `0.11.x`) and whenever the release ships user-visible behavior
    the Highlights, Download, Getting started, Status, or Development sections
    now describe incorrectly. Both locales stay structurally in sync; English is
    the source of truth and the zh-CN file links the `docs/zh-CN/` mirrors.
-5. Run the preflight and fix every reported surface:
-   `pnpm check:release-docs [version]` (`node scripts/check-release-docs.mjs`). The
-   preflight compiles the TypeScript changelog in a temporary directory, so it does
-   not require a prior workspace build.
-   `scripts/release.mjs` runs
-   the same check after bumping and refuses to commit or tag while it fails;
-   `--skip-docs-check` exists only for a deliberate non-release bump.
-6. Commit the documentation updates so the tagged commit contains notes and
+6. Run the preflight and fix every reported surface:
+   `pnpm check:release-docs [version]` (`node scripts/check-release-docs.mjs`).
+   For a prerelease, run it against the **stable** version being previewed
+   (`pnpm check:release-docs x.y.z`) so changelog/README alignment is
+   checked even though `scripts/release.mjs` skips that preflight for
+   `x.y.z-beta.*` / `x.y.z-rc.*`. The preflight compiles the TypeScript
+   changelog in a temporary directory, so it does not require a prior
+   workspace build. `scripts/release.mjs` still refreshes models.dev for
+   prereleases; `--skip-docs-check` exists only for a deliberate
+   non-release bump.
+7. Commit the documentation updates so the tagged commit contains notes and
    accurate version claims for that version (alone or adjacent to the bump).
-7. GitHub Release bodies may still use `generate_release_notes: true` for the
+8. GitHub Release bodies may still use `generate_release_notes: true` for the
    web page; they remain web-only and are **not** the in-app notes source.
 
 Pre-tag checklist:
 
-- [ ] `packages/shared/src/changelog.ts` has entries for every shipped product
-      locale for the version
-      about to be tagged
+- [ ] `apps/desktop/resources/models.dev/api.json` is refreshed or confirmed
+      current in the tagged tree
+- [ ] `packages/shared/src/changelog.ts` has English / zh-CN / zh-TW entries
+      for the stable version being shipped or previewed
+- [ ] `packages/shared/src/changelog-de.ts` and the other locale catalogs
+      match the English version set and highlight counts
 - [ ] Highlight counts match across locales
 - [ ] Shared changelog tests pass
 - [ ] `README.md` and `README.zh-CN.md` state the current release line and
       contain no claims the release invalidates
 - [ ] `node scripts/check-release-docs.mjs` passes on the release commit
+      (use the stable version when tagging a prerelease preview)
 - [ ] `release.mjs` / tag runs only after the documentation commit is on the
       release branch
 
@@ -216,18 +236,20 @@ any unlabelled or wrong-architecture macOS artifact.
 
 The DMG uses a branded 720×500 background with a clear drag-to-Applications
 gesture. The app and Applications link occupy the main row; the first-launch
-helper and opening note sit in a secondary row so the unsigned-build path is
-discoverable without making it the normal installation action.
+opening note sits in a secondary row so the unsigned-build path is discoverable
+without making it the normal installation action. The note is displayed as
+`If app won't open, read this.txt`; the DMG does not include the executable command helper.
 
-Every macOS DMG and ZIP includes the executable
-`PI-Desktop-macOS-open.command` and the companion
-`PI-Desktop-macOS-opening-help.txt` at the package root. After moving
-`PI-Desktop.app` to `/Applications` or `~/Applications`, users can double-click
-the helper. It searches only those two fixed locations, removes only the
-recursive `com.apple.quarantine` attribute when present, and opens PI-Desktop.
-Before doing so it verifies `CFBundleIdentifier=com.pi-desktop.app`. It does
-not use `sudo` or accept an arbitrary application path. The manual fallback
-for the standard system location is:
+Every macOS DMG includes the companion
+`PI-Desktop-macOS-opening-help.txt` at the package root under that display
+name. The macOS ZIP includes both that note and the executable
+`PI-Desktop-macOS-open.command`. After moving `PI-Desktop.app` to
+`/Applications` or `~/Applications`, ZIP users can double-click the helper. It
+searches only those two fixed locations, removes only the recursive
+`com.apple.quarantine` attribute when present, and opens PI-Desktop. Before
+doing so it verifies `CFBundleIdentifier=com.pi-desktop.app`. It does not use
+`sudo` or accept an arbitrary application path. The manual fallback for the
+standard system location is:
 
 ```sh
 xattr -r -d com.apple.quarantine /Applications/PI-Desktop.app

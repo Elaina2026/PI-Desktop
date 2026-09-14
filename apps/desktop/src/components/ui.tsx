@@ -251,6 +251,7 @@ export function TooltipButton({
   ref,
   onPointerEnter,
   onPointerLeave,
+  onPointerDown,
   onFocus,
   onBlur,
   onClick,
@@ -281,6 +282,10 @@ export function TooltipButton({
         onPointerLeave={(event) => {
           tooltip.onPointerLeave();
           onPointerLeave?.(event);
+        }}
+        onPointerDown={(event) => {
+          tooltip.dismiss();
+          onPointerDown?.(event);
         }}
         onFocus={(event) => {
           tooltip.onFocus();

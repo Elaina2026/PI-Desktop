@@ -64,6 +64,14 @@ queued/running `plan_approvals` 执行状态已中断并中止它们
 因此 Linux AppImage 或没有活动 TTY 的 GUI 启动会继续监管 host/sidecar，而不是
 弹出 Electron 的未捕获异常对话框。
 
+主进程 JavaScript `uncaughtException` 同样不是 Electron 主进程崩溃（只有原生
+主进程 abort 才会退出应用）。Main 自行处理 `uncaughtException` /
+`unhandledRejection`，写入 `app/runtime` 记录并继续运行，从而抑制 Electron
+默认的 “A JavaScript error occurred in the main process” 对话框。可恢复的
+网络栈异常包括 Chromium 把非 Latin-1 HTTP 头拷进 `Headers.set`
+（`TypeError: Cannot convert argument to a ByteString`），常见于 Windows 系统
+代理或网关注入 Unicode 头。下一次 `net.fetch` 或更新检查不得再弹出该原生框。
+
 Linux 打包的 host-core 在 Ubuntu 22.04 上构建，需要 glibc 2.35 或更高版本
 （Ubuntu 22.04、Debian 12、Fedora 36+）。更低的 glibc 是致命 host 状态，而不是
 重启循环：界面会列出这些发行版，而不是只显示“无法连接本地服务”。Linux 标签

@@ -52,7 +52,8 @@ The application categories are:
 - `persistence` — transcript and outbox persistence failures
 - `updater` — updater diagnostics and errors
 - `diagnostics` — blocked navigation, menu, and template diagnostics
-- `runtime` — host/sidecar lifecycle and uncategorized child output
+- `runtime` — host/sidecar lifecycle, uncategorized child output, and
+  main-process `uncaughtException` / `unhandledRejection` records
 
 There is no dedicated `timing` category. Timing files from older application
 runs are left untouched, but current code does not create or append to them.

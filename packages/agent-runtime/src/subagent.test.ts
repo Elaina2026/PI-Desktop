@@ -105,6 +105,18 @@ describe("composeSubagentSystemPrompt", () => {
     expect(prompt).toContain("You may change files");
     expect(prompt).not.toContain("no tools that change files");
   });
+
+  it("lists resolved inherit tools and treats them as mutating when they write", () => {
+    const prompt = composeSubagentSystemPrompt({
+      definition: definition({ tools: [], inheritTools: true }),
+      toolNames: ["Read", "Skill", "Edit"],
+    });
+
+    expect(prompt).toContain("Read, Skill, Edit");
+    expect(prompt).toContain("You may change files");
+    expect(prompt).not.toContain("no tools that change files");
+    expect(prompt).not.toContain("inherit (parent tools)");
+  });
 });
 
 describe("SubagentRun event forwarding", () => {

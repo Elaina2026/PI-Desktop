@@ -11,11 +11,14 @@
  *   1. Workspace version surfaces agree: every workspace package.json,
  *      [workspace.package] in Cargo.toml, the host-core Cargo.lock entry, and
  *      APP_VERSION in packages/shared/src/protocol.ts.
- *   2. packages/shared/src/changelog*.ts has an entry for the version under
+ *   2. apps/desktop/resources/models.dev/api.json parses as a provider catalog.
+ *   3. packages/shared/src/changelog*.ts has an entry for the version under
  *      every shipped locale, newest-first, with matching highlight counts.
- *   3. packages/shared/src/changelog.test.ts pins the version as newest.
- *   4. README.md and README.zh-CN.md declare the current release line
+ *   4. packages/shared/src/changelog.test.ts pins the version as newest.
+ *   5. README.md and README.zh-CN.md declare the current release line
  *      (`<major>.<minor>.x`) in their status section.
+ * For a prerelease preview, pass the stable version being previewed so the
+ * changelog/README checks run against that catalog rather than x.y.z-beta.*.
  */
 import {
   readdirSync,

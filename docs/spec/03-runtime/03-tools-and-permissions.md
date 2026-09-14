@@ -47,22 +47,29 @@ Let the agent get things done, but stay under control by default.
 
 Following pi's coding-agent default, the first Agent request activates only
 `Read`, `Bash`, `Edit`, and `Write`; `Glob` and `Grep` are loaded on demand.
-Plan and Goal keep their read/inspection core. The runtime also registers capabilities
-without sending their full schemas up front:
+Plan and Goal keep their read/inspection core. `Skill` is deliberately not
+deferred: a `/skill-id` invocation instructs the model to call it, and a tool
+absent from the schema cannot be called at all, so it ships with the first
+request whenever the skill catalog is non-empty (D404, ADR 0230). The runtime
+also registers capabilities without sending their full schemas up front:
 
 - `Glob` and `Grep` in Agent mode
 - `BrowserPreview`
 - `PluginCheck`, `PluginScaffold`, and `PluginPack`
 - plugin-declared agent tools
-- `Skill` when an enabled plugin contributes skills
 
 These tools appear in a bounded `# On-demand tools` catalog with compact
 descriptions. The model calls the local `ToolSearch` tool with an exact name or
 capability query; the matching schemas become available on the next model turn.
-The sidecar resets this deferred set at the beginning of every new user prompt.
-The host permission, workspace/scratch containment, timeout, and audit rules do
-not change when a tool is loaded. `ToolSearch` itself never executes a workspace
-operation and never bypasses host-core policy.
+At the beginning of every new user prompt, the sidecar clears the in-memory
+deferred set and restores only successful activation evidence from the effective
+session context: `addedToolNames` on successful `ToolSearch` results and the
+names of successful deferred-tool results. Failed rows, interrupted or missing
+result placeholders, and assistant/user prose are ignored. Restored names must
+still be in the current mode's deferred catalog. The host permission,
+workspace/scratch containment, timeout, and audit rules do not change when a
+tool is loaded. `ToolSearch` itself never executes a workspace operation and
+never bypasses host-core policy.
 
 ## 3. Common Tool Constraints
 
@@ -94,10 +101,16 @@ Native file and search tools enforce distinct path shapes (D208, ADR 0069):
   searcher when `rg` is missing or fails (D315). The model-facing contract does
   not change.
 
-Agent mode keeps `Glob`/`Grep` deferred under D185. Each new user prompt resets
-their activation, so directory discovery activates `Glob` through `ToolSearch`
-for that prompt instead of guessing a file name or calling `Read` on a
-directory.
+Workspace-relative paths in tool results use `/` for platform separators.
+On POSIX, a literal backslash in a filename remains a backslash so the result
+can be passed back to `Read` or `Edit`; Windows path separators are normalized
+to `/`.
+
+Agent mode keeps `Glob`/`Grep` deferred under D185. Each new user prompt clears
+their live activation and restores only eligible successful markers still in
+context; when no such marker exists, directory discovery activates `Glob`
+through `ToolSearch` for that prompt instead of guessing a file name or calling
+`Read` on a directory.
 
 The runtime accepts one alias per canonical argument name and folds it away
 before the host sees the call (D273):
@@ -515,21 +528,31 @@ is guidance, not the security boundary.
 one subagent definition. Plan and Goal are read-only contract negotiations, so a
 delegate with `Bash`, `Edit` or `Write` would drive straight through them.
 
-A definition declares the tools its delegate may call, drawn only from the seven
-working tools `Read`, `Glob`, `Grep`, `BrowserPreview`, `Bash`, `Edit` and
-`Write`. A definition that declares none gets `Read`, `Glob`, `Grep`;
-`tools: "*"` means all seven working tools. An unrecognized name — including
-the withdrawn `A2A` and `Peer` tools (D326 / ADR 0165) — is dropped with a
-parse warning. Plugin tools, `Skill`, `ToolSearch`, `new_context`, the mode
-tools and `Task` itself are never assignable: a delegate is a bounded
-file/search/shell worker, not a second session.
+A definition declares the tools its delegate may call. By default those names
+are drawn only from the seven working tools `Read`, `Glob`, `Grep`,
+`BrowserPreview`, `Bash`, `Edit` and `Write`. A definition that declares none
+gets `Read`, `Glob`, `Grep`; `tools: "*"` means all seven working tools. An
+unrecognized name — including the withdrawn `A2A` and `Peer` tools (D326 /
+ADR 0165) — is dropped with a parse warning.
 
-A delegate's available tools are its definition's, never its session's. It
-cannot gain a tool because the parent has it, and a session cannot lend
-mutation rights to a read-only delegate. Delegate calls are built by the
-session runtime and go through the same `tools.execute` path, so path rules
-(§4), Bash rules (§5), permission modes (§6), the operating-mode matrix (§10)
-and auditing (§9) apply unchanged — evaluated against the owning session.
+A document may opt into the parent session's live tool catalog with
+`tools: inherit` or `tools: [inherit, Bash]` (ADR 0246 / D415). At `Task` spawn
+the runtime unions `toolCatalog` keys (including deferred plugin/MCP tools)
+with any assignable extras, then drops `Task` / `TaskWait` / `TaskList` /
+`TaskStop`, `EnterPlanMode` / `EnterGoalMode`, `asktool`, `new_context`, and
+`ToolSearch`. Builtins do not opt in. `inherit` is visible in the Markdown and
+in Settings; host-core keeps the token so an inherit-only document still
+loads. Plugin tools, `Skill`, and MCP tools are therefore available to a
+delegate only through this opt-in, never by putting those names on the
+assignable whitelist.
+
+Without `tools: inherit`, a delegate's available tools are its definition's,
+never its session's: it cannot gain a tool because the parent has it, and a
+session cannot lend mutation rights to a read-only delegate. Delegate calls
+are built by the session runtime and go through the same `tools.execute` path,
+so path rules (§4), Bash rules (§5), permission modes (§6), the operating-mode
+matrix (§10) and auditing (§9) apply unchanged — evaluated against the owning
+session.
 
 A **builtin or user** definition may additionally declare `permission: inherit
 | ask | accept-edits | auto` (ADR 0089, default `inherit`). With the default

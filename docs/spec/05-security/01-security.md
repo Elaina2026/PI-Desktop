@@ -96,6 +96,29 @@ and byte size, and only then creates the `plan_approvals` record with
 structured title/question fields. Renderer and sidecar state cannot write or
 replace an artifact.
 
+## 4.1 Skill market egress
+
+The renderer does not fetch skill catalogs or SKILL.md documents. Electron
+main performs those HTTPS requests under the public-network policy (ADR 0243 /
+D413): `https` only, a shared syntactic public-host check, DNS classification
+of every resolved address, and `redirect: "manual"` with per-hop
+re-validation. Loopback, RFC1918, ULA, link-local, and mapped IPv6 targets
+are rejected. Install writes markdown only through `skills.create`. The host
+document cap remains 128 KiB after sibling markdown is inlined.
+
+## 4.2 MCP market egress
+
+The MCP market accepts only credentials-free public HTTPS sources and catalog
+endpoints. Main resolves every hostname immediately before connecting and pins
+the selected public address to the HTTPS socket while retaining the original
+host for TLS SNI and HTTP Host. Redirects are manual, HTTPS-only, limited to
+five hops, and checked again before each connection. Responses are capped at
+4 MiB, requests share an 8-second deadline, and source/cache/entry counts are
+bounded. Cross-origin user-MCP redirects do not forward caller headers.
+
+Manual user-owned MCP configuration remains covered by ADR 0142 and may use
+explicit local/LAN endpoints; the market path does not widen that policy.
+
 ## 5. Command execution
 
 - Bash requires confirmation by default (risk-tiered permission cards); in
@@ -154,12 +177,15 @@ replace an artifact.
 - The client carries no GitHub token. A private or otherwise unreachable feed
   fails closed; automatic failures stay ambient and explicit checks expose the
   error.
-- Unsigned macOS distributions include an explicit first-launch helper for a
-  trusted source. It searches only `/Applications/PI-Desktop.app` and
-  `~/Applications/PI-Desktop.app`, verifies `CFBundleIdentifier` is
-  `com.pi-desktop.app`, removes only `com.apple.quarantine` recursively when
-  present, and opens the app. It accepts no arbitrary path, uses no privilege
-  escalation, and is not a substitute for Developer ID signing or notarization.
+- Unsigned macOS distributions keep a narrow first-launch fallback for trusted
+  sources. The DMG exposes only a text note named `If app won't open, read this.txt`; it gives
+  the manual `com.apple.quarantine` command and says signed/notarized builds do
+  not need it. The ZIP package also includes the executable helper, which
+  searches only `/Applications/PI-Desktop.app` and `~/Applications/PI-Desktop.app`,
+  verifies `CFBundleIdentifier` is `com.pi-desktop.app`, removes only
+  `com.apple.quarantine` recursively when present, and opens the app. It accepts
+  no arbitrary path, uses no privilege escalation, and is not a substitute for
+  Developer ID signing or notarization.
 - Localized product "what's new" text (D164/D345) is selected in Main from the
   shipped changelog catalog and attached to `UpdateState.releaseNotes`. The
   renderer cannot supply a notes URL, feed, or remote body; missing catalog
@@ -231,6 +257,7 @@ host-core. They do not change the loopback-only rule above.
 | Prompt-injected destructive tool use | host-owned durable mode policy, permission confirmation, path boundary, secret isolation |
 | Dependency poisoning | lockfiles, few deps, native-module review |
 | Malicious local plugin | declared permissions, no secret access, process isolation tracked post-MVP (ADR 0008) |
+| Skill market SSRF via user source URL | public-HTTPS classifier + DNS + per-hop redirect checks in main; renderer CSP forbids the fetch (ADR 0243) |
 
 ## 11. Security acceptance gates
 

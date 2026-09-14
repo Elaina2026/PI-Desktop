@@ -84,25 +84,44 @@ export function createAgentHostBridge(options: AgentHostBridgeOptions) {
 
   const runtime: RuntimePort = {
     async prompt(request: TurnStartRequest) {
-      const summary = await sessions.get(request.sessionId);
-      if (summary && summary.permissionMode !== request.effectivePermissionMode) {
-        // The local prompt path runs under the session's durable permission
-        // mode. A per-turn ceiling needs runtime support that lands with the
-        // RACP-WS binding; until then a capped turn fails closed.
-        throw new RacpError(
-          "FORBIDDEN",
-          "the local runtime cannot apply a per-turn permission ceiling yet",
-          { details: { effectivePermissionMode: request.effectivePermissionMode } },
-        );
+      try {
+        const summary = await sessions.get(request.sessionId);
+        if (summary && summary.permissionMode !== request.effectivePermissionMode) {
+          // The local prompt path runs under the session's durable permission
+          // mode. A per-turn ceiling needs runtime support that lands with the
+          // RACP-WS binding; until then a capped turn fails closed.
+          throw new RacpError(
+            "FORBIDDEN",
+            "the local runtime cannot apply a per-turn permission ceiling yet",
+            { details: { effectivePermissionMode: request.effectivePermissionMode } },
+          );
+        }
+        const result = (await options.invoke(options.channels.agentPrompt, [
+          {
+            sessionId: request.sessionId,
+            content: request.content,
+            ...(request.sessionMessageId ? { sessionMessageId: request.sessionMessageId } : {}),
+            ...(request.attachments ? { attachments: request.attachments } : {}),
+          },
+        ])) as { accepted?: boolean; turnId: string };
+        return { turnId: result.turnId };
+      } catch (error) {
+        if (request.sessionMessageId) {
+          try {
+            await requireHost().call("session.collaboration.fail", {
+              messageId: request.sessionMessageId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          } catch (persistenceError) {
+            options.log("warn", "collaboration dispatch failure persistence failed", {
+              sessionId: request.sessionId,
+              messageId: request.sessionMessageId,
+              error: String(persistenceError),
+            });
+          }
+        }
+        throw error;
       }
-      const result = (await options.invoke(options.channels.agentPrompt, [
-        {
-          sessionId: request.sessionId,
-          content: request.content,
-          ...(request.attachments ? { attachments: request.attachments } : {}),
-        },
-      ])) as { accepted?: boolean; turnId: string };
-      return { turnId: result.turnId };
     },
     async stop(sessionId: string) {
       const result = (await options.invoke(options.channels.agentStop, [{ sessionId }])) as
@@ -110,10 +129,10 @@ export function createAgentHostBridge(options: AgentHostBridgeOptions) {
         | undefined;
       return { requested: result?.requested ?? true };
     },
-    async abort(sessionId: string) {
+    async abort(sessionId: string, turnId?: string) {
       abortingSessions.add(sessionId);
       try {
-        await options.invoke(options.channels.agentAbort, [{ sessionId }]);
+        await options.invoke(options.channels.agentAbort, [{ sessionId, ...(turnId ? { turnId } : {}) }]);
       } catch (error) {
         abortingSessions.delete(sessionId);
         throw error;
@@ -214,6 +233,7 @@ export function createAgentHostBridge(options: AgentHostBridgeOptions) {
         ...(record.idempotencyKey ? { idempotencyKey: record.idempotencyKey } : {}),
         inputHash: record.inputHash,
         content: record.content,
+        ...(record.sessionMessageId ? { sessionMessageId: record.sessionMessageId } : {}),
         ...(record.attachments ? { attachments: record.attachments } : {}),
         permissionMode: record.effectivePermissionMode,
       });
@@ -247,6 +267,7 @@ export function createAgentHostBridge(options: AgentHostBridgeOptions) {
           ...(request.idempotencyKey ? { idempotencyKey: request.idempotencyKey } : {}),
           input: {
             text: request.content,
+            ...(request.sessionMessageId ? { sessionMessageId: request.sessionMessageId } : {}),
             ...(request.attachments ? { attachments: request.attachments } : {}),
           },
           context: { requestId: `desktop-queue-${Date.now().toString(36)}` },
@@ -259,6 +280,7 @@ export function createAgentHostBridge(options: AgentHostBridgeOptions) {
             id: result.turn.id,
             sessionId: request.sessionId,
             content: request.content,
+            ...(request.sessionMessageId ? { sessionMessageId: request.sessionMessageId } : {}),
             ...(request.attachments ? { attachments: request.attachments } : {}),
             position: 0,
             createdAt: new Date().toISOString(),
@@ -268,7 +290,18 @@ export function createAgentHostBridge(options: AgentHostBridgeOptions) {
       return agentHost.queueEntries(sessionId).map(toQueueSummary);
     },
     async remove(turnId: string): Promise<void> {
+      const turn = agentHost.getTurn(turnId);
+      const entry = agentHost.queueEntries(turn.sessionId).find((candidate) => candidate.turn.id === turnId);
+      if (entry?.sessionMessageId) {
+        await requireHost().call("session.collaboration.cancel", {
+          sessionId: turn.sessionId,
+          messageId: entry.sessionMessageId,
+        });
+      }
       await forIpc(() => agentHost.cancelTurn(DESKTOP_PRINCIPAL, turnId));
+    },
+    async cancelSessionMessage(sessionId: string, messageId: string): Promise<boolean> {
+      return forIpc(() => agentHost.cancelSessionMessage(DESKTOP_PRINCIPAL, sessionId, messageId));
     },
     async prioritize(turnId: string): Promise<void> {
       await forIpc(() => agentHost.prioritizeTurn(DESKTOP_PRINCIPAL, turnId));
@@ -278,6 +311,11 @@ export function createAgentHostBridge(options: AgentHostBridgeOptions) {
   return {
     agentHost,
     queue,
+    /** A ledger stores the actual durable turn, which can differ from a queue ID. */
+    async interruptSessionMessage(sessionId: string, turnId: string): Promise<boolean> {
+      const result = await options.invoke(options.channels.agentAbort, [{ sessionId, turnId }]) as { aborted?: boolean } | undefined;
+      return result?.aborted !== false;
+    },
     /** Feed one normalized runtime event; `agent_end` after an abort is `turn.interrupted`. */
     ingest(envelope: AgentEventEnvelope): void {
       const interrupted =
@@ -341,6 +379,7 @@ function toQueueSummary(entry: QueueEntryView): QueuedTurnSummary {
     id: entry.turn.id,
     sessionId: entry.turn.sessionId,
     content: entry.content,
+    ...(entry.sessionMessageId ? { sessionMessageId: entry.sessionMessageId } : {}),
     ...(entry.attachments ? { attachments: entry.attachments } : {}),
     position: entry.turn.queuePosition ?? 0,
     createdAt: entry.turn.startedAt ?? new Date().toISOString(),
@@ -354,6 +393,7 @@ type HostQueueEntry = {
   idempotencyKey?: string;
   inputHash: string;
   content: string;
+  sessionMessageId?: string;
   attachments?: unknown;
   permissionMode: string;
   position: number;
@@ -368,6 +408,7 @@ function fromHostQueueEntry(entry: HostQueueEntry): QueuedTurnRecord {
     sessionId: entry.sessionId,
     principalSubject: entry.principal,
     content: entry.content,
+    ...(entry.sessionMessageId ? { sessionMessageId: entry.sessionMessageId } : {}),
     ...(Array.isArray(entry.attachments) ? { attachments: entry.attachments as QueuedTurnRecord["attachments"] } : {}),
     effectivePermissionMode: permissionMode,
     ...(entry.idempotencyKey ? { idempotencyKey: entry.idempotencyKey } : {}),

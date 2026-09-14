@@ -53,7 +53,8 @@ host 和 agent stderr 使用标记进行分类；无法分类的子进程输出�
 - `persistence` — 成绩单和发件箱持久化失败
 - `updater` — 更新器诊断和错误
 - `diagnostics` — 阻止导航、菜单和模板诊断
-- `runtime` — host/sidecar 生命周期及未分类的子进程输出
+- `runtime` — host/sidecar 生命周期、未分类的子进程输出，以及主进程
+  `uncaughtException` / `unhandledRejection` 记录
 
 不存在独立的 `timing` 类别。较早运行生成的 timing 文件保持不变，
 但当前代码不会创建或追加这些文件。旧的 `app.log`、`host.log` 和

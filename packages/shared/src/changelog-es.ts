@@ -2,6 +2,22 @@ import type { ChangelogEntry } from "./changelog.js";
 
 export const esEntries: ChangelogEntry[] = [
   {
+    "version": "0.14.8",
+    "date": "2026-09-14",
+    "highlights": [
+      "Explora e instala servidores MCP del registro oficial y de fuentes configuradas por el usuario en el mercado MCP.",
+      "Explora e instala skills de catálogos curados y GitHub en el mercado de Skills, con HTTPS público y límites de tamaño.",
+      "Incluye la vista de archivos como el plugin File Manager integrado, y permite que un plugin empaquetado conserve una actualización del marketplace.",
+      "Añade un modo de vista previa del panel de trabajo, eleva el suelo de la columna de chat a 450px y prioriza MainChat en el diseño de tres columnas.",
+      "Descubre sesiones independientes, envía mensajes de colaboración del host y abre enlaces de colaboración.",
+      "Los subagentes pueden heredar las herramientas del padre, los builtins incluidos aparecen en Ajustes, se añade un builtin de diseñador de UI y el estado de creación es distinto.",
+      "Dirige un turno activo con Alt+Enter y expande archivos de texto pegados en el compositor para editarlos.",
+      "Rediseña la creación de proyectos con espacios de trabajo de varias carpetas, memoria del proyecto y un editor visual de memoria.",
+      "Instala dependencias y skills declaradas de paquetes pi importados detrás de un límite de seguridad del host.",
+      "Añade chips predefinidos para la ventana de contexto y la salida máxima, muestra rangos de líneas de Read en los chips de herramientas y mantiene el contexto recuperable tras una compactación fallida.",
+    ],
+  },
+  {
     "version": "0.14.6",
     "date": "2026-09-10",
     "highlights": [
@@ -76,7 +92,6 @@ export const esEntries: ChangelogEntry[] = [
     "version": "0.13.11",
     "date": "2026-09-07",
     "highlights": [
-      "Habilite el complemento Advisor incluido para que un segundo modelo revise la conversación actual.",
       "Permita que los complementos enumeren modelos, lean el contexto de la sesión en curso y soliciten finalizaciones propiedad del host sin recibir credenciales."
     ]
   },

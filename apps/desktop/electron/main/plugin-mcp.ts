@@ -16,6 +16,8 @@ const MAX_MCP_REDIRECTS = 5;
 const MAX_TOOL_PAGES = 8;
 /** Guard against a server streaming an unbounded line at us. */
 const MAX_STDIO_LINE_BYTES = 4 * 1024 * 1024;
+/** Guard against a remote MCP server streaming an unbounded response body. */
+const MAX_HTTP_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 export type McpTool = {
   name: string;
@@ -210,6 +212,54 @@ function parseSseMessages(body: string): JsonRpcMessage[] {
   return out;
 }
 
+
+async function readBoundedHttpBody(response: Response): Promise<string> {
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > MAX_HTTP_RESPONSE_BYTES) {
+    try {
+      await response.body?.cancel();
+    } catch {
+      // The response is already rejected; cancellation is best effort.
+    }
+    throw mcpError("LIMIT_EXCEEDED", "mcp server response is too large");
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      bytes += value.byteLength;
+      if (bytes > MAX_HTTP_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw mcpError("LIMIT_EXCEEDED", "mcp server response is too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const body = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
+}
+
+function headersForMcpRequest(
+  headers: Record<string, string>,
+  initialUrl: string,
+  currentUrl: string,
+): Record<string, string> {
+  if (new URL(initialUrl).origin === new URL(currentUrl).origin) return { ...headers };
+  return {};
+}
+
 function createHttpTransport(
   options: {
     url: string;
@@ -226,73 +276,97 @@ function createHttpTransport(
   }
   let closed = false;
   let sessionId: string | undefined;
+  const activeControllers = new Set<AbortController>();
 
   return {
     send: async (message) => {
       if (closed) throw mcpError("UNAVAILABLE", "mcp session is closed");
       const controller = new AbortController();
+      activeControllers.add(controller);
       const timer = setTimeout(() => controller.abort(), options.timeoutMs);
-      let response: Response;
       let url = options.url;
       try {
         for (let hop = 0; ; hop += 1) {
           options.assertUrlAllowed?.(url);
-          response = await fetchImpl(url, {
+          const requestHeaders = headersForMcpRequest(options.headers, options.url, url);
+          const currentOrigin = new URL(url).origin;
+          const initialOrigin = new URL(options.url).origin;
+          const response = await fetchImpl(url, {
             method: "POST",
             headers: {
-              ...options.headers,
+              ...requestHeaders,
               "content-type": "application/json",
               accept: "application/json, text/event-stream",
               "mcp-protocol-version": MCP_PROTOCOL_VERSION,
-              ...(sessionId ? { "mcp-session-id": sessionId } : {}),
+              ...(currentOrigin === initialOrigin && sessionId
+                ? { "mcp-session-id": sessionId }
+                : {}),
             },
             body: JSON.stringify(message),
             redirect: "manual",
             signal: controller.signal,
           });
-          if (response.status < 300 || response.status > 399) break;
-          const location = response.headers.get("location");
-          if (!location) break;
-          if (hop >= MAX_MCP_REDIRECTS) {
-            throw mcpError("HTTP_REDIRECT", `too many redirects: ${options.url}`);
+          if (response.status >= 300 && response.status <= 399) {
+            const location = response.headers.get("location");
+            try {
+              await response.body?.cancel();
+            } catch {
+              // The redirect body is not part of the MCP response.
+            }
+            if (!location) {
+              throw mcpError("HTTP_REDIRECT", "redirect without a location header");
+            }
+            if (hop >= MAX_MCP_REDIRECTS) {
+              throw mcpError("HTTP_REDIRECT", `too many redirects: ${options.url}`);
+            }
+            let nextUrl: URL;
+            try {
+              nextUrl = new URL(location, url);
+            } catch {
+              throw mcpError("HTTP_REDIRECT", `invalid redirect from ${url}`);
+            }
+            if (nextUrl.protocol !== "http:" && nextUrl.protocol !== "https:") {
+              throw mcpError("HTTP_REDIRECT", `unsupported redirect from ${url}`);
+            }
+            if (nextUrl.origin !== initialOrigin) sessionId = undefined;
+            url = nextUrl.toString();
+            continue;
           }
-          let nextUrl: URL;
-          try {
-            nextUrl = new URL(location, url);
-          } catch {
-            throw mcpError("HTTP_REDIRECT", `invalid redirect from ${url}`);
+          if (!response.ok) {
+            try {
+              await response.body?.cancel();
+            } catch {
+              // The status is sufficient for the structured MCP error.
+            }
+            throw mcpError("HTTP_ERROR", `mcp server returned ${response.status}`);
           }
-          if (nextUrl.protocol !== "http:" && nextUrl.protocol !== "https:") {
-            throw mcpError("HTTP_REDIRECT", `unsupported redirect from ${url}`);
-          }
-          url = nextUrl.toString();
+          const nextSession = response.headers.get("mcp-session-id");
+          if (nextSession && new URL(url).origin === initialOrigin) sessionId = nextSession;
+          const contentType = response.headers.get("content-type") ?? "";
+          const body = await readBoundedHttpBody(response);
+          if (!body.trim()) return;
+          const messages = contentType.includes("text/event-stream")
+            ? parseSseMessages(body)
+            : (() => {
+                const parsed = JSON.parse(body) as JsonRpcMessage | JsonRpcMessage[];
+                return Array.isArray(parsed) ? parsed : [parsed];
+              })();
+          for (const entry of messages) handlers.onMessage(entry);
+          return;
         }
       } finally {
         clearTimeout(timer);
+        activeControllers.delete(controller);
       }
-      const nextSession = response.headers.get("mcp-session-id");
-      if (nextSession) sessionId = nextSession;
-      if (!response.ok) {
-        throw mcpError("HTTP_ERROR", `mcp server returned ${response.status}`);
-      }
-      const contentType = response.headers.get("content-type") ?? "";
-      const body = await response.text();
-      if (!body.trim()) return;
-      const messages = contentType.includes("text/event-stream")
-        ? parseSseMessages(body)
-        : (() => {
-            const parsed = JSON.parse(body) as JsonRpcMessage | JsonRpcMessage[];
-            return Array.isArray(parsed) ? parsed : [parsed];
-          })();
-      for (const entry of messages) handlers.onMessage(entry);
     },
     close: () => {
       closed = true;
+      for (const controller of activeControllers) controller.abort();
+      activeControllers.clear();
       handlers.onClose("mcp session closed");
     },
   };
 }
-
 export type McpServerClientOptions = {
   /** Owning plugin, when there is one. User-configured servers have none. */
   pluginId?: string;

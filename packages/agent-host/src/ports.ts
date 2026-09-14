@@ -34,6 +34,7 @@ export interface HostRpcPort {
 export type TurnStartRequest = {
   sessionId: string;
   content: string;
+  sessionMessageId?: string;
   attachments?: AgentPromptAttachment[];
   effectivePermissionMode: RacpPermissionMode;
   idempotencyKey?: string;
@@ -57,6 +58,7 @@ export type QueuedTurnRecord = {
   sessionId: string;
   principalSubject: string;
   content: string;
+  sessionMessageId?: string;
   attachments?: AgentPromptAttachment[];
   effectivePermissionMode: RacpPermissionMode;
   idempotencyKey?: string;

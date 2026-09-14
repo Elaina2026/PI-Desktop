@@ -59,20 +59,58 @@ agent 循环上注册工具、命令和事件处理器。`ExtensionAPI` 契约�
 （[02-plugin-manifest-schema.md](/zh-CN/spec/07-plugins/02-plugin-manifest-schema) §4 与 §7）。
 当插件不贡献其他内容时，`main` 可以是空操作模块。
 
-### 3.2 导入 pi CLI 扩展
+### 3.2 导入 pi CLI 扩展或技能包
 
-插件页 →“导入 pi 扩展”打开原生选择器（main 拥有路径，D344），可选文件或目录。main 按
-`pi-coding-agent` loader 规则解析入口（`package.json` 的 `pi.extensions` 字段，否则
-`index.ts` / `index.js`，否则一层深度内的松散 `*.ts` / `*.js` 文件），把源码复制到
-`<dataDir>/plugins/imported/<slug>/src/`，写出上面的 manifest（id 为 `imported.<slug>`），
-并经与“加载本地插件”相同的路径注册为开发插件。选择器之前的确认就是信任决定；之后
-该行像其他授权一样显示 `agent.extension` 权限。
+插件页 →“导入 pi 扩展”打开原生选择器（main 拥有路径，D344），由用户明确选择本地
+文件或目录。main 把所选源码复制到 `<dataDir>/plugins/imported/<slug>/src/`，生成空操作
+`main.js` 和 id 为 `imported.<slug>` 的 manifest（重复导入时追加唯一后缀），再通过
+既有本地插件流程注册。选择器之前的确认仍是信任决定；生成的 manifest 只声明实际贡献
+所需的权限。
+
+扩展文件及未声明 `pi.skills` 的包保持既有 `pi-coding-agent` 入口发现规则：先取
+`package.json` 的 `pi.extensions`，否则取 `index.ts` / `index.js`，再否则取一层深度内
+的松散 `*.ts` / `*.js` 文件。明确声明 `pi.skills` 且没有 `pi.extensions`（或该数组为空）
+的包视为仅技能包：包括 `index.js` 在内的附带脚本作为资源复制，不会被提升为可执行的
+Agent 扩展。
+
+目录若自带 `package.json`，会（连同其 npm lockfile）一并复制到插件根并剥离 `workspaces` 字段。
+若声明了生产或可选依赖，main 会在首次加载前执行有界的两阶段安装：先运行
+`npm install --package-lock-only --omit=dev --legacy-peer-deps --no-audit --no-fund
+--ignore-scripts` 并校验完整生成的 lockfile，再使用相同安全参数运行 `npm ci`。
+`dependencies`、`optionalDependencies`、`devDependencies` 和 `peerDependencies` 中的
+直接 spec 都必须来自 registry，因为 npm 可能检查全部四者；git resolver 会被禁用。
+不会运行生命周期脚本。安装失败会清理部分依赖/cache、上报渲染层且不阻塞导入。确认对话框
+会与技能披露一并说明 npm 安装步骤。
 
 | 来源 | 结果 |
 |---|---|
-| 一个 pi 扩展目录或文件 | `plugins/imported` 下的开发插件，id 为 `imported.<slug>` |
-| 声明了 `contributes.agentExtensions` 的插件包 | 像任何插件一样安装；安装时询问该授权 |
-| 带 `pi.extensions` 字段的 `package.json` | 列出的条目，相对 `src/` |
+| 一个 pi 扩展目录或文件 | `plugins/imported` 下的本地插件，id 为 `imported.<slug>` |
+| 声明了 `contributes.agentExtensions` 的插件包 | 像其他插件一样安装；安装时询问该授权 |
+| 带 `pi.extensions` 的 `package.json` | `src/` 下的入口，通过 `contributes.agentExtensions` 贡献，需 `agent.extension` |
+| 带 `pi.skills` 的 `package.json` | `src/` 下的 Markdown 文档，通过 `contributes.skills` 贡献，需 `agent.prompt.inject` |
+| 仅技能包 | 持有 `agent.prompt.inject` 的空操作插件，不授予 `agent.extension` |
+
+`pi.skills` 是最多含 32 条非空路径的数组，每条路径相对于包目录，指向 Markdown 文件
+或目录。明确指定的 `.md` 文件直接作为技能。对于目录，优先使用其自身的 `SKILL.md`；
+若不存在，则纳入该目录直接包含的 `.md` 文件，并在子目录中查找 `SKILL.md`。
+嵌套技能目录找到自身的 `SKILL.md` 后停止向下扫描，避免把支持文档变成额外技能。
+扫描跳过点号开头的条目和 `node_modules`，对文档去重，目录扫描预算为 256。
+发现超过 32 个技能、声明的路径不存在或路径类型不受支持时，导入失败，不会静默生成
+不完整目录。每项贡献都按包内相对路径生成明确、稳定的插件内 ID，不同目录下同名的
+`SKILL.md` 保持独立。既有插件技能正文解析、大小限制、权限与卸载行为保持不变。
+
+复制时按所选包的相对路径判断排除项。包的祖先路径含 `node_modules` 不影响复制，
+只排除包自身依赖目录中的 `node_modules` 路径段。引用文档、素材、辅助脚本及其他
+普通源码文件保留在 `src/` 下，使技能的相对资源引用仍然成立。凭据文件（`.env*`、
+`.npmrc`、`.netrc`、`.pypirc`、私钥和证书文件）及仓库元数据目录不会被复制。所选
+根目录先解析为真实路径；贡献路径必须位于根目录内，不能包含 `..` 穿越，也不能指向
+包内依赖目录。绝对 `pi.skills` 路径与后代符号链接会被拒绝；复制保留资源时也拒绝
+符号链接，复制失败会清理部分生成的目录。生成目标以原子方式创建，不能位于所选源目录内。
+
+这是显式本地导入，不是 pi CLI 包管理器：不会自动扫描或导入 `~/.pi`，不会读取 CLI
+已安装包注册表，也不会执行 npm 生命周期脚本。声明依赖时，有界安装器只接受 registry
+版本说明和 registry 来源的 npm lockfile，拒绝不安全的包路径和嵌套依赖 spec，禁用 git
+解析，并隔离 npm 的配置/cache 与用户凭据和代理设置。导入包不代表其所有第三方扩展依赖都能执行。
 
 ## 4. 加载与运行时
 

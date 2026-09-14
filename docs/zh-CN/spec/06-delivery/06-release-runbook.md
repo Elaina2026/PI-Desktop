@@ -87,7 +87,9 @@ PNG 通过 `BrandLogo`。 PNG 是规范的；
 
 | 位置 | 要求 |
 |---|---|
-| `packages/shared/src/changelog.ts` | 每个已发货产品语言的该版本条目按最新优先排列，亮点条数一致 |
+| `apps/desktop/resources/models.dev/api.json` | 打标签前从 https://models.dev/api.json 刷新；发布工作流按该快照原样打包 |
+| `packages/shared/src/changelog.ts` | 英文、zh-CN、zh-TW 条目按最新优先排列，亮点条数一致 |
+| `packages/shared/src/changelog-de.ts`、`changelog-es.ts`、`changelog-fr.ts`、`changelog-ko.ts`、`changelog-tr.ts` | 版本集合与亮点条数与英文一致 |
 | `packages/shared/src/changelog.test.ts` | 该版本加入最新优先清单的首位 |
 | `package.json`、`apps/*/package.json`、`packages/*/package.json`、`docs/package.json` | 版本号一致（`docs` 是第三个工作区根，不在 `apps`/`packages` 之下） |
 | `Cargo.toml` 的 `[workspace.package]`、`Cargo.lock` 的 `host-core` | 版本号一致 |
@@ -96,43 +98,58 @@ PNG 通过 `BrandLogo`。 PNG 是规范的；
 
 阻塞步骤：
 
-1. 在 `node scripts/release.mjs <version>` / `git tag` **之前**编辑
+1. 打标签**之前**刷新 `apps/desktop/resources/models.dev/api.json`。
+   `scripts/release.mjs` 默认对每次升版本都会刷新，包括预发布。无变化的刷新
+   （已经是最新）仍然算通过：被打标签的树里的快照才是产物会带上的内容。
+   不要把单行压缩 JSON 的 diff 当成“文件不存在”。
+2. 在 `node scripts/release.mjs <version>` / `git tag` **之前**编辑
    `packages/shared/src/changelog.ts`：
-   - 在 `en` 和每个已发货产品语言下各添加**最新优先**的条目。
-   - 使用相同的 `version` 字符串（semver，**不带**前导 `v`，与
+   - 在 `en` 和每个已发货产品语言下各添加**最新优先**的条目（本文件中的
+     `zh-CN` / `zh-TW`；`packages/shared/src/changelog-*.ts` 中的
+     `de` / `es` / `fr` / `ko` / `tr`）。
+   - 稳定版使用相同的 `version` 字符串（semver，**不带**前导 `v`，与
      `apps/desktop` / `APP_VERSION` 一致）。
    - 可选的 ISO `date`（`YYYY-MM-DD`）。
    - 亮点条数一致；英文是唯一事实来源（ADR 0009）。
    - 每条只表达一个面向用户的要点（不是原始 PR 标题）。
-2. 除非产品明确为该渠道提供应用内说明，**不要**收录仅预发布版本
-   （`x.y.z-rc.*`）。
-3. 同步 `packages/shared/src/changelog.test.ts` 中的最新优先版本清单
-   （把新版本加到首位），然后运行
+3. **不要**把预发布标识（`x.y.z-rc.*`、`x.y.z-beta.*`）本身写进应用内更新日志。
+   当该预发布是下一稳定版的预览时，应添加那个**稳定版本**（`x.y.z`）的条目，
+   让测试者无需联网就能看到“新增内容”。仅当产品明确不为这次构建提供说明时
+   才省略目录。
+4. 同步 `packages/shared/src/changelog.test.ts` 中的最新优先版本清单
+   （把新的稳定版本加到首位），然后运行
    `pnpm --filter @pi-desktop/shared test`，确认目录对齐（版本集合与亮点
    条数）仍然通过。
-4. 版本线发生变化（`0.10.x` → `0.11.x`）时更新 `README.md` 与
+5. 版本线发生变化（`0.10.x` → `0.11.x`）时更新 `README.md` 与
    `README.zh-CN.md`；当本次发布交付了用户可见行为，使亮点、下载、快速上手、
    状态或参与开发章节的描述不再准确时同样要更新。两个语言版本保持结构一致，
    英文是事实来源，中文版链接 `docs/zh-CN/` 镜像。
-5. 运行预检并修复所有报告的位置：
-   `pnpm check:release-docs [version]`（即 `node scripts/check-release-docs.mjs`）。预检会
-   在临时目录编译 TypeScript 更新日志，因此不要求先构建整个工作区。
-   `scripts/release.mjs` 在升
-   版本后运行同一检查，未通过时拒绝提交或打标签；`--skip-docs-check` 仅用于
-   明确的非发布性升版本。
-6. 提交文档更新，使被打标签的提交同时包含该版本的说明与准确的版本描述
+6. 运行预检并修复所有报告的位置：
+   `pnpm check:release-docs [version]`（即 `node scripts/check-release-docs.mjs`）。
+   对预发布，请对正在预览的**稳定版本**运行
+   （`pnpm check:release-docs x.y.z`），这样即使 `scripts/release.mjs` 对
+   `x.y.z-beta.*` / `x.y.z-rc.*` 跳过该预检，更新日志和 README 仍会对齐。
+   预检会在临时目录编译 TypeScript 更新日志，因此不要求先构建整个工作区。
+   `scripts/release.mjs` 仍会为预发布刷新 models.dev；`--skip-docs-check`
+   仅用于明确的非发布性升版本。
+7. 提交文档更新，使被打标签的提交同时包含该版本的说明与准确的版本描述
    （单独提交或与升版本提交相邻）。
-7. GitHub Release 正文仍可对网页使用 `generate_release_notes: true`；它们
+8. GitHub Release 正文仍可对网页使用 `generate_release_notes: true`；它们
    仅限网页，**不是**应用内说明的来源。
 
 打标签前清单：
 
-- [ ] `packages/shared/src/changelog.ts` 含有即将打标签版本的每个已发货产品语言条目
+- [ ] `apps/desktop/resources/models.dev/api.json` 已刷新，或已确认打标签的树中为最新
+- [ ] `packages/shared/src/changelog.ts` 含有正在发布或预览的稳定版本的英文 /
+      zh-CN / zh-TW 条目
+- [ ] `packages/shared/src/changelog-de.ts` 及其他语言目录与英文版本集合、
+      亮点条数一致
 - [ ] 各语言的亮点条数一致
 - [ ] 共享更新日志测试通过
 - [ ] `README.md` 与 `README.zh-CN.md` 声明当前版本线，且没有被本次发布
       推翻的描述
 - [ ] `node scripts/check-release-docs.mjs` 在发布提交上通过
+      （预览预发布时传入稳定版本）
 - [ ] `release.mjs` / 打标签仅在文档提交进入发布分支后执行
 
 ### 4.2 构建/打包
@@ -189,14 +206,15 @@ Intel x64 通道发布 `PI-Desktop-<version>-x64.dmg` 和
 blockmap），任何无后缀或架构错误的 macOS 工件都会使发布失败。
 
 DMG 使用带有品牌视觉的 720×500 背景，并明确展示拖入 Applications 的安装手势。
-应用和 Applications 链接位于主区域；首次启动助手和说明文件位于下方的辅助区域，
-这样未签名构建的处理路径可被发现，但不会被误认为正常安装动作。
+应用和 Applications 链接位于主区域；打开说明位于下方的辅助区域，这样未签名构建的
+处理路径可被发现，但不会被误认为正常安装动作。说明显示为 `If app won't open, read this.txt`；
+DMG 不包含可执行的 command 助手。
 
-每个 macOS DMG 和 ZIP 的安装包根目录都会包含可执行的
-`PI-Desktop-macOS-open.command` 以及配套的
-`PI-Desktop-macOS-opening-help.txt`。将 `PI-Desktop.app` 移动到
-`/Applications` 或 `~/Applications` 后，用户可以双击该助手。它只搜索这两个固定
-位置，在存在时递归删除唯一的 `com.apple.quarantine` 属性，然后打开 PI-Desktop。
+每个 macOS DMG 的安装包根目录都会包含配套的
+`PI-Desktop-macOS-opening-help.txt`，显示名为 `If app won't open, read this.txt`。macOS ZIP
+还包含该说明和可执行的 `PI-Desktop-macOS-open.command`。将 `PI-Desktop.app` 移动到
+`/Applications` 或 `~/Applications` 后，ZIP 用户可以双击该助手。它只搜索这两个
+固定位置，在存在时递归删除唯一的 `com.apple.quarantine` 属性，然后打开 PI-Desktop。
 在执行前它会校验 `CFBundleIdentifier=com.pi-desktop.app`。它不会使用 `sudo`，也不
 接受任意应用路径。标准系统位置的终端备用命令为：
 

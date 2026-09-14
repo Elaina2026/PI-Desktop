@@ -1,13 +1,13 @@
 //! Apply parsed ops against a tagged snapshot (spec 18 §8–§9, phase 2).
 
 use super::parse::{
-    Locator, MAX_REGISTER_BYTES, MAX_REGISTER_LINES, ParseError, ParsedOp, ParsedOps, parse_ops,
+    parse_ops, Locator, ParseError, ParsedOp, ParsedOps, MAX_REGISTER_BYTES, MAX_REGISTER_LINES,
 };
 use super::store::HashlineStore;
 use super::tag::{
-    NormalizedFile, encode_bytes, join_lines, normalize_file, split_lines, tag_of_lf_text,
+    encode_bytes, join_lines, normalize_file, split_lines, tag_of_lf_text, NormalizedFile,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -272,16 +272,17 @@ fn claim_insert(occupied: &mut BTreeSet<usize>, at: usize) -> Result<(), ToolErr
 fn apply_plan(lines: &[String], plan: &Plan) -> Vec<String> {
     let n = lines.len();
     let mut out = Vec::with_capacity(n + plan.inserts.values().map(Vec::len).sum::<usize>());
-    for i in 0..=n {
+    for (i, line) in lines.iter().enumerate() {
         if let Some(inserted) = plan.inserts.get(&i) {
             out.extend(inserted.iter().cloned());
         }
-        if i < n {
-            let line_no = (i as u32) + 1;
-            if !plan.deletes.contains(&line_no) {
-                out.push(lines[i].clone());
-            }
+        let line_no = (i as u32) + 1;
+        if !plan.deletes.contains(&line_no) {
+            out.push(line.clone());
         }
+    }
+    if let Some(inserted) = plan.inserts.get(&n) {
+        out.extend(inserted.iter().cloned());
     }
     out
 }
@@ -303,10 +304,8 @@ fn expand_registers(
                 if *start as usize > lines.len() || *end as usize > lines.len() {
                     continue;
                 }
-                let captured: Vec<String> = lines[(*start as usize - 1)..=(*end as usize - 1)]
-                    .iter()
-                    .cloned()
-                    .collect();
+                let captured: Vec<String> =
+                    lines[(*start as usize - 1)..=(*end as usize - 1)].to_vec();
                 validate_capture(&captured)?;
                 if let Some(name) = register {
                     if let (Some(session), Some(store)) = (session_id, store) {

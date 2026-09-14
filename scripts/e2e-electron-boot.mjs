@@ -1,25 +1,24 @@
 #!/usr/bin/env node
 /**
  * Electron boot smoke: launches the built desktop app with a throwaway
- * profile and asserts the sandboxed preload bridge + one IPC round-trip
- * (BOOT_PROBE line emitted by the main process, see electron/main/index.ts).
+ * profile and asserts the sandboxed preload bridge, IPC round-trips, and
+ * E2E-SESSION-list-refresh-keeps-desktop-responsive against 800 synthetic
+ * sessions (BOOT_PROBE emitted by electron/main/bootstrap/startup.ts).
  *
  * Prereqs: `pnpm --filter @pi-desktop/desktop build` and a host-core binary
  * (target/debug or target/release, or PI_DESKTOP_HOST_BIN).
  */
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { rmSync, existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  createTempDataDir,
+  repositoryRoot,
+  resolveElectronBinary,
+} from "./e2e/boot.mjs";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const root = join(__dirname, "..");
-const appDir = join(root, "apps/desktop");
-const electronBin =
-  process.platform === "win32"
-    ? join(appDir, "node_modules/electron/dist/electron.exe")
-    : join(appDir, "node_modules/.bin/electron");
+const root = repositoryRoot();
+const { appDir, electronBinary: electronBin } = resolveElectronBinary(root);
 
 if (!existsSync(join(appDir, "out/main/index.js"))) {
   console.error("desktop app not built. Run: pnpm --filter @pi-desktop/desktop build");
@@ -30,11 +29,28 @@ if (!existsSync(electronBin)) {
   process.exit(1);
 }
 
-const dataDir = mkdtempSync(join(tmpdir(), "pi-desktop-boot-"));
+for (const preloadPath of [
+  join(appDir, "out/preload/index.cjs"),
+  join(appDir, "out/preload/plugin-panel.js"),
+]) {
+  if (!existsSync(preloadPath)) {
+    console.error("preload output missing:", preloadPath);
+    process.exit(1);
+  }
+  const source = readFileSync(preloadPath, "utf8");
+  if (/require\(["']\.\//.test(source)) {
+    console.error("sandbox preload must not require a local runtime chunk:", preloadPath);
+    process.exit(1);
+  }
+}
+
+const dataDir = createTempDataDir("pi-desktop-boot-");
+const env = { ...process.env };
+delete env.ELECTRON_RUN_AS_NODE;
 const child = spawn(electronBin, ["."], {
   cwd: appDir,
   env: {
-    ...process.env,
+    ...env,
     PI_DESKTOP_DATA_DIR: dataDir,
     PI_DESKTOP_BOOT_PROBE: "1",
     PI_DESKTOP_START_MAXIMIZED: process.platform === "darwin" ? "0" : "1",
@@ -46,6 +62,7 @@ const child = spawn(electronBin, ["."], {
 
 let probe = null;
 let out = "";
+const pendingLines = new Map();
 
 const timeout = setTimeout(() => {
   console.error("FAIL boot-probe — timeout after 45s");
@@ -66,24 +83,45 @@ for (const stream of [child.stdout, child.stderr]) {
   stream.on("data", (buf) => {
     const text = String(buf);
     out += text;
-    const m = text.match(/BOOT_PROBE (.*)/);
-    if (m) {
-      try {
-        probe = JSON.parse(m[1]);
-      } catch {}
+    const lines = `${pendingLines.get(stream) ?? ""}${text}`.split(/\r?\n/);
+    pendingLines.set(stream, lines.pop());
+    for (const line of lines) {
+      if (!line.startsWith("BOOT_PROBE ")) continue;
+      try { probe = JSON.parse(line.slice("BOOT_PROBE ".length)); } catch {}
     }
   });
 }
 
-child.on("exit", () => {
+child.on("close", (code) => {
   const menuContractOk =
     process.platform === "darwin" ? probe?.menuCount >= 6 : probe?.menuCount === 0;
+  const sessions = probe?.sessionList;
+  // Each condition is able to fail. The probe's own construction guarantees the
+  // seeded count, fixture-model count, refresh rounds and main-loop ticks, so
+  // those are not asserted; the per-read list duration and the Main-thread
+  // heartbeat gap are the live responsiveness observations that can fail.
+  const listDurations = Array.isArray(sessions?.listDurationsMs)
+    ? sessions.listDurationsMs
+    : [];
+  const sessionListOk =
+    sessions !== undefined &&
+    sessions.returnedCount >= 800 &&
+    sessions.complete === true &&
+    sessions.capabilitiesConsistent === true &&
+    listDurations.length === 8 &&
+    Math.max(...listDurations) < 1000 &&
+    sessions.maxMainGapMs < 1000 &&
+    Array.isArray(sessions.heartbeatDurationsMs) &&
+    sessions.heartbeatDurationsMs.length > 0 &&
+    sessions.heartbeatDurationsMs.every((duration) => duration < 1000);
   if (
+    code === 0 &&
     probe?.ok &&
     probe.appName === "PI-Desktop" &&
     probe.platform === process.platform &&
     (process.platform === "darwin" || probe.maximized === true) &&
-    menuContractOk
+    menuContractOk &&
+    sessionListOk
   ) {
     const menuDetail =
       process.platform === "darwin"
@@ -92,6 +130,9 @@ child.on("exit", () => {
     console.log(
       `PASS boot-probe — app v${probe.version}, host protocol ${probe.hostProtocol}, ` +
         `${menuDetail} on ${probe.platform}`,
+    );
+    console.log(
+      "PASS E2E-SESSION-list-refresh-keeps-desktop-responsive — " + JSON.stringify(sessions),
     );
     cleanup(0);
   } else {

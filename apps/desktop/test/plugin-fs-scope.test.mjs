@@ -626,7 +626,12 @@ test("the write ledger lets a plugin delete its own output without a prompt", as
   });
   assert.equal(mine.ok, true);
   assert.equal(consents.length, 0, "removing your own output asks nobody");
-  assert.deepEqual(trashed.map((p) => p.replaceAll("\\", "/").endsWith("out/report.md")), [true]);
+  // The ledger holds the native path; compare on one separator spelling so the
+  // assertion holds on Windows too.
+  assert.deepEqual(
+    trashed.map((p) => p.replace(/\\/g, "/").endsWith("out/report.md")),
+    [true],
+  );
 
   // A file the plugin never wrote is somebody else's, ledger or not.
   const theirs = await runtime.invokePanelBridge("fs.delete.own", "try.remove", {

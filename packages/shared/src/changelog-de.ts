@@ -2,6 +2,22 @@ import type { ChangelogEntry } from "./changelog.js";
 
 export const deEntries: ChangelogEntry[] = [
   {
+    "version": "0.14.8",
+    "date": "2026-09-14",
+    "highlights": [
+      "Durchsuchen und installieren Sie MCP-Server aus der offiziellen Registry und benutzerdefinierten Quellen im MCP-Markt.",
+      "Durchsuchen und installieren Sie Skills aus kuratierten und GitHub-Quellen im Skill-Markt, mit öffentlichem HTTPS und Größenbegrenzung.",
+      "Liefert die Dateiansicht als mitgeliefertes File-Manager-Plugin; gebündelte Plugins können Marktplatz-Updates behalten.",
+      "Fügt einen Vorschau-Modus für das Arbeitspanel hinzu, hebt die Chat-Spalte auf mindestens 450px und priorisiert MainChat im Dreispalten-Layout.",
+      "Findet unabhängige Sitzungen, sendet host-eigene Kollaborationsnachrichten und öffnet Kollaborationslinks.",
+      "Subagenten können Eltern-Tools erben, mitgelieferte Builtins erscheinen in den Einstellungen, ein UI-Designer-Builtin kommt hinzu, und das Erstellen zeigt einen eigenen Status.",
+      "Steuert einen laufenden Turn mit Alt+Enter und öffnet eingefügte Textdateien im Composer zum Bearbeiten.",
+      "Gestaltet die Projekterstellung neu: Mehrordner-Arbeitsbereiche, projekteigene Memory und visueller Memory-Editor.",
+      "Installiert deklarierte Abhängigkeiten und Skills aus importierten pi-Paketen hinter einer host-eigenen Sicherheitsgrenze.",
+      "Fügt Vorgabe-Chips für Kontextfenster und Max-Output hinzu, zeigt Read-Zeilenbereiche auf Tool-Chips und hält den Kontext nach fehlgeschlagener Kompaktierung wiederherstellbar.",
+    ],
+  },
+  {
     "version": "0.14.6",
     "date": "2026-09-10",
     "highlights": [
@@ -76,7 +92,6 @@ export const deEntries: ChangelogEntry[] = [
     "version": "0.13.11",
     "date": "2026-09-07",
     "highlights": [
-      "Aktivieren Sie das mitgelieferte Advisor-Plugin, damit ein zweites Modell die aktuelle Konversation überprüft.",
       "Ermöglichen Sie Plugins, Modelle aufzulisten, den Sitzungskontext während der Übertragung zu lesen und hosteigene Vervollständigungen anzufordern, ohne Anmeldeinformationen zu erhalten."
     ]
   },

@@ -88,10 +88,12 @@ Plugins cannot directly access:
 - provider key
 - other plugins' private registry data
 
-If a "controlled session summary API" is offered in the future, it must:
-- Have a separate permission
-- Be disabled by default
-- Be auditable
+The reviewed `desktop.control` gateway now offers the bounded session
+collaboration projection and mutation catalog. It does not expose host tables,
+transcript files, credentials, Electron IPC, or the MCP bearer token. The host
+derives source identity from the active Agent tool invocation, persists the
+delivery and provenance ledger in host-core, and audits the plugin operation;
+plugin-private state is never treated as authorization or session identity.
 
 ## 8. Uninstall cleanup policy
 

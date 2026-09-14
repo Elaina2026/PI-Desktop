@@ -143,8 +143,14 @@ pub struct UiMessage {
     pub id: String,
     pub role: String,
     pub content: String,
+    /// Host-authenticated agent-to-agent origin, never a human authorization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_message: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<MessageAttachment>>,
+    /// Accepted input to an existing turn, preserved by Stop after renderer reload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steering: Option<bool>,
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
@@ -259,6 +265,12 @@ fn is_default_title(title: &str) -> bool {
 /// the search index row (None for tool rows, matching the FTS triggers).
 pub(crate) fn ui_to_record(message: &UiMessage) -> (MessageRecord, Option<String>) {
     let mut meta_obj = serde_json::Map::new();
+    if let Some(origin) = &message.session_message {
+        meta_obj.insert("sessionMessage".into(), origin.clone());
+    }
+    if let Some(steering) = message.steering {
+        meta_obj.insert("steering".into(), json!(steering));
+    }
     if let Some(status) = &message.status {
         meta_obj.insert("status".into(), json!(status));
     }
@@ -388,6 +400,8 @@ pub(crate) fn record_to_ui(record: MessageRecord) -> UiMessage {
         _ => Vec::new(),
     };
     let meta = record.meta.unwrap_or(Value::Null);
+    let session_message = meta.get("sessionMessage").cloned();
+    let steering = meta.get("steering").and_then(Value::as_bool);
     let status = meta
         .get("status")
         .and_then(|v| v.as_str())
@@ -446,20 +460,20 @@ pub(crate) fn record_to_ui(record: MessageRecord) -> UiMessage {
     let attachments = blocks
         .iter()
         .filter_map(|block| {
-            (block.get("type").and_then(|t| t.as_str()) == Some("attachment")).then(|| {
-                Some(MessageAttachment {
-                    kind: block.get("kind").and_then(|v| v.as_str())?.to_string(),
-                    name: block.get("name").and_then(|v| v.as_str())?.to_string(),
-                    reference: block.get("ref").and_then(|v| v.as_str())?.to_string(),
-                    mime_type: block
-                        .get("mimeType")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string),
-                    size: block.get("size").and_then(|v| v.as_i64()),
-                })
+            if block.get("type").and_then(|t| t.as_str()) != Some("attachment") {
+                return None;
+            }
+            Some(MessageAttachment {
+                kind: block.get("kind").and_then(|v| v.as_str())?.to_string(),
+                name: block.get("name").and_then(|v| v.as_str())?.to_string(),
+                reference: block.get("ref").and_then(|v| v.as_str())?.to_string(),
+                mime_type: block
+                    .get("mimeType")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                size: block.get("size").and_then(|v| v.as_i64()),
             })
         })
-        .flatten()
         .collect::<Vec<_>>();
     let attachments = (!attachments.is_empty()).then_some(attachments);
 
@@ -478,7 +492,9 @@ pub(crate) fn record_to_ui(record: MessageRecord) -> UiMessage {
             id: record.id,
             role: record.role,
             content: text,
+            session_message,
             attachments: None,
+            steering,
             created_at: record.created_at,
             thinking,
             status,
@@ -524,7 +540,9 @@ pub(crate) fn record_to_ui(record: MessageRecord) -> UiMessage {
             id: record.id,
             role: record.role,
             content,
+            session_message,
             attachments,
+            steering,
             created_at: record.created_at,
             thinking,
             status,
@@ -1105,6 +1123,20 @@ pub fn create_session(
     create_session_with_thinking(db, title, mode, provider_id, model_id, project_path, None)
 }
 
+/// Inputs for creating a durable session. Keeping the optional permission mode
+/// in this value lets the host validate and persist the full configuration in
+/// one database operation without widening the legacy constructor signature.
+#[derive(Debug, Default)]
+pub struct SessionCreateOptions {
+    pub title: Option<String>,
+    pub mode: Option<String>,
+    pub provider_id: Option<String>,
+    pub model_id: Option<String>,
+    pub project_path: Option<String>,
+    pub thinking_level: Option<String>,
+    pub permission_mode: Option<String>,
+}
+
 pub fn create_session_with_thinking(
     db: &Database,
     title: Option<String>,
@@ -1114,12 +1146,46 @@ pub fn create_session_with_thinking(
     project_path: Option<String>,
     thinking_level: Option<String>,
 ) -> Result<SessionSummary> {
+    create_session_with_options(
+        db,
+        SessionCreateOptions {
+            title,
+            mode,
+            provider_id,
+            model_id,
+            project_path,
+            thinking_level,
+            permission_mode: None,
+        },
+    )
+}
+
+/// Create a session with all optional configuration applied atomically.
+///
+/// Omitting `permission_mode` preserves the historical `inherit` default. The
+/// extra input is used by trusted desktop orchestration so a new worker can be
+/// created with its parent's permission ceiling in the same host transaction.
+pub fn create_session_with_options(
+    db: &Database,
+    options: SessionCreateOptions,
+) -> Result<SessionSummary> {
+    let SessionCreateOptions {
+        title,
+        mode,
+        provider_id,
+        model_id,
+        project_path,
+        thinking_level,
+        permission_mode,
+    } = options;
     let now = now_ms();
     let id = Uuid::new_v4().to_string();
     let title = title.unwrap_or_else(|| "New task".into());
     let mode = normalize_mode(mode.as_deref());
     let thinking_level = thinking_level.unwrap_or_else(default_thinking_level);
     validate_thinking_level(&thinking_level)?;
+    let permission_mode = permission_mode.unwrap_or_else(default_permission_mode);
+    validate_permission_mode(&permission_mode)?;
     let project_id = match project_path
         .as_deref()
         .filter(|path| !path.trim().is_empty())
@@ -1135,8 +1201,8 @@ pub fn create_session_with_thinking(
         .prepare_cached(
             "INSERT INTO sessions (
                 id, title, project_id, provider_id, model_id, mode, thinking_level,
-                created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+                permission_mode, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
         )?
         .execute(params![
             id,
@@ -1146,6 +1212,7 @@ pub fn create_session_with_thinking(
             model_id,
             mode,
             thinking_level,
+            permission_mode,
             now
         ])?;
     Ok(SessionSummary {
@@ -1157,7 +1224,7 @@ pub fn create_session_with_thinking(
         provider_id,
         mode,
         thinking_level,
-        permission_mode: default_permission_mode(),
+        permission_mode,
         updated_at: ms_to_ts(now),
         created_at: ms_to_ts(now),
     })
@@ -1521,6 +1588,48 @@ pub fn rename_session(db: &Database, id: &str, title: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
+/// Outcome of moving a session to a different project.
+pub enum MoveSessionProjectResult {
+    Moved(Box<SessionSummary>),
+    NotFound,
+    Busy,
+}
+
+/// Move an idle session to another project.
+///
+/// Only the session's project association and `updated_at` change: transcript,
+/// revisions, artifacts, notifications, scratch data, and runtime state belong
+/// to the session rather than the project and stay untouched. A session with a
+/// running turn is rejected so a live agent never switches instruction roots
+/// mid-turn.
+pub fn move_session_project(
+    db: &Database,
+    id: &str,
+    project_path: &str,
+) -> Result<MoveSessionProjectResult> {
+    if get_session(db, id)?.is_none() {
+        return Ok(MoveSessionProjectResult::NotFound);
+    }
+    let has_running_turn: bool = db.conn().query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM turns WHERE session_id = ?1 AND status = 'running'
+         )",
+        params![id],
+        |row| row.get(0),
+    )?;
+    if has_running_turn {
+        return Ok(MoveSessionProjectResult::Busy);
+    }
+    let project_id = db.ensure_project(project_path, false)?;
+    db.conn()
+        .prepare_cached("UPDATE sessions SET project_id = ?1, updated_at = ?2 WHERE id = ?3")?
+        .execute(params![project_id, now_ms(), id])?;
+    let Some(moved) = get_session(db, id)? else {
+        return Ok(MoveSessionProjectResult::NotFound);
+    };
+    Ok(MoveSessionProjectResult::Moved(Box::new(moved.summary)))
+}
+
 /// Per-message records plus their extracted index text, in input order.
 fn records_and_texts(messages: &[UiMessage]) -> (Vec<MessageRecord>, Vec<Option<String>>) {
     let mut records = Vec::with_capacity(messages.len());
@@ -1539,14 +1648,62 @@ pub fn append_message(
     message: &UiMessage,
     turn_id: Option<&str>,
 ) -> Result<()> {
+    let message = crate::session_collaboration::prepare_append(db, session_id, message, turn_id)?;
     let session_created = ensure_session_for_append(db, session_id)?;
-    let (record, text) = ui_to_record(message);
+    let (record, text) = ui_to_record(&message);
     // Electron may replay an outbox entry after a host restart. Message ids
     // are globally unique, so an existing row is already the durable result.
+    // A steering input reserves its preceding streaming assistant's position;
+    // only a terminal assistant snapshot may replace that provisional row.
     if message_indexed(db, session_id, &record.id)? {
+        if message.role == "assistant"
+            && message.status.as_deref() != Some("streaming")
+            && streaming_assistant_indexed(db, session_id, &record.id)?
+        {
+            invalidate_transcript_layout(session_id);
+            if !transcripts::update_message(db.data_dir(), session_id, &record)? {
+                return Err(anyhow!(
+                    "streaming assistant is missing from its transcript"
+                ));
+            }
+            db.conn().execute(
+                "UPDATE messages SET text = ?3, is_error = ?4 WHERE session_id = ?1 AND id = ?2",
+                params![session_id, record.id, text, record.is_error],
+            )?;
+        } else {
+            return Ok(());
+        }
+    } else {
+        append_record(
+            db,
+            session_id,
+            &session_created,
+            &record,
+            text.as_deref(),
+            turn_id,
+        )?;
+    }
+    if message.role == "assistant" && message.status.as_deref() == Some("streaming") {
+        // Even an empty reservation needs a checkpoint so a crash can settle
+        // it as aborted. Later stream checkpoints replace this snapshot.
+        let existing = transcripts::read_inflight(db.data_dir(), session_id)?;
+        if existing.as_ref().is_none_or(|checkpoint| {
+            ts_to_ms(&checkpoint.message.created_at) < ts_to_ms(&record.created_at)
+        }) {
+            transcripts::write_inflight(
+                db.data_dir(),
+                session_id,
+                &transcripts::InflightRecord {
+                    schema: transcripts::INFLIGHT_SCHEMA,
+                    session_id: session_id.to_string(),
+                    turn_id: turn_id.map(str::to_string),
+                    saved_at: ms_to_ts(now_ms()),
+                    message: record,
+                },
+            )?;
+        }
         return Ok(());
     }
-    append_record(db, session_id, &session_created, &record, text.as_deref(), turn_id)?;
     // The final assistant row supersedes any checkpoint of the same message
     // (D299). A checkpoint for a different id belongs to a newer fragment and
     // stays until its own final row or the turn end settles it.
@@ -1571,6 +1728,37 @@ fn message_indexed(db: &Database, session_id: &str, message_id: &str) -> Result<
         )
         .optional()?;
     Ok(existing.is_some())
+}
+
+fn streaming_assistant_indexed(db: &Database, session_id: &str, message_id: &str) -> Result<bool> {
+    let layout = session_layout(db, session_id)?;
+    let mut end = layout.message_count();
+    while end > 0 {
+        let start = end.saturating_sub(64);
+        let window = transcripts::read_transcript_window_with_layout(
+            db.data_dir(),
+            session_id,
+            &layout,
+            start,
+            Some(end - start),
+        )?;
+        if let Some(record) = window
+            .messages
+            .iter()
+            .rev()
+            .find(|record| record.id == message_id)
+        {
+            return Ok(record.role == "assistant"
+                && record
+                    .meta
+                    .as_ref()
+                    .and_then(|meta| meta.get("status"))
+                    .and_then(Value::as_str)
+                    == Some("streaming"));
+        }
+        end = start;
+    }
+    Ok(false)
 }
 
 /// Append one canonical record: transcript line first, then the index row.
@@ -1624,11 +1812,13 @@ pub fn save_inflight_message(
         || message
             .thinking
             .as_deref()
-            .map_or(false, |thinking| !thinking.trim().is_empty());
+            .is_some_and(|thinking| !thinking.trim().is_empty());
     if !has_text {
         return Ok(false);
     }
-    if message_indexed(db, session_id, &message.id)? {
+    if message_indexed(db, session_id, &message.id)?
+        && !streaming_assistant_indexed(db, session_id, &message.id)?
+    {
         transcripts::remove_inflight(db.data_dir(), session_id)?;
         return Ok(false);
     }
@@ -1669,7 +1859,8 @@ pub fn recover_inflight_message(
             return Ok(None);
         }
     };
-    if message_indexed(db, session_id, &inflight.message.id)? {
+    let indexed = message_indexed(db, session_id, &inflight.message.id)?;
+    if indexed && !streaming_assistant_indexed(db, session_id, &inflight.message.id)? {
         transcripts::remove_inflight(db.data_dir(), session_id)?;
         return Ok(None);
     }
@@ -1700,14 +1891,23 @@ pub fn recover_inflight_message(
     meta.insert("status".into(), json!(promoted_status));
     record.meta = Some(Value::Object(meta));
     let text = record_index_text(&record);
-    append_record(
-        db,
-        session_id,
-        &session_created,
-        &record,
-        text.as_deref(),
-        inflight.turn_id.as_deref(),
-    )?;
+    if indexed {
+        append_message(
+            db,
+            session_id,
+            &record_to_ui(record.clone()),
+            inflight.turn_id.as_deref(),
+        )?;
+    } else {
+        append_record(
+            db,
+            session_id,
+            &session_created,
+            &record,
+            text.as_deref(),
+            inflight.turn_id.as_deref(),
+        )?;
+    }
     Ok(Some(record_to_ui(record)))
 }
 
@@ -1765,6 +1965,7 @@ fn compaction_valid_for_records(compaction: &CompactionRecord, records: &[Messag
 
 pub fn replace_messages(db: &Database, session_id: &str, messages: &[UiMessage]) -> Result<()> {
     let session_created = session_created_at(db, session_id)?;
+    crate::session_collaboration::validate_replacement(db, session_id, messages)?;
     let (records, texts) = records_and_texts(messages);
     let compactions: Vec<CompactionRecord> =
         transcripts::read_compactions(db.data_dir(), session_id)?
@@ -1857,13 +2058,13 @@ pub fn truncate_from(
         Some(message_id) => messages
             .iter()
             .position(|message| message.id == message_id)
-            .ok_or_else(|| {
-                anyhow!("NOT_FOUND: truncateFromMessageId is not in this session")
-            })?,
+            .ok_or_else(|| anyhow!("NOT_FOUND: truncateFromMessageId is not in this session"))?,
         None => match truncate_before {
             Some(count) if count >= 0 => (count as usize).min(messages.len()),
             Some(_) => {
-                return Err(anyhow!("INVALID_PARAMS: truncateBefore must be non-negative"));
+                return Err(anyhow!(
+                    "INVALID_PARAMS: truncateBefore must be non-negative"
+                ));
             }
             None => {
                 return Err(anyhow!(
@@ -1873,6 +2074,14 @@ pub fn truncate_from(
         },
     };
     let discarded = &messages[cut..];
+    if discarded
+        .first()
+        .is_some_and(|message| message.session_message.is_some())
+    {
+        return Err(anyhow!(
+            "PERMISSION_DENIED: session messages cannot be edited or regenerated"
+        ));
+    }
     let kept = &messages[..cut];
 
     let aborted_turn_id = abort_running_turn(db, session_id)?;
@@ -1962,7 +2171,6 @@ fn archive_discarded_regenerate_branch(
         active_revision: count + 1,
     }))
 }
-
 
 /// Persist the rollback state on the tool message that owns a review snapshot.
 /// The tool result remains the message-local source of truth after restart.
@@ -2091,7 +2299,11 @@ pub fn save_message_revision(
 
 /// Owning turn per message id, for the messages of one branch. The turn is
 /// index-row state, so an archived branch carries it explicitly.
-fn owning_turns_for(db: &Database, session_id: &str, messages: &[UiMessage]) -> Result<HashMap<String, String>> {
+fn owning_turns_for(
+    db: &Database,
+    session_id: &str,
+    messages: &[UiMessage],
+) -> Result<HashMap<String, String>> {
     let mut stmt = db.conn().prepare_cached(
         "SELECT id, turn_id FROM messages
          WHERE session_id = ?1 AND turn_id IS NOT NULL",
@@ -2632,7 +2844,15 @@ pub fn end_turn(
     usage: Option<&Value>,
     create_notification: bool,
 ) -> Result<EndTurnResult> {
-    end_turn_settling(db, turn_id, status, error_code, usage, create_notification, false)
+    end_turn_settling(
+        db,
+        turn_id,
+        status,
+        error_code,
+        usage,
+        create_notification,
+        false,
+    )
 }
 
 /// `end_turn` that also settles the session's in-flight reply checkpoint
@@ -2694,12 +2914,12 @@ pub fn end_turn_settling(
     // the aborted final row is still on its way and removes it on arrival,
     // and the boot sweep settles a row that never came.
     let recovered = match session_id.as_deref() {
-        Some(session_id) if recover_inflight => {
-            recover_inflight_message(db, session_id, true)?
-        }
+        Some(session_id) if recover_inflight => recover_inflight_message(db, session_id, true)?,
         Some(session_id) if status != "aborted" => {
             if let Some(inflight) = transcripts::read_inflight(db.data_dir(), session_id)? {
-                if message_indexed(db, session_id, &inflight.message.id)? {
+                if message_indexed(db, session_id, &inflight.message.id)?
+                    && !streaming_assistant_indexed(db, session_id, &inflight.message.id)?
+                {
                     transcripts::remove_inflight(db.data_dir(), session_id)?;
                 }
             }
@@ -2809,7 +3029,10 @@ fn resolve_history_range(
     bucket: &str,
 ) -> (i64, i64) {
     let now = chrono::Local::now();
-    let end = end_date.filter(|v| *v > 0).and_then(local_from_ms).unwrap_or(now);
+    let end = end_date
+        .filter(|v| *v > 0)
+        .and_then(local_from_ms)
+        .unwrap_or(now);
     let start = start_date
         .filter(|v| *v > 0)
         .and_then(local_from_ms)
@@ -2843,8 +3066,7 @@ fn filled_history_keys(start_ms: i64, end_ms: i64, bucket: &str) -> Vec<(String,
             let end_y = end.year();
             let end_m = end.month();
             loop {
-                if let chrono::LocalResult::Single(dt)
-                | chrono::LocalResult::Ambiguous(dt, _) =
+                if let chrono::LocalResult::Single(dt) | chrono::LocalResult::Ambiguous(dt, _) =
                     chrono::Local.with_ymd_and_hms(year, month, 1, 0, 0, 0)
                 {
                     keys.push((dt.format("%Y-%m").to_string(), dt.timestamp_millis()));
@@ -2920,7 +3142,7 @@ impl UsageBucketAcc {
         self.input + self.output + self.cache_read + self.cache_write
     }
 
-    fn to_json(&self, date: &str) -> Value {
+    fn to_json(self, date: &str) -> Value {
         json!({
             "date": date,
             "timestamp": self.timestamp,
@@ -3041,6 +3263,7 @@ pub fn get_token_usage_history(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace::simple_canonicalize;
 
     fn test_db() -> Database {
         let dir = std::env::temp_dir().join(format!("pi-desktop-test-{}", Uuid::new_v4()));
@@ -3054,6 +3277,7 @@ mod tests {
             role: "user".into(),
             content: content.into(),
             attachments: None,
+            steering: None,
             created_at: ts.into(),
             thinking: None,
             status: None,
@@ -3076,6 +3300,7 @@ mod tests {
             is_error: None,
             parent_tool_call_id: None,
             agent_name: None,
+            session_message: None,
         }
     }
 
@@ -3308,6 +3533,36 @@ mod tests {
     }
 
     #[test]
+    fn create_session_permission_mode_is_optional_and_validated() {
+        let db = test_db();
+        let default_session = create_session(&db, None, None, None, None, None).unwrap();
+        assert_eq!(default_session.permission_mode, "inherit");
+
+        let worker = create_session_with_options(
+            &db,
+            SessionCreateOptions {
+                title: Some("Worker".into()),
+                mode: Some("agent".into()),
+                thinking_level: Some("high".into()),
+                permission_mode: Some("ask".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(worker.permission_mode, "ask");
+        assert_eq!(worker.thinking_level, "high");
+
+        assert!(create_session_with_options(
+            &db,
+            SessionCreateOptions {
+                permission_mode: Some("unrestricted".into()),
+                ..Default::default()
+            },
+        )
+        .is_err());
+    }
+
+    #[test]
     fn rename_session_normalizes_title_without_touching_activity() {
         let db = test_db();
         let session = create_session(&db, Some("Original".into()), None, None, None, None).unwrap();
@@ -3333,19 +3588,11 @@ mod tests {
             .unwrap();
         assert_eq!(after, before);
 
-        assert!(rename_session(
-            &db,
-            &session.id,
-            &"界".repeat(MAX_SESSION_TITLE_CHARS),
-        )
-        .is_ok());
+        assert!(rename_session(&db, &session.id, &"界".repeat(MAX_SESSION_TITLE_CHARS),).is_ok());
         assert!(rename_session(&db, &session.id, "   ").is_err());
-        assert!(rename_session(
-            &db,
-            &session.id,
-            &"x".repeat(MAX_SESSION_TITLE_CHARS + 1),
-        )
-        .is_err());
+        assert!(
+            rename_session(&db, &session.id, &"x".repeat(MAX_SESSION_TITLE_CHARS + 1),).is_err()
+        );
         assert!(!rename_session(&db, "missing", "Valid").unwrap());
     }
 
@@ -3367,8 +3614,7 @@ mod tests {
         )
         .unwrap();
 
-        let canonical = project
-            .canonicalize()
+        let canonical = simple_canonicalize(&project)
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
@@ -3529,6 +3775,7 @@ mod tests {
             role: "tool".into(),
             content: "ok".into(),
             attachments: None,
+            steering: None,
             created_at: "2025-05-01T00:00:02Z".into(),
             thinking: None,
             status: Some("complete".into()),
@@ -3551,6 +3798,7 @@ mod tests {
             is_error: None,
             parent_tool_call_id: None,
             agent_name: None,
+            session_message: None,
         };
         append_message(&db, &session.id, &tool, None).unwrap();
         // Host recovery may replay the Electron persistence outbox; a message
@@ -3668,7 +3916,11 @@ mod tests {
             append_message(
                 &db,
                 &session.id,
-                &user_msg(&format!("m{index}"), &format!("body {index}"), "2025-05-01T00:00:00Z"),
+                &user_msg(
+                    &format!("m{index}"),
+                    &format!("body {index}"),
+                    "2025-05-01T00:00:00Z",
+                ),
                 None,
             )
             .unwrap();
@@ -3705,7 +3957,10 @@ mod tests {
         // matters: the pre-change clamp against `last_seq` dropped the newest
         // ones entirely.
         for id in ["m0", "m1", "m2", "m3"] {
-            assert!(collected.iter().any(|seen| seen == id), "missing {id} in {collected:?}");
+            assert!(
+                collected.iter().any(|seen| seen == id),
+                "missing {id} in {collected:?}"
+            );
         }
         // The retried line is physically last, so it is the newest line the tail
         // window returns; the keep-last content wins and the renderer merges the
@@ -3855,6 +4110,7 @@ mod tests {
             role: "assistant".into(),
             content: "final answer".into(),
             attachments: None,
+            steering: None,
             created_at: "2025-05-01T00:00:01Z".into(),
             thinking: Some("first plan\nsecond plan".into()),
             status: Some("complete".into()),
@@ -3884,6 +4140,7 @@ mod tests {
             is_error: None,
             parent_tool_call_id: None,
             agent_name: None,
+            session_message: None,
         };
         append_message(&db, &session.id, &assistant, None).unwrap();
 
@@ -4407,6 +4664,58 @@ mod tests {
     }
 
     #[test]
+    fn move_session_project_reassigns_only_the_project_and_rejects_running_turns() {
+        let db = test_db();
+        let source = std::env::temp_dir().join(format!("pi-move-source-{}", Uuid::new_v4()));
+        let target = std::env::temp_dir().join(format!("pi-move-target-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        let session = create_session(
+            &db,
+            Some("Move me".into()),
+            Some("agent".into()),
+            Some("provider".into()),
+            Some("model".into()),
+            Some(source.to_string_lossy().to_string()),
+        )
+        .unwrap();
+
+        // The host stores the same canonical spelling it derives here: resolved,
+        // with forward slashes.
+        let target_path = crate::db::canonical_project_path(&target.to_string_lossy())
+            .expect("canonical project path");
+        let moved = move_session_project(&db, &session.id, &target.to_string_lossy()).unwrap();
+        let MoveSessionProjectResult::Moved(summary) = moved else {
+            panic!("an idle session must move to the requested project");
+        };
+        assert_eq!(summary.project_path.as_deref(), Some(target_path.as_str()));
+        // Title, provider, model, and message count stay with the session.
+        assert_eq!(summary.title, "Move me");
+        assert_eq!(summary.provider_id.as_deref(), Some("provider"));
+        assert_eq!(summary.model_id.as_deref(), Some("model"));
+        assert_eq!(summary.message_count, 0);
+
+        // A running turn blocks the move so the live agent cannot switch
+        // instruction roots mid-turn.
+        let turn = begin_turn(&db, &session.id, None, None).unwrap();
+        assert!(matches!(
+            move_session_project(&db, &session.id, &source.to_string_lossy()).unwrap(),
+            MoveSessionProjectResult::Busy
+        ));
+        end_turn(&db, &turn, "aborted", None, None, false).unwrap();
+        assert!(matches!(
+            move_session_project(&db, &session.id, &source.to_string_lossy()).unwrap(),
+            MoveSessionProjectResult::Moved(_)
+        ));
+
+        assert!(matches!(
+            move_session_project(&db, "missing-session", &source.to_string_lossy()).unwrap(),
+            MoveSessionProjectResult::NotFound
+        ));
+        assert!(move_session_project(&db, &session.id, "   ").is_err());
+    }
+
+    #[test]
     fn aborted_turn_does_not_create_notification() {
         let db = test_db();
         let session = create_session(&db, None, None, None, None, None).unwrap();
@@ -4893,14 +5202,20 @@ mod tests {
 
         let detail = get_session(&db, &session.id).unwrap().unwrap();
         assert_eq!(
-            detail.messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            detail
+                .messages
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["u0"]
         );
         let status: String = db
             .conn()
-            .query_row("SELECT status FROM turns WHERE id = ?1", params![turn], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT status FROM turns WHERE id = ?1",
+                params![turn],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(status, "aborted");
         let listed = list_message_revisions(&db, &session.id, "u1").unwrap();
@@ -4931,7 +5246,14 @@ mod tests {
         .unwrap();
         let error = truncate_from(&db, &session.id, Some("gone"), None).unwrap_err();
         assert!(error.to_string().contains("NOT_FOUND"));
-        assert_eq!(get_session(&db, &session.id).unwrap().unwrap().messages.len(), 1);
+        assert_eq!(
+            get_session(&db, &session.id)
+                .unwrap()
+                .unwrap()
+                .messages
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -4964,11 +5286,14 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            payload.messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            payload
+                .messages
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["u1", "a1"]
         );
     }
-
 
     fn streaming_assistant(id: &str, content: &str) -> UiMessage {
         let mut message = user_msg(id, content, "2025-05-01T00:00:01Z");
@@ -4985,14 +5310,40 @@ mod tests {
         let db = Database::open(&path).unwrap();
         let session = create_session(&db, None, None, None, None, None).unwrap();
         let turn = begin_turn(&db, &session.id, None, None).unwrap();
-        append_message(&db, &session.id, &user_msg("u1", "hello", "2025-05-01T00:00:00Z"), Some(&turn))
-            .unwrap();
+        append_message(
+            &db,
+            &session.id,
+            &user_msg("u1", "hello", "2025-05-01T00:00:00Z"),
+            Some(&turn),
+        )
+        .unwrap();
 
         // Two checkpoints of the same reply: the file is replaced, not appended.
-        assert!(save_inflight_message(&db, &session.id, Some(&turn), &streaming_assistant("a1", "par")).unwrap());
-        assert!(save_inflight_message(&db, &session.id, Some(&turn), &streaming_assistant("a1", "partial")).unwrap());
-        assert!(transcripts::inflight_path(db.data_dir(), &session.id).unwrap().exists());
-        assert_eq!(get_session(&db, &session.id).unwrap().unwrap().messages.len(), 1);
+        assert!(save_inflight_message(
+            &db,
+            &session.id,
+            Some(&turn),
+            &streaming_assistant("a1", "par")
+        )
+        .unwrap());
+        assert!(save_inflight_message(
+            &db,
+            &session.id,
+            Some(&turn),
+            &streaming_assistant("a1", "partial")
+        )
+        .unwrap());
+        assert!(transcripts::inflight_path(db.data_dir(), &session.id)
+            .unwrap()
+            .exists());
+        assert_eq!(
+            get_session(&db, &session.id)
+                .unwrap()
+                .unwrap()
+                .messages
+                .len(),
+            1
+        );
         drop(db);
 
         // A new process: the boot sweep aborts the turn, then the checkpoint
@@ -5003,7 +5354,9 @@ mod tests {
         assert_eq!(recovered[0].0, session.id);
         assert_eq!(recovered[0].1.content, "partial");
         assert_eq!(recovered[0].1.status.as_deref(), Some("aborted"));
-        assert!(!transcripts::inflight_path(db.data_dir(), &session.id).unwrap().exists());
+        assert!(!transcripts::inflight_path(db.data_dir(), &session.id)
+            .unwrap()
+            .exists());
 
         let messages = get_session(&db, &session.id).unwrap().unwrap().messages;
         assert_eq!(messages.len(), 2);
@@ -5012,7 +5365,9 @@ mod tests {
         assert_eq!(messages[1].status.as_deref(), Some("aborted"));
         let owning: Option<String> = db
             .conn()
-            .query_row("SELECT turn_id FROM messages WHERE id = 'a1'", [], |r| r.get(0))
+            .query_row("SELECT turn_id FROM messages WHERE id = 'a1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(owning.as_deref(), Some(turn.as_str()));
         // Running it again finds nothing to do.
@@ -5024,17 +5379,35 @@ mod tests {
         let db = test_db();
         let session = create_session(&db, None, None, None, None, None).unwrap();
         let turn = begin_turn(&db, &session.id, None, None).unwrap();
-        assert!(save_inflight_message(&db, &session.id, Some(&turn), &streaming_assistant("a1", "partial")).unwrap());
+        assert!(save_inflight_message(
+            &db,
+            &session.id,
+            Some(&turn),
+            &streaming_assistant("a1", "partial")
+        )
+        .unwrap());
 
         let mut final_row = streaming_assistant("a1", "partial and complete");
         final_row.status = Some("complete".into());
         append_message(&db, &session.id, &final_row, Some(&turn)).unwrap();
-        assert!(!transcripts::inflight_path(db.data_dir(), &session.id).unwrap().exists());
+        assert!(!transcripts::inflight_path(db.data_dir(), &session.id)
+            .unwrap()
+            .exists());
 
         // A checkpoint call that was already in flight when the final row landed.
-        assert!(!save_inflight_message(&db, &session.id, Some(&turn), &streaming_assistant("a1", "partial")).unwrap());
-        assert!(!transcripts::inflight_path(db.data_dir(), &session.id).unwrap().exists());
-        assert!(recover_inflight_message(&db, &session.id, true).unwrap().is_none());
+        assert!(!save_inflight_message(
+            &db,
+            &session.id,
+            Some(&turn),
+            &streaming_assistant("a1", "partial")
+        )
+        .unwrap());
+        assert!(!transcripts::inflight_path(db.data_dir(), &session.id)
+            .unwrap()
+            .exists());
+        assert!(recover_inflight_message(&db, &session.id, true)
+            .unwrap()
+            .is_none());
 
         let messages = get_session(&db, &session.id).unwrap().unwrap().messages;
         assert_eq!(messages.len(), 1);
@@ -5047,12 +5420,20 @@ mod tests {
         let db = test_db();
         let session = create_session(&db, None, None, None, None, None).unwrap();
         let turn = begin_turn(&db, &session.id, None, None).unwrap();
-        assert!(save_inflight_message(&db, &session.id, Some(&turn), &streaming_assistant("a2", "second")).unwrap());
+        assert!(save_inflight_message(
+            &db,
+            &session.id,
+            Some(&turn),
+            &streaming_assistant("a2", "second")
+        )
+        .unwrap());
 
         let mut earlier = streaming_assistant("a1", "first");
         earlier.status = Some("complete".into());
         append_message(&db, &session.id, &earlier, Some(&turn)).unwrap();
-        assert!(transcripts::inflight_path(db.data_dir(), &session.id).unwrap().exists());
+        assert!(transcripts::inflight_path(db.data_dir(), &session.id)
+            .unwrap()
+            .exists());
     }
 
     #[test]
@@ -5062,8 +5443,16 @@ mod tests {
         let mut empty = streaming_assistant("a1", "   ");
         empty.thinking = None;
         assert!(!save_inflight_message(&db, &session.id, None, &empty).unwrap());
-        assert!(!transcripts::inflight_path(db.data_dir(), &session.id).unwrap().exists());
-        assert!(save_inflight_message(&db, &session.id, None, &user_msg("u1", "x", "2025-05-01T00:00:00Z")).is_err());
+        assert!(!transcripts::inflight_path(db.data_dir(), &session.id)
+            .unwrap()
+            .exists());
+        assert!(save_inflight_message(
+            &db,
+            &session.id,
+            None,
+            &user_msg("u1", "x", "2025-05-01T00:00:00Z")
+        )
+        .is_err());
     }
 
     #[test]
@@ -5071,7 +5460,13 @@ mod tests {
         let db = test_db();
         let session = create_session(&db, None, None, None, None, None).unwrap();
         let turn = begin_turn(&db, &session.id, None, None).unwrap();
-        assert!(save_inflight_message(&db, &session.id, Some(&turn), &streaming_assistant("a1", "partial")).unwrap());
+        assert!(save_inflight_message(
+            &db,
+            &session.id,
+            Some(&turn),
+            &streaming_assistant("a1", "partial")
+        )
+        .unwrap());
 
         let ended = end_turn_settling(&db, &turn, "completed", None, None, false, false).unwrap();
         assert!(ended.updated);
@@ -5082,17 +5477,19 @@ mod tests {
                 .exists(),
             "outbox may still be draining; do not drop the only copy (D327)"
         );
-        assert!(get_session(&db, &session.id).unwrap().unwrap().messages.is_empty());
+        assert!(get_session(&db, &session.id)
+            .unwrap()
+            .unwrap()
+            .messages
+            .is_empty());
 
         assert!(
             recover_inflight_messages(&db, false).unwrap().is_empty(),
             "boot leaves a completed leftover for the outbox"
         );
-        assert!(
-            transcripts::inflight_path(db.data_dir(), &session.id)
-                .unwrap()
-                .exists()
-        );
+        assert!(transcripts::inflight_path(db.data_dir(), &session.id)
+            .unwrap()
+            .exists());
 
         let recovered = recover_inflight_messages(&db, true).unwrap();
         assert_eq!(recovered.len(), 1);
@@ -5109,7 +5506,13 @@ mod tests {
         let db = test_db();
         let session = create_session(&db, None, None, None, None, None).unwrap();
         let turn = begin_turn(&db, &session.id, None, None).unwrap();
-        assert!(save_inflight_message(&db, &session.id, Some(&turn), &streaming_assistant("a1", "partial")).unwrap());
+        assert!(save_inflight_message(
+            &db,
+            &session.id,
+            Some(&turn),
+            &streaming_assistant("a1", "partial")
+        )
+        .unwrap());
         let mut final_row = streaming_assistant("a1", "partial and complete");
         final_row.status = Some("complete".into());
         append_message(&db, &session.id, &final_row, Some(&turn)).unwrap();
@@ -5117,7 +5520,9 @@ mod tests {
         let ended = end_turn_settling(&db, &turn, "completed", None, None, false, false).unwrap();
         assert!(ended.updated);
         assert!(ended.recovered.is_none());
-        assert!(!transcripts::inflight_path(db.data_dir(), &session.id).unwrap().exists());
+        assert!(!transcripts::inflight_path(db.data_dir(), &session.id)
+            .unwrap()
+            .exists());
         let messages = get_session(&db, &session.id).unwrap().unwrap().messages;
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content, "partial and complete");
@@ -5129,14 +5534,31 @@ mod tests {
         let db = test_db();
         let session = create_session(&db, None, None, None, None, None).unwrap();
         let turn = begin_turn(&db, &session.id, None, None).unwrap();
-        assert!(save_inflight_message(&db, &session.id, Some(&turn), &streaming_assistant("a1", "partial")).unwrap());
+        assert!(save_inflight_message(
+            &db,
+            &session.id,
+            Some(&turn),
+            &streaming_assistant("a1", "partial")
+        )
+        .unwrap());
 
-        let ended = end_turn_settling(&db, &turn, "aborted", Some("TURN_ABORTED"), None, false, true).unwrap();
+        let ended = end_turn_settling(
+            &db,
+            &turn,
+            "aborted",
+            Some("TURN_ABORTED"),
+            None,
+            false,
+            true,
+        )
+        .unwrap();
         assert!(ended.updated);
         let recovered = ended.recovered.expect("checkpoint promoted");
         assert_eq!(recovered.id, "a1");
         assert_eq!(recovered.status.as_deref(), Some("aborted"));
-        assert!(!transcripts::inflight_path(db.data_dir(), &session.id).unwrap().exists());
+        assert!(!transcripts::inflight_path(db.data_dir(), &session.id)
+            .unwrap()
+            .exists());
         let messages = get_session(&db, &session.id).unwrap().unwrap().messages;
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content, "partial");
@@ -5145,7 +5567,14 @@ mod tests {
         let mut late = streaming_assistant("a1", "partial");
         late.status = Some("aborted".into());
         append_message(&db, &session.id, &late, Some(&turn)).unwrap();
-        assert_eq!(get_session(&db, &session.id).unwrap().unwrap().messages.len(), 1);
+        assert_eq!(
+            get_session(&db, &session.id)
+                .unwrap()
+                .unwrap()
+                .messages
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -5153,25 +5582,57 @@ mod tests {
         let db = test_db();
         let session = create_session(&db, None, None, None, None, None).unwrap();
         let turn = begin_turn(&db, &session.id, None, None).unwrap();
-        assert!(save_inflight_message(&db, &session.id, Some(&turn), &streaming_assistant("a1", "partial")).unwrap());
+        assert!(save_inflight_message(
+            &db,
+            &session.id,
+            Some(&turn),
+            &streaming_assistant("a1", "partial")
+        )
+        .unwrap());
 
-        let ended = end_turn_settling(&db, &turn, "aborted", Some("TURN_ABORTED"), None, false, false).unwrap();
+        let ended = end_turn_settling(
+            &db,
+            &turn,
+            "aborted",
+            Some("TURN_ABORTED"),
+            None,
+            false,
+            false,
+        )
+        .unwrap();
         assert!(ended.updated);
         assert!(ended.recovered.is_none());
-        assert!(transcripts::inflight_path(db.data_dir(), &session.id).unwrap().exists());
+        assert!(transcripts::inflight_path(db.data_dir(), &session.id)
+            .unwrap()
+            .exists());
 
         let mut final_row = streaming_assistant("a1", "partial");
         final_row.status = Some("aborted".into());
         append_message(&db, &session.id, &final_row, Some(&turn)).unwrap();
-        assert!(!transcripts::inflight_path(db.data_dir(), &session.id).unwrap().exists());
-        assert_eq!(get_session(&db, &session.id).unwrap().unwrap().messages.len(), 1);
+        assert!(!transcripts::inflight_path(db.data_dir(), &session.id)
+            .unwrap()
+            .exists());
+        assert_eq!(
+            get_session(&db, &session.id)
+                .unwrap()
+                .unwrap()
+                .messages
+                .len(),
+            1
+        );
     }
 
     #[test]
     fn delete_session_removes_the_checkpoint_file() {
         let db = test_db();
         let session = create_session(&db, None, None, None, None, None).unwrap();
-        assert!(save_inflight_message(&db, &session.id, None, &streaming_assistant("a1", "partial")).unwrap());
+        assert!(save_inflight_message(
+            &db,
+            &session.id,
+            None,
+            &streaming_assistant("a1", "partial")
+        )
+        .unwrap());
         let path = transcripts::inflight_path(db.data_dir(), &session.id).unwrap();
         assert!(path.exists());
         assert!(delete_session(&db, &session.id).unwrap());
@@ -5193,14 +5654,21 @@ mod tests {
             "reasoningTokens": 20
         });
 
-        let ended = end_turn_settling(&db, &turn, "completed", None, Some(&usage), false, false).unwrap();
+        let ended =
+            end_turn_settling(&db, &turn, "completed", None, Some(&usage), false, false).unwrap();
         assert!(ended.updated);
         let ended_at: i64 = db
             .conn()
-            .query_row("SELECT ended_at FROM turns WHERE id = ?1", params![turn], |r| r.get(0))
+            .query_row(
+                "SELECT ended_at FROM turns WHERE id = ?1",
+                params![turn],
+                |r| r.get(0),
+            )
             .unwrap();
 
-        let history = get_token_usage_history(&db, Some(ended_at - 1_000), Some(ended_at + 1_000), "day").unwrap();
+        let history =
+            get_token_usage_history(&db, Some(ended_at - 1_000), Some(ended_at + 1_000), "day")
+                .unwrap();
         let totals = history.get("totals").unwrap();
         assert_eq!(totals.get("inputTokens").unwrap().as_i64(), Some(120));
         assert_eq!(totals.get("outputTokens").unwrap().as_i64(), Some(80));
@@ -5247,7 +5715,10 @@ mod tests {
             .iter()
             .find(|item| item.get("turnCount").and_then(|v| v.as_i64()) == Some(1))
             .expect("iso week");
-        assert_eq!(active.get("date").and_then(|v| v.as_str()), Some("2026-W01"));
+        assert_eq!(
+            active.get("date").and_then(|v| v.as_str()),
+            Some("2026-W01")
+        );
     }
 
     #[test]
@@ -5257,6 +5728,14 @@ mod tests {
         let items = history.get("items").unwrap().as_array().unwrap();
         assert!(items.len() >= 365);
         assert!(items.len() <= 53 * 7 + 1);
-        assert_eq!(history.get("totals").unwrap().get("turnCount").unwrap().as_i64(), Some(0));
+        assert_eq!(
+            history
+                .get("totals")
+                .unwrap()
+                .get("turnCount")
+                .unwrap()
+                .as_i64(),
+            Some(0)
+        );
     }
 }

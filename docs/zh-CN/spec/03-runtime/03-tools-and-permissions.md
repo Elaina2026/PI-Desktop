@@ -50,14 +50,15 @@
 
 按照 pi 的编码代理默认值，第一个 Agent 请求仅激活
 `Read`、`Bash`、`Edit` 和 `Write`； `Glob` 和 `Grep` 按需加载。
-Plan 和 Goal 保留其 read/inspection 核心。运行时还注册功能
+Plan 和 Goal 保留其 read/inspection 核心。`Skill` 有意不作延迟：`/skill-id`
+调用会指示模型调用它，而模式中不存在的工具根本无法被调用，因此只要技能目录非空，
+它就会随第一个请求一起发送（D404、ADR 0230）。运行时还注册功能
 无需预先发送其完整模式：
 
 - Agent 模式下的 `Glob` 和 `Grep`
 - `BrowserPreview`
 - `PluginCheck`、`PluginScaffold` 和 `PluginPack`
 - 插件声明的代理工具
-- `Skill` 当启用的插件贡献技能时
 
 这些工具出现在有界的 `# On-demand tools` 目录中，具有紧凑的结构
 描述。该模型使用确切的名称调用本地 `ToolSearch` 工具或
@@ -95,6 +96,10 @@ sidecar 在每个新用户提示开始时重置此延迟集。
   名称和每个产出预算保持不变。本机 PATH（以及 Unix login PATH）上有
   `rg` 时 Grep 优先调用它，缺失或失败则回退到进程内搜索（D315）。
   面向模型的结果契约不变。
+
+工具结果中的工作区相对路径使用 `/` 表示平台分隔符。在 POSIX
+系统中，文件名里的字面量反斜杠保持不变，以确保结果可以回传给
+`Read` 或 `Edit`；Windows 路径分隔符会被规范化为 `/`。
 
 Agent 模式使 host-core/JSON 在 D185 下保持延迟。每个新用户提示都会重置
 它们的激活，因此目录发现通过 `ToolSearch` 激活 `Glob`
@@ -495,18 +500,25 @@ MVP 可以通过写入 SQLite 或日志文件来启动。
 一个子代理定义。 Plan 和 Goal 是只读合同协商，因此
 具有 `Bash`、`Edit` 或 `Write` 的代表将直接穿过它们。
 
-定义声明其委托可以调用的工具，仅从 `Read` 中提取，
-`Glob`、`Grep`、`BrowserPreview`、`Bash`、`Edit` 和 `Write`。一个定义
-声明没有获取 `Read`、`Glob`、`Grep`； `tools: "*"` 表示全部七个，即
-仍然只有那七个。无法识别的名称将被删除并带有解析警告。
-插件工具、`Skill`、`ToolSearch`、`new_context`、模式工具和 `Task`
-本身永远不可分配：委托是一个有界的 file/search/shell 工作人员，
-不是第二次会议。
+定义声明其委托可以调用的工具。默认名称仅来自七个工作工具 `Read`、
+`Glob`、`Grep`、`BrowserPreview`、`Bash`、`Edit` 和 `Write`。未声明
+`tools` 时得到 `Read`、`Glob`、`Grep`；`tools: "*"` 表示全部七个。
+无法识别的名称会被删除并带有解析警告。
 
-委托可用的工具来自其定义，而不是其会话。它无法因为父级拥有某个工具而获得
-该工具，会话也不能把修改权限借给只读委托。委托调用由会话运行时构建并通过相同
-的 `tools.execute` 路径，因此路径规则（§4）、Bash 规则（§5）、权限模式（§6）、
-操作模式矩阵（§10）和审计（§9）保持不变，并针对拥有该调用的会话评估。
+文档可以用 `tools: inherit` 或 `tools: [inherit, Bash]` 选择继承父会话的
+实时工具目录（ADR 0246 / D415）。`Task` 启动时运行时把 `toolCatalog`
+（含延迟的插件/MCP 工具）与可分配的额外工具取并集，再去掉 `Task` /
+`TaskWait` / `TaskList` / `TaskStop`、`EnterPlanMode` / `EnterGoalMode`、
+`asktool`、`new_context` 和 `ToolSearch`。内置定义不默认开启。`inherit`
+写在 Markdown 和设置里；host-core 会保留该标记，因此只有 inherit 的文档
+仍能加载。插件工具、`Skill` 和 MCP 工具只通过这一 opt-in 到达委托，
+不能写进可分配白名单。
+
+没有 `tools: inherit` 时，委托可用的工具来自其定义，而不是其会话：它
+无法因为父级拥有某个工具而获得该工具，会话也不能把修改权限借给只读
+委托。委托调用由会话运行时构建并通过相同的 `tools.execute` 路径，因此
+路径规则（§4）、Bash 规则（§5）、权限模式（§6）、操作模式矩阵（§10）
+和审计（§9）保持不变，并针对拥有该调用的会话评估。
 
 **内置定义与用户定义**还可以声明 `permission: inherit | ask | accept-edits |
 auto`（ADR 0089，默认 `inherit`）。使用默认的 `inherit`（包括所有内置定义）时，

@@ -6,11 +6,15 @@ import {
   MAX_SUBAGENT_MAX_TOKENS,
   MAX_SUBAGENT_MAX_TURNS,
   SUBAGENT_ASSIGNABLE_TOOLS,
+  SUBAGENT_INHERIT_TOKEN,
   SUBAGENT_PRESETS,
   SUBAGENT_THINKING_LEVELS,
+  findSubagentPreset,
+  isSubagentAssignableTool,
   isSubagentMutatingTool,
   resolveScope,
   type ActivationScope,
+  type SubagentDefinition,
   type SubagentPreset,
   type SubagentThinkingLevel,
   type UserSubagentRecord,
@@ -34,8 +38,10 @@ export type SubagentDraft = {
   id: string;
   name: string;
   description: string;
-  /** Tool grant; never empty, because a delegate with no tools cannot work. */
+  /** Assignable extras. May be empty when `inheritTools` is on. */
   tools: string[];
+  /** Frontmatter `tools: inherit` — union the parent session catalog. */
+  inheritTools: boolean;
   /** `<provider>/<model>`, or empty for "same model as this session". */
   model: string;
   /** Empty means "whatever the session uses". */
@@ -51,6 +57,30 @@ export type SubagentDraft = {
   enabled: boolean;
   scope: ActivationScope;
 };
+
+/** Split a stored tools list into the inherit flag and assignable extras. */
+export function splitSubagentToolGrant(tools: readonly string[]): {
+  inheritTools: boolean;
+  tools: string[];
+} {
+  const inheritTools = tools.some((name) => name === SUBAGENT_INHERIT_TOKEN);
+  const assignable = tools.filter((name) => isSubagentAssignableTool(name));
+  return {
+    inheritTools,
+    tools:
+      assignable.length > 0 || inheritTools
+        ? assignable
+        : [...DEFAULT_SUBAGENT_TOOLS],
+  };
+}
+
+/** Frontmatter `tools` list written on save. */
+export function mergeSubagentToolGrant(
+  inheritTools: boolean,
+  tools: readonly string[],
+): string[] {
+  return inheritTools ? [SUBAGENT_INHERIT_TOKEN, ...tools] : [...tools];
+}
 
 /**
  * The starter document. A subagent's body is its whole system prompt, so the
@@ -87,6 +117,7 @@ export const SUBAGENT_PRESET_COPY = {
   "code-reviewer": { name: "presetReviewerName", desc: "presetReviewerDesc" },
   "test-runner": { name: "presetTestRunnerName", desc: "presetTestRunnerDesc" },
   fixer: { name: "presetFixerName", desc: "presetFixerDesc" },
+  "ui-designer": { name: "presetUiDesignerName", desc: "presetUiDesignerDesc" },
 } as const satisfies Record<SubagentPreset["id"], { name: string; desc: string }>;
 
 /** Full i18n path for a preset chip, or null when `id` is blank / unknown. */
@@ -105,6 +136,7 @@ export function emptySubagentDraft(): SubagentDraft {
     name: "",
     description: "",
     tools: [...DEFAULT_SUBAGENT_TOOLS],
+    inheritTools: false,
     model: "",
     thinkingLevel: "",
     maxTurns: 0,
@@ -116,11 +148,13 @@ export function emptySubagentDraft(): SubagentDraft {
 }
 
 export function draftFromRecord(record: UserSubagentRecord, body: string): SubagentDraft {
+  const grant = splitSubagentToolGrant(record.tools);
   return {
     id: record.id,
     name: record.name,
     description: record.description ?? "",
-    tools: record.tools.length ? [...record.tools] : [...DEFAULT_SUBAGENT_TOOLS],
+    tools: grant.tools,
+    inheritTools: grant.inheritTools,
     model: record.model ?? "",
     thinkingLevel: record.thinkingLevel ?? "",
     maxTurns: record.maxTurns ?? 0,
@@ -128,6 +162,30 @@ export function draftFromRecord(record: UserSubagentRecord, body: string): Subag
     body,
     enabled: record.enabled,
     scope: resolveScope(record.scope),
+  };
+}
+
+/** Prefill the create sheet from a shipped definition (Copy as mine). */
+export function draftFromDefinition(definition: SubagentDefinition): SubagentDraft {
+  const preset = findSubagentPreset(definition.name);
+  const grant = splitSubagentToolGrant(
+    definition.inheritTools
+      ? [SUBAGENT_INHERIT_TOKEN, ...definition.tools]
+      : definition.tools,
+  );
+  return {
+    ...emptySubagentDraft(),
+    name: preset?.name ?? definition.name,
+    description: definition.description,
+    tools: grant.tools,
+    inheritTools: grant.inheritTools,
+    model: definition.model
+      ? `${definition.model.providerId}/${definition.model.modelId}`
+      : "",
+    thinkingLevel: definition.thinkingLevel ?? "",
+    maxTurns: definition.maxTurns ?? 0,
+    maxTokens: definition.maxTokens ?? 0,
+    body: definition.prompt,
   };
 }
 
@@ -151,7 +209,8 @@ export function subagentSlug(value: string): string {
  * Apply a built-in preset to a draft. Tool grants are replaced wholesale so a
  * preset that drops `Bash` truly drops it; `maxTurns` keeps its "0 means
  * unlimited" convention. Body and description are overwritten — these are the
- * values that make the preset worth picking.
+ * values that make the preset worth picking. Inherit is cleared: presets are
+ * the bounded builtins, not parent-catalog workers.
  */
 export function applySubagentPreset(draft: SubagentDraft, preset: SubagentPreset): SubagentDraft {
   return {
@@ -159,6 +218,7 @@ export function applySubagentPreset(draft: SubagentDraft, preset: SubagentPreset
     name: preset.name,
     description: preset.description,
     tools: [...preset.tools],
+    inheritTools: false,
     maxTurns: preset.maxTurns,
     body: preset.body,
   };
@@ -171,6 +231,7 @@ export function resetSubagentTemplate(draft: SubagentDraft): SubagentDraft {
     name: "",
     description: "",
     tools: [...DEFAULT_SUBAGENT_TOOLS],
+    inheritTools: false,
     maxTurns: 0,
     body: "",
   };
@@ -181,7 +242,9 @@ export function subagentDraftError(draft: SubagentDraft): string | null {
   if (!draft.name.trim()) return "extensions.subagents.errorName";
   if (!subagentSlug(draft.name)) return "extensions.subagents.errorSlug";
   if (!draft.description.trim()) return "extensions.subagents.errorDescription";
-  if (draft.tools.length === 0) return "extensions.subagents.errorTools";
+  if (!draft.inheritTools && draft.tools.length === 0) {
+    return "extensions.subagents.errorTools";
+  }
   // `provider/model` is the only shape the runtime can resolve; a bare model id
   // has no provider to look up, so it would be dropped with a diagnostic nobody
   // reads. Only the slash is structural: the provider half is matched by a
@@ -519,6 +582,7 @@ export function SubagentEditorSheet({
   setDraft,
   editing,
   saving,
+  initialPresetId,
   onClose,
   onSave,
   onReveal,
@@ -527,14 +591,19 @@ export function SubagentEditorSheet({
   setDraft: (next: SubagentDraft) => void;
   editing: UserSubagentRecord | null;
   saving: boolean;
+  /** Template chip to select on create, e.g. after Copy as mine. */
+  initialPresetId?: string;
   onClose: () => void;
   onSave: () => void;
   onReveal?: () => void;
 }) {
   const { t } = useTranslation();
   const providers = useAppStore((state) => state.providers);
-  const [nameTouched, setNameTouched] = useState(!!editing);
-  const [presetId, setPresetId] = useState<string | null>(BLANK_SUBAGENT_PRESET_ID);
+  const copiedPreset = Boolean(initialPresetId && findSubagentPreset(initialPresetId));
+  const [nameTouched, setNameTouched] = useState(!!editing || copiedPreset);
+  const [presetId, setPresetId] = useState<string | null>(
+    copiedPreset && initialPresetId ? initialPresetId : BLANK_SUBAGENT_PRESET_ID,
+  );
   const [advancedOpen, setAdvancedOpen] = useState(!!editing);
   const errorKey = subagentDraftError(draft);
   const pristine = !editing && !draft.name.trim() && !draft.description.trim();
@@ -662,6 +731,16 @@ export function SubagentEditorSheet({
               role="group"
               aria-label={t("extensions.subagents.tools")}
             >
+              <label
+                className={cx("ext-tool-opt", draft.inheritTools && "is-on")}
+              >
+                <input
+                  type="checkbox"
+                  checked={draft.inheritTools}
+                  onChange={(event) => set("inheritTools", event.target.checked)}
+                />
+                <span>{t("extensions.subagents.toolsInherit")}</span>
+              </label>
               {SUBAGENT_ASSIGNABLE_TOOLS.map((tool) => (
                 <label
                   key={tool}
@@ -680,7 +759,9 @@ export function SubagentEditorSheet({
                 </label>
               ))}
             </div>
-            {draft.tools.some(isSubagentMutatingTool) ? (
+            {draft.inheritTools ? (
+              <p className="ext-field-hint">{t("extensions.subagents.toolsInheritHint")}</p>
+            ) : draft.tools.some(isSubagentMutatingTool) ? (
               <p className="ext-field-hint">{t("extensions.subagents.mutatingHint")}</p>
             ) : (
               <p className="ext-field-hint">{t("extensions.subagents.toolsHint")}</p>

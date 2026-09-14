@@ -24,9 +24,9 @@ import {
 } from "./index.js";
 
 describe("Plan protocol contracts", () => {
-  it("uses protocol v11/schema v13 and exposes the plan, schedule, and shell channels", () => {
+  it("uses protocol v11/schema v16 and exposes the plan, schedule, and shell channels", () => {
     expect(PROTOCOL_VERSION).toBe(11);
-    expect(SCHEMA_VERSION).toBe(14);
+    expect(SCHEMA_VERSION).toBe(16);
     expect(IPC_WHITELIST.has(IPC.invoke.plansPending)).toBe(true);
     expect(IPC_WHITELIST.has(IPC.invoke.plansResolve)).toBe(true);
     expect(IPC_WHITELIST.has(IPC.event.plansChanged)).toBe(true);
@@ -59,6 +59,8 @@ describe("Plan protocol contracts", () => {
     expect(IPC.invoke.modelConfigImportRun).toBe("pi-desktop/modelConfig/importRun");
     expect(IPC_WHITELIST.has(IPC.invoke.modelConfigImportScan)).toBe(true);
     expect(IPC_WHITELIST.has(IPC.invoke.modelConfigImportRun)).toBe(true);
+    expect(IPC.invoke.projectClone).toBe("pi-desktop/project/clone");
+    expect(IPC_WHITELIST.has(IPC.invoke.projectClone)).toBe(true);
   });
 
   it("exposes the vendor-account OAuth channels through the preload whitelist", () => {

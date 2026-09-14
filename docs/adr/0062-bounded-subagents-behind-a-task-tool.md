@@ -1,14 +1,17 @@
 # ADR 0062: Bounded Subagents Behind a Task Tool
 
+
 - Status: Accepted for implementation (definition roots amended by ADR 0112;
-  timeout policy amended by ADR 0119; delegation presentation amended by D265)
+  timeout policy amended by ADR 0119; delegation presentation amended by D265;
+  opt-in parent-tool inherit amended by ADR 0246)
 - Date: 2026-08-06
 - Deciders: PI-Desktop core
 - Related: D201, ADR 0041 (persistence outbox), ADR 0048 (lazy per-turn tool
   activation), ADR 0053 (plan checkpoint and execution epoch), D123 (prompt
   template documents), D138 (session-scoped inline permission requests),
   D198 (contract modes), ADR 0112 (capability roots and Settings IA), ADR 0119
-  (event-driven subagent timeouts), D265 (one delegation reads as a card too)
+  (event-driven subagent timeouts), D265 (one delegation reads as a card too),
+  ADR 0246 (opt-in `tools: inherit`)
 
 ## Context
 
@@ -169,9 +172,11 @@ many requests wait behind it.
 - **Inherit the session model always.** Cheaper to reason about. Rejected: a
   wide search is exactly the work worth doing on a cheap fast model while the
   parent keeps the expensive one.
-- **Let delegates inherit the parent's tools.** Rejected: it makes every
-  delegation as dangerous as the session, and a definition is the only place a
-  reader can see what a delegate may do.
+- **Let delegates inherit the parent's tools.** Rejected for silent, always-on
+   inherit: it makes every delegation as dangerous as the session, and a
+   definition is the only place a reader can see what a delegate may do.
+   Amended by ADR 0246: a document may opt in with `tools: inherit` and a
+   deny list; builtins stay on today's whitelist.
 - **A separate process per delegate.** Real isolation, but it duplicates the
   host connection, provider setup and event plumbing for a bounded worker that
   already runs under host-core containment. Rejected for v1.

@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
+  settledDelegationMessage,
+  taskMessageSnapshot,
+} from "./delegation-message.js";
+import {
   Agent,
   BACKGROUND_CONTEXT,
   compact,
@@ -70,6 +74,7 @@ import type {
   MessageUsage,
   Mode,
   MessageAttachment,
+  SessionMessageOrigin,
   PlanExecution,
   PlanProposal,
   PlanningState,
@@ -86,17 +91,22 @@ import {
   addUsage,
   checkpointGeneration,
   contextCompactionMark,
+  cumulativeDelta,
   DEFAULT_SUBAGENT_PERMISSION,
   formatAskToolOutput,
+  formatSessionMessage,
   isCommandShellOption,
   isToolsOutputParams,
   MAX_SUBAGENT_CONCURRENCY,
   normalizeSubagentName,
   proposalKindForMode,
+  resolveSubagentToolNames,
   subagentModelKey,
+  subagentToolsLabel,
   type ProposalKind,
   type SubagentPermission,
 } from "@pi-desktop/shared";
+import { createStreamCoalescer, type StreamCoalescer } from "./stream-coalescer.js";
 import type { RuntimeHost } from "./host-client.js";
 import { classifyAgentError } from "./agent-errors.js";
 import {
@@ -137,6 +147,7 @@ import { clampThinkingLevel } from "./thinking-level.js";
 import { visionFromModelConfig } from "./model-capabilities.js";
 import type { ProjectInstructions } from "./project-instructions.js";
 import { projectInstructionsPrompt } from "./project-instructions-prompt.js";
+import { projectMemoryPrompt } from "./project-memory-prompt.js";
 import {
   pluginSkillsPrompt,
   SKILL_TOOL_NAME,
@@ -178,6 +189,7 @@ export type RuntimePromptAttachment = AgentPromptAttachment & {
 
 export type RuntimePrompt = {
   text: string;
+  sessionMessage?: SessionMessageOrigin;
   attachments?: RuntimePromptAttachment[];
 };
 
@@ -321,6 +333,9 @@ export type DelegationStatus =
  */
 export type DelegationRecord = {
   delegationId: string;
+  /** Original Task transcript snapshot, available after its immediate result. */
+  taskMessage?: UiMessage;
+  taskTurnId?: string;
   agentName: string;
   modelId: string;
   thinkingLevel: SubagentThinkingLevel;
@@ -471,8 +486,33 @@ const COMPACTION_RETAINED_USER_MESSAGE_MAX_TOKENS = 20_000;
 const COMPACTION_FALLBACK_KEEP_RECENT_RATIO = 0.25;
 const COMPACTION_FALLBACK_MAX_SUMMARY_CHARS = 12_000;
 const COMPACTION_SUMMARY_PROMPT_SAFETY_TOKENS = 2_048;
-const COMPACTION_FALLBACK_MARKER =
+export const COMPACTION_FALLBACK_MARKER =
   "[automatic context recovery: older context was omitted after summary generation failed]";
+/** Stored in place of a carried-forward summary when a fallback had none. */
+const COMPACTION_FALLBACK_NO_SUMMARY =
+  "No previous context checkpoint is available.";
+
+/**
+ * A retained-tail fallback stores any carried-forward summary ahead of the
+ * recovery notice, separated by `COMPACTION_FALLBACK_MARKER` (see
+ * `createFallbackCheckpoint`). Only the notice is synthetic: the text before
+ * the marker is the real summary the failed compaction was carrying forward.
+ * Strip the notice — and the "no previous summary" placeholder — so the next
+ * summarization rebuilds from that real summary instead of updating a notice
+ * that never was a summary (#224), without discarding the history it carried.
+ */
+function stripCompactionFallbackNotice(
+  summary: string | undefined,
+): string | undefined {
+  if (!summary) return undefined;
+  const markerIndex = summary.indexOf(COMPACTION_FALLBACK_MARKER);
+  if (markerIndex === -1) return summary;
+  const carried = summary.slice(0, markerIndex).trim();
+  if (carried.length === 0 || carried === COMPACTION_FALLBACK_NO_SUMMARY) {
+    return undefined;
+  }
+  return carried;
+}
 /** Path-scoped rules are best-effort and must not stall a file tool turn. */
 export const PATH_INSTRUCTION_RESOLUTION_TIMEOUT_MS = 2_000;
 const PATH_SCOPED_INSTRUCTION_TOOLS = new Set([
@@ -491,6 +531,11 @@ const AGENT_CORE_TOOL_NAMES = new Set([
   "Edit",
   "Bash",
   ASK_TOOL_NAME,
+  // The slash menu answers a user-invoked `/skill-id` with an instruction to
+  // call `Skill { id }` on the first turn (ADR 0219), and a capability the
+  // model has to go looking for is one it will not use. Registration keeps its
+  // own gate: the tool only exists when the catalog is non-empty.
+  SKILL_TOOL_NAME,
 ]);
 const MAX_ON_DEMAND_TOOL_PROMPT_ENTRIES = 64;
 const MAX_TOOL_SEARCH_RESULT_NAMES = 24;
@@ -739,6 +784,8 @@ export type AgentRuntimeOptions = {
   projectPath?: string;
   /** Instructions resolved from the session's workspace. */
   projectInstructions?: ProjectInstructions;
+  /** Durable project context loaded from host-owned project memory. */
+  projectMemory?: string;
   /** Persisted transcript to seed the agent with (session isolation: each
    * session's agent carries only its own history). */
   history?: UiMessage[];
@@ -770,8 +817,8 @@ export type AgentRuntimeOptions = {
    */
   subagents?: SubagentDefinition[];
   /**
-   * Provider resolved for each definition that pins one, keyed by definition
-   * name. Main owns credential lookup, so a pinned provider that is missing
+   * Provider resolved for each definition that pins one, keyed by its model
+   * key. Main owns credential lookup, so a pinned provider that is missing
    * here is unavailable and the delegate must fail loudly rather than
    * silently run on the session's model.
    */
@@ -780,6 +827,8 @@ export type AgentRuntimeOptions = {
   tokenSaver?: TokenSaverSettings;
   /** Secondary provider configurations for automatic failover. */
   fallbackProviders?: RuntimeProviderConfig[];
+  /** Resolved keys explicitly opted into Task.model selection; pins alone grant no override. */
+  subagentModelKeys?: string[];
 };
 
 export type RuntimeMatchConfig = {
@@ -790,12 +839,15 @@ export type RuntimeMatchConfig = {
   pluginSkills?: PluginSkillDef[];
   trustedExtensions?: TrustedExtensionSpec[];
   projectInstructions?: ProjectInstructions;
+  projectMemory?: string;
   projectPath?: string;
   commandShell: CommandShellOption;
   subagents?: SubagentDefinition[];
   subagentProviders?: Record<string, RuntimeProviderConfig>;
   tokenSaver?: TokenSaverSettings;
   fallbackProviders?: RuntimeProviderConfig[];
+  /** Resolved keys explicitly opted into Task.model selection; pins alone grant no override. */
+  subagentModelKeys?: string[];
 };
 
 /** Tool calls ride in the assistant content array as `type: "toolCall"`. A
@@ -1346,6 +1398,7 @@ export class DesktopAgentRuntime {
   private thinkingLevel: ThinkingLevel;
   private host: RuntimeHost;
   private onEvent: (envelope: AgentEventEnvelope) => void;
+  private streamSink: StreamCoalescer;
   private baseSystemPrompt: string;
   private planningState: PlanningState;
   private pendingPlanId?: string;
@@ -1361,6 +1414,9 @@ export class DesktopAgentRuntime {
   /** Subagent definitions offered through the `Task` tool (ADR 0062). */
   private subagents: SubagentDefinition[];
   private subagentProviders: Record<string, RuntimeProviderConfig>;
+  private subagentModelKeys: Set<string>;
+  /** On-demand Task.model grants; never mixed into launch opt-in matching. */
+  private subagentOverrideProviders: Record<string, RuntimeProviderConfig>;
   /**
    * Background delegations of this session (ADR 0089). `Task` starts one and
    * returns; `TaskWait`/`TaskList`/`TaskStop` drive it afterwards.
@@ -1387,6 +1443,7 @@ export class DesktopAgentRuntime {
   private commandShell: CommandShellOption;
   private baseProjectInstructions?: ProjectInstructions;
   private projectInstructions?: ProjectInstructions;
+  private projectMemory?: string;
   /** Per-prompt claims prevent repeated path-resolution RPCs for one directory. */
   private pathInstructionClaims = new Map<
     string,
@@ -1432,7 +1489,7 @@ export class DesktopAgentRuntime {
   private suppressProgressTurnRunEnd = false;
   private activeToolCalls = new Map<
     string,
-    { toolName: string; args: unknown }
+    { toolName: string; args: unknown; startedAt: number }
   >();
   private pendingAskTools = new Map<
     string,
@@ -1460,6 +1517,10 @@ export class DesktopAgentRuntime {
   private compactionEnabled: boolean;
   private readonly compactionStrategy: CompactionStrategy;
   private pendingUserMessageId?: string;
+  private acceptingSteering = false;
+  private steeringContinuation = false;
+  private steeringWaitAbort?: AbortController;
+  private pendingSteering = new Map<AgentMessage, string>();
   private pendingOverflow = false;
   private overflowRecoveryAttempted = false;
   private suppressOverflowRunEnd = false;
@@ -1495,12 +1556,15 @@ export class DesktopAgentRuntime {
     this.hostCloseUnsubscribe = this.host.onClose?.(() => {
       this.cleanupActiveToolProgress();
     });
-    this.onEvent = opts.onEvent;
+    this.streamSink = createStreamCoalescer(opts.onEvent);
+    this.onEvent = (envelope) => this.streamSink.push(envelope);
     this.pluginTools = opts.pluginTools ?? [];
     this.pluginSkills = opts.pluginSkills ?? [];
     this.trustedExtensionSpecs = opts.trustedExtensions ?? [];
     this.subagents = opts.subagents ?? [];
     this.subagentProviders = opts.subagentProviders ?? {};
+    this.subagentModelKeys = new Set(opts.subagentModelKeys ?? []);
+    this.subagentOverrideProviders = {};
     if (!isCommandShellOption(opts.commandShell) || !opts.commandShell.available) {
       throw Object.assign(new Error("active command shell is invalid or unavailable"), {
         errorCode: "COMMAND_SHELL_INVALID",
@@ -1511,6 +1575,7 @@ export class DesktopAgentRuntime {
     this.projectPath = opts.projectPath?.trim() || undefined;
     this.baseProjectInstructions = opts.projectInstructions;
     this.projectInstructions = opts.projectInstructions;
+    this.projectMemory = opts.projectMemory?.trim() || undefined;
     this.compactionEnabled = compactionEnabled(opts.compactionSettings);
     this.compactionStrategy = resolveCompactionStrategy(opts.compactionStrategy);
     this.tokenSaverSettings = opts.tokenSaver;
@@ -1710,6 +1775,7 @@ Delegation rules:
       // `Task` calls — subagent fan-out (ADR 0062) — and every existing tool
       // ordering guarantee is untouched.
       toolExecution: "parallel",
+      steeringMode: "all",
       // A queued renderer prompt asks the current run to finish normally at
       // the next turn boundary. pi-agent-core evaluates this after the
       // assistant response and completed tool batch, before another provider
@@ -1769,6 +1835,7 @@ Delegation rules:
 
   private composeSystemPrompt(): string {
     const projectPrompt = projectInstructionsPrompt(this.projectInstructions);
+    const memoryPrompt = projectMemoryPrompt(this.projectMemory);
     const optionalToolsPrompt = this.optionalToolsPrompt();
     const compressionPrompt = buildOutputCompressionPrompt(this.tokenSaverSettings);
     const modelDisplayName = this.provider.modelConfig?.name || this.provider.modelId;
@@ -1781,6 +1848,7 @@ Delegation rules:
         ...(optionalToolsPrompt ? [optionalToolsPrompt] : []),
         ...(projectPrompt ? [projectPrompt] : []),
         ...(compressionPrompt ? [compressionPrompt] : []),
+        ...(memoryPrompt ? [memoryPrompt] : []),
       ].join("\n\n"),
     );
   }
@@ -2008,6 +2076,7 @@ Delegation rules:
       safeJson(this.commandShell) === safeJson(config.commandShell) &&
       safeJson(this.baseProjectInstructions ?? null) ===
         safeJson(config.projectInstructions ?? null) &&
+      (this.projectMemory ?? "") === (config.projectMemory?.trim() ?? "") &&
       (this.projectPath ?? "") === (config.projectPath?.trim() ?? "") &&
       // Enabling a plugin, revoking agent.prompt.inject or renaming a skill
       // changes the catalog digest, which retires the runtime and its stale
@@ -2018,6 +2087,8 @@ Delegation rules:
       // are compared in full.
       safeJson(this.subagents) === safeJson(config.subagents ?? []) &&
       safeJson(this.subagentProviders) === safeJson(config.subagentProviders ?? {}) &&
+      safeJson([...this.subagentModelKeys].sort()) ===
+        safeJson([...new Set(config.subagentModelKeys ?? [])].sort()) &&
       // Enabling or disabling a trusted extension retires the runtime so the
       // next prompt reloads the set (spec 16 §4.3).
       trustedExtensionIds(this.trustedExtensionSpecs) ===
@@ -2226,7 +2297,10 @@ Delegation rules:
             attachment.data,
           ),
         );
-        const content = promptContent({ text: m.content, attachments });
+        const content = promptContent({
+          text: m.sessionMessage ? formatSessionMessage(m.content, m.sessionMessage) : m.content,
+          attachments,
+        });
         if (
           !(m.content || "").trim() &&
           !attachments.some((attachment) => attachment.data)
@@ -3097,8 +3171,6 @@ Delegation rules:
         return "Create a PI-Desktop plugin from a template.";
       case "PluginPack":
         return "Validate and package a PI-Desktop plugin.";
-      case SKILL_TOOL_NAME:
-        return "Load the full instructions for a listed skill.";
       default:
         return this.compactToolDescription(tool.description);
     }
@@ -3223,13 +3295,45 @@ Delegation rules:
   }
 
   /**
+   * Repeating the target definition's own pin is omit, not an override. The
+   * Task catalog prints that key, and models copy it back into `model`.
+   */
+  private isDefinitionPinOverride(
+    definition: SubagentDefinition,
+    key: string,
+  ): boolean {
+    if (!definition.model) return false;
+    if (key === subagentModelKey(definition.model)) return true;
+    const slash = key.indexOf("/");
+    if (slash < 1) return false;
+    const requestedProvider = key
+      .slice(0, slash)
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "");
+    const requestedModel = key.slice(slash + 1).trim().toLowerCase();
+    const pinProvider = definition.model.providerId
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "");
+    return (
+      Boolean(requestedProvider) &&
+      requestedProvider === pinProvider &&
+      requestedModel === definition.model.modelId.toLowerCase()
+    );
+  }
+
+  /**
    * On-demand model resolution for Task-time model overrides. Asks Electron
-   * main to resolve a `providerId/modelId` key that was not statically pinned
-   * by any definition. The result is cached for the life of this runtime.
+   * main to authorize and resolve a `providerId/modelId` key outside the
+   * opted-in launch catalog. Grants live in a separate cache so they cannot
+   * rewrite definition pins or change launch-time reuse matching.
    */
   private async resolveSubagentModel(
     key: string,
   ): Promise<RuntimeProviderConfig | undefined> {
+    const cached = this.subagentOverrideProviders[key];
+    if (cached) return cached;
     try {
       const result = await (this.host as any).call(
         "provider.resolveSubagentModel",
@@ -3237,6 +3341,11 @@ Delegation rules:
       );
       if (result && typeof result === "object" && "modelId" in result) {
         const provider = result as RuntimeProviderConfig;
+        const pinned = this.subagentProviders[key];
+        if (pinned && pinned.id !== provider.id) {
+          // Another account's opt-in must use its exact provider-id key.
+          return undefined;
+        }
         // Vendor-account (OAuth) providers need a resolveAuth callback so
         // pi-ai can obtain short-lived credentials per request. The JSON-RPC
         // result does not carry the callback, so we attach one that calls
@@ -3248,7 +3357,7 @@ Delegation rules:
               providerId: provider.id,
             });
         }
-        this.subagentProviders[key] = provider;
+        this.subagentOverrideProviders[key] = provider;
         return provider;
       }
     } catch {
@@ -3258,11 +3367,18 @@ Delegation rules:
   }
 
   /**
-   * Keys the parent agent can pass as `Task.model`. Includes both statically
-   * pinned providers and the `availableModels` catalog injected at launch.
+   * Keys explicitly enabled for Task.model at launch or authorized by main
+   * on demand. A binding resolved only for a definition pin is not an opt-in.
    */
   private availableSubagentModelKeys(): string[] {
-    return Object.keys(this.subagentProviders);
+    const keys = new Set<string>();
+    for (const key of this.subagentModelKeys) {
+      if (this.subagentProviders[key] || this.subagentOverrideProviders[key]) {
+        keys.add(key);
+      }
+    }
+    for (const key of Object.keys(this.subagentOverrideProviders)) keys.add(key);
+    return [...keys];
   }
 
   /**
@@ -3270,19 +3386,21 @@ Delegation rules:
    * agent can make informed model choices for Task.model overrides.
    */
   private subagentModelSummary(): string | undefined {
-    const keys = Object.keys(this.subagentProviders);
+    const keys = this.availableSubagentModelKeys();
     if (keys.length === 0) {
       return [
         "No delegation model overrides are configured.",
-        "Omit the `model` parameter on Task to inherit the parent conversation's selected model.",
-        "Never invent a provider/model key. Prefer omitting `model`; repeating the exact parent provider/model is safe but unnecessary.",
+        "Omit the `model` parameter on Task to use the definition's default model, or inherit the parent conversation's selected model when no default is pinned.",
+        "Repeating a definition's own Default model key is the same as omitting `model`. Never invent a provider/model key.",
       ].join(" ");
     }
     const lines: string[] = [
       "Available models for delegation (pass as `model` parameter on Task):\n",
     ];
     for (const key of keys) {
-      const provider = this.subagentProviders[key];
+      const provider =
+        this.subagentProviders[key] ?? this.subagentOverrideProviders[key];
+      if (!provider) continue;
       const reasoning = provider.supportsReasoning ? "reasoning" : "standard";
       const levels = provider.supportedThinkingLevels?.length
         ? provider.supportedThinkingLevels.join("/")
@@ -3305,7 +3423,9 @@ Delegation rules:
    * talk to, and its report format is set by `composeSubagentSystemPrompt`.
    */
   private subagentGuidance(definition: SubagentDefinition): string[] {
-    const tools = new Set(definition.tools);
+    const tools = new Set(
+      resolveSubagentToolNames(definition, [...this.toolCatalog.keys()]),
+    );
     const blocks: string[] = [];
     if (tools.has("Read") || tools.has("Grep") || tools.has("Glob")) {
       blocks.push(
@@ -3324,6 +3444,10 @@ Delegation rules:
       blocks.push(
         `Write temporary and intermediate files into the session scratch directory \`${this.scratchDir}\` (in Bash: $PI_SCRATCH_DIR) using absolute paths, never into the workspace.`,
       );
+    }
+    if (tools.has(SKILL_TOOL_NAME)) {
+      const skillsPrompt = pluginSkillsPrompt(this.pluginSkills);
+      if (skillsPrompt) blocks.push(skillsPrompt);
     }
     const projectPrompt = projectInstructionsPrompt(this.projectInstructions);
     if (projectPrompt) blocks.push(projectPrompt);
@@ -3357,10 +3481,12 @@ Delegation rules:
   private buildSubagentTool(): AgentTool {
     const names = this.subagents.map((definition) => definition.name);
     const catalog = this.subagents
-      .map(
-        (definition) =>
-          `- ${definition.name} (tools: ${definition.tools.join(", ")}): ${definition.description}`,
-      )
+      .map((definition) => {
+        const defaultModel = definition.model
+          ? `${subagentModelKey(definition.model)}; omit model or repeat this key to keep this default.`
+          : "inherits the session.";
+        return `- ${definition.name} (tools: ${subagentToolsLabel(definition)}): ${definition.description} Default model: ${defaultModel}`;
+      })
       .join("\n");
     return {
       name: SUBAGENT_TOOL_NAME,
@@ -3371,10 +3497,10 @@ Delegation rules:
         "Do not delegate what you can finish in a couple of tool calls, and do not delegate anything that needs the user — a subagent cannot ask a question or propose a plan on your behalf.",
         ...(this.availableSubagentModelKeys().length
           ? [
-              "Only pass `model` when selecting a listed delegation model; otherwise omit it. Repeating the exact parent provider/model is also safe but unnecessary.",
+              "Only pass `model` when deliberately overriding the definition default with a listed delegation model; otherwise omit it. Repeating the definition's own Default model key, or the exact parent provider/model, is the same as omitting `model`.",
             ]
           : [
-              "No delegation model overrides are configured. Omit `model` so the subagent inherits the parent conversation's selected model; never invent a provider/model key.",
+              "No delegation model overrides are configured. Omit `model` to use the definition's default, or the parent model when no default is pinned. Repeating a definition's own Default model key is the same as omitting `model`; never invent a provider/model key.",
             ]),
         "`task` is the delegate's only instruction. It cannot see this conversation, and you cannot correct it while it runs, so state the goal, the paths and facts it cannot infer, and exactly what to report back.",
         "To run delegates concurrently, emit several Task calls in one assistant message. A message that mixes Task with any other tool runs one call at a time. You may keep working or talk to the user while they run; the runtime delivers their reports when they finish. Call TaskStop only to cancel.",
@@ -3397,7 +3523,7 @@ Delegation rules:
         model: Type.Optional(
           Type.String({
             description:
-              "Override the delegate's model for this run, e.g. 'anthropic/claude-sonnet-4-20250514'. Omit to use the subagent's default. Pick cheaper/faster models for simple searches; reserve expensive reasoning models for complex analysis.",
+              "Override the delegate's model for this run, e.g. 'anthropic/claude-sonnet-4-20250514'. Omit to use the subagent's default. Repeating the definition's own Default model key is the same as omitting this parameter. Only choose a different override from the available delegation model catalog.",
           }),
         ),
       }),
@@ -3432,19 +3558,26 @@ Delegation rules:
             : "";
         let provider: RuntimeProviderConfig | undefined;
         if (modelOverride) {
-          // Repeating the parent model is inheritance, not a request to select
-          // an additional delegation model. This also handles a model that was
-          // echoed by the parent despite an empty delegation catalog.
-          provider = this.isSessionModelOverride(modelOverride)
-            ? this.provider
-            : this.subagentProviders[modelOverride];
-          if (!provider) {
-            // On-demand resolution: ask Electron main for a provider the
-            // definitions did not statically pin but the user has configured.
-            try {
-              provider = await this.resolveSubagentModel(modelOverride);
-            } catch {
-              // Resolution failed; fall through to the error below.
+          if (this.isDefinitionPinOverride(definition, modelOverride)) {
+            provider = this.subagentProvider(definition);
+            if (!provider) {
+              return this.subagentToolError(
+                toolCallId,
+                `The ${definition.name} subagent pins ${definition.model?.providerId}/${definition.model?.modelId}, which is not configured in PI-Desktop. Do this work yourself or delegate to another subagent.`,
+              );
+            }
+          } else if (this.isSessionModelOverride(modelOverride)) {
+            provider = this.provider;
+          } else {
+            provider = this.subagentModelKeys.has(modelOverride)
+              ? this.subagentProviders[modelOverride]
+              : this.subagentOverrideProviders[modelOverride];
+            if (!provider) {
+              try {
+                provider = await this.resolveSubagentModel(modelOverride);
+              } catch {
+                // Resolution failed; fall through to the error below.
+              }
             }
           }
           if (!provider) {
@@ -3466,7 +3599,11 @@ Delegation rules:
             );
           }
         }
-        const tools = definition.tools
+        const declaredToolNames = resolveSubagentToolNames(
+          definition,
+          [...this.toolCatalog.keys()],
+        );
+        const tools = declaredToolNames
           .map((name) => this.toolCatalog.get(name))
           .filter((tool): tool is AgentTool => tool !== undefined);
         if (tools.length === 0) {
@@ -3505,6 +3642,7 @@ Delegation rules:
         });
         const record: DelegationRecord = {
           delegationId,
+          taskTurnId: this.turnId,
           agentName: definition.name,
           modelId: provider.modelId,
           thinkingLevel,
@@ -3534,6 +3672,7 @@ Delegation rules:
           systemPrompt: composeSubagentSystemPrompt({
             definition,
             guidance: this.subagentGuidance(definition),
+            toolNames: declaredToolNames,
           }),
           tools: scopedTools,
           onEvent: (envelope) => {
@@ -3630,9 +3769,21 @@ Delegation rules:
     if (result.usage) {
       this.turnSubagentUsage = addUsage(this.turnSubagentUsage, result.usage);
     }
+    this.publishDelegationSettlement(record);
     record.resolveCompletion();
     this.refreshDelegationWait();
     this.pruneFinishedDelegations();
+  }
+
+  private publishDelegationSettlement(record: DelegationRecord): void {
+    if (!record.taskMessage || record.status === "running") return;
+    this.emit(
+      {
+        type: "message_end",
+        message: settledDelegationMessage(record.taskMessage, delegationSummary(record)),
+      },
+      record.taskTurnId,
+    );
   }
 
   /** Cap retained history so a long session cannot grow the registry forever.
@@ -3696,6 +3847,8 @@ Delegation rules:
    */
   private terminateParentTurn(): void {
     this.turnHadError = true;
+    this.acceptingSteering = false;
+    this.retainPendingSteering();
     this.abortRunningDelegations();
     this.delegationWaitTargets = undefined;
     this.clearAgentActivity();
@@ -3817,8 +3970,21 @@ Delegation rules:
     ) {
       const targets = this.pendingCurrentTurnDelegations();
       this.beginDelegationWait(targets);
-      await this.waitForDelegations(targets, targets.length, null);
-      this.endDelegationWait();
+      const waitAbort = new AbortController();
+      this.steeringWaitAbort = waitAbort;
+      try {
+        if (!this.pendingSteering.size) {
+          await this.waitForDelegations(targets, targets.length, null, waitAbort.signal);
+        }
+      } finally {
+        if (this.steeringWaitAbort === waitAbort) this.steeringWaitAbort = undefined;
+        this.endDelegationWait();
+      }
+      if (this.pendingSteering.size && !this.runCancelled && !this.turnHadError) {
+        await this.waitForIdleAndSteering();
+        if (!(await this.runPendingRecoveries())) return;
+        continue;
+      }
       if (
         this.disposed ||
         this.runCancelled ||
@@ -3859,7 +4025,7 @@ Delegation rules:
         .join("\n\n");
       this.requestStartedAt = Date.now();
       await this.agent.prompt(text);
-      await this.agent.waitForIdle();
+      await this.waitForIdleAndSteering();
       if (!(await this.runPendingRecoveries())) return;
       if (this.turnHadError || epoch !== this.turnEpoch) {
         if (this.turnHadError) this.terminateParentTurn();
@@ -4486,11 +4652,11 @@ Delegation rules:
     };
   }
 
-  private emit(event: AgentEventEnvelope["event"], turnId?: string) {
+  private emit(event: AgentEventEnvelope["event"], turnId?: string, ts = Date.now()) {
     this.onEvent({
       sessionId: this.sessionId,
       turnId: turnId ?? this.turnId,
-      ts: Date.now(),
+      ts,
       event,
     });
   }
@@ -4674,7 +4840,7 @@ Delegation rules:
       // are suppressed; the retry must close the visible run normally.
       this.suppressProviderRetryRunEnd = false;
       await this.agent.continue();
-      await this.agent.waitForIdle();
+      await this.waitForIdleAndSteering();
     } finally {
       this.providerRetryAbort = undefined;
       this.activeProviderRetryAttempt = 0;
@@ -4711,7 +4877,7 @@ Delegation rules:
     try {
       if (this.disposed) throw new Error("runtime disposed");
       await this.agent.continue();
-      await this.agent.waitForIdle();
+      await this.waitForIdleAndSteering();
     } finally {
       if (this.agent.state.systemPrompt === promptWithNudge) {
         this.agent.state.systemPrompt = promptBefore;
@@ -4780,7 +4946,7 @@ Delegation rules:
         this.turnHadError = false;
         this.requestStartedAt = Date.now();
         await this.agent.continue();
-        await this.agent.waitForIdle();
+        await this.waitForIdleAndSteering();
         continue;
       }
       if (this.pendingSilentTurnRerun) {
@@ -4819,7 +4985,7 @@ Delegation rules:
       if (this.disposed) throw new Error("runtime disposed");
       this.suppressProgressTurnRunEnd = false;
       await this.agent.continue();
-      await this.agent.waitForIdle();
+      await this.waitForIdleAndSteering();
     } finally {
       if (this.agent.state.systemPrompt === promptWithNudge) {
         this.agent.state.systemPrompt = promptBefore;
@@ -4929,10 +5095,24 @@ Delegation rules:
       keepRecentTokens: budget.keepRecentTokens,
     } satisfies CompactionSettings);
     if (!prepared.ok || !prepared.value) return prepared;
+    // pi picks `previousSummary` straight from the previous compaction entry.
+    // A retained-tail fallback stores its carried-forward summary ahead of a
+    // recovery notice; feeding the notice to the next run makes the model
+    // *update* a summary that never existed and cements the failure. Strip the
+    // notice while keeping the carried-forward summary, so the next
+    // summarization request still sees the history it was carrying (#224).
+    const previousSummary = stripCompactionFallbackNotice(
+      prepared.value.previousSummary,
+    );
     return {
       ok: true as const,
       value: this.codexShapedPreparation(
-        prepared.value,
+        {
+          ...prepared.value,
+          ...(previousSummary === prepared.value.previousSummary
+            ? {}
+            : { previousSummary }),
+        },
         retainedUserTokens,
         retentionMode,
       ),
@@ -5244,7 +5424,7 @@ Delegation rules:
           preparation.previousSummary,
           Math.min(COMPACTION_FALLBACK_MAX_SUMMARY_CHARS, maxSummaryChars),
         )
-      : "No previous context checkpoint is available.";
+      : COMPACTION_FALLBACK_NO_SUMMARY;
     const continuation =
       retentionMode === "active_turn"
         ? "The provider is continuing the active turn. Use the one retained latest user request as the source of truth for that continuation."
@@ -5255,8 +5435,26 @@ Delegation rules:
       "The automatic summary request did not complete. Older messages before this checkpoint are omitted from the next model request.",
       `The complete transcript remains available in the session. ${continuation}`,
     ].join("\n\n");
+    // A completed-turn checkpoint normally retains no naked user messages, but
+    // an empty tail plus a carried-forward (or absent) summary leaves the next
+    // model request with nothing before the boundary: after a runtime rebuild
+    // — model switch, restart — the session restores as if it had just started.
+    // Fall back to the newest user messages under the same budget so the
+    // failure path still restores a bounded, non-empty context (#224).
+    const retainedTail =
+      preparation.retainedTail.length > 0
+        ? preparation.retainedTail
+        : selectRetainedUserMessages(
+            preparation.messagesToSummarize.filter(
+              (message): message is UserMessage => message.role === "user",
+            ),
+            preparation.settings.keepRecentTokens,
+          );
     return this.createCheckpoint(
-      preparation,
+      {
+        ...preparation,
+        retainedTail,
+      },
       throughMessageId,
       summary,
       undefined,
@@ -5397,7 +5595,12 @@ Delegation rules:
     if (!sourceInput.ok || !sourceInput.value) return preparation;
     return {
       ...sourceInput.value,
-      previousSummary: terminal.summary,
+      // Same rule as `prepareCompactionInput`: strip a fallback notice but keep
+      // the summary it carries forward, so a chained fallback cannot bake in
+      // the notice or discard the real history along with it (#224).
+      previousSummary:
+        stripCompactionFallbackNotice(terminal.summary) ??
+        sourceInput.value.previousSummary,
     };
   }
 
@@ -5723,6 +5926,7 @@ Delegation rules:
     this.forwardAgentEventToExtensions(event);
     switch (event.type) {
       case "agent_start":
+        if (this.steeringContinuation) break;
         if (
           this.providerRetryInProgress ||
           this.silentTurnRerunInProgress ||
@@ -5798,16 +6002,12 @@ Delegation rules:
           const nextThinking = content.hasThinking
             ? content.thinking
             : previousThinking;
-          const deltaText = content.hasText
-            ? content.text.startsWith(previousText)
-              ? content.text.slice(previousText.length)
-              : content.text
-            : "";
-          const deltaThinking = content.hasThinking
-            ? content.thinking.startsWith(previousThinking)
-              ? content.thinking.slice(previousThinking.length)
-              : content.thinking
-            : "";
+          const textDelta = content.hasText
+            ? cumulativeDelta(previousText, content.text)
+            : { delta: "", reset: false };
+          const thinkingDelta = content.hasThinking
+            ? cumulativeDelta(previousThinking, content.thinking)
+            : { delta: "", reset: false };
           this.currentAssistant = {
             ...this.currentAssistant,
             content: nextText,
@@ -5818,19 +6018,30 @@ Delegation rules:
                 : {}),
             status: "streaming",
           };
-          this.emit({
-            type: "message_update",
-            message: this.currentAssistant,
-            deltaText,
-            ...(deltaThinking ? { deltaThinking } : {}),
-          });
+          if (
+            textDelta.delta ||
+            thinkingDelta.delta ||
+            textDelta.reset ||
+            thinkingDelta.reset
+          ) {
+            this.emit({
+              type: "message_update",
+              message: this.currentAssistant,
+              ...(textDelta.delta ? { deltaText: textDelta.delta } : {}),
+              ...(thinkingDelta.delta ? { deltaThinking: thinkingDelta.delta } : {}),
+              ...(textDelta.reset ? { resetText: true } : {}),
+              ...(thinkingDelta.reset ? { resetThinking: true } : {}),
+            });
+          }
         }
         break;
       }
       case "message_end": {
         if (event.message.role === "user") {
-          const id = this.pendingUserMessageId ?? randomUUID();
-          this.pendingUserMessageId = undefined;
+          const steeringId = this.pendingSteering.get(event.message);
+          const id = steeringId ?? this.pendingUserMessageId ?? randomUUID();
+          if (steeringId) this.pendingSteering.delete(event.message);
+          else this.pendingUserMessageId = undefined;
           this.appendLiveEntry(id, event.message);
           break;
         }
@@ -6079,19 +6290,22 @@ Delegation rules:
         }
         break;
       }
-      case "tool_execution_start":
+      case "tool_execution_start": {
+        const startedAt = Date.now();
         this.clearAgentActivity();
         this.activeToolCalls.set(event.toolCallId, {
           toolName: event.toolName,
           args: event.args,
+          startedAt,
         });
         this.emit({
           type: "tool_start",
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           args: event.args,
-        });
+        }, undefined, startedAt);
         break;
+      }
       case "tool_execution_update":
         this.emit({
           type: "tool_update",
@@ -6132,7 +6346,24 @@ Delegation rules:
             result: event.result,
             isError: event.isError,
             ...(toolUsage ? { toolUsage } : {}),
-          });
+          }, undefined, endedAt);
+          if (activeTool?.toolName === SUBAGENT_TOOL_NAME && isRecord(event.result)) {
+            const details = event.result.details;
+            const record = isRecord(details) && typeof details.delegationId === "string"
+              ? this.delegations.get(details.delegationId)
+              : undefined;
+            if (record) {
+              record.taskMessage = taskMessageSnapshot({
+                ...activeTool,
+                toolCallId: event.toolCallId,
+                result: event.result,
+                endedAt,
+                ...(toolUsage ? { toolUsage } : {}),
+              });
+              // A fast delegate may settle before its Task tool_end arrives.
+              this.publishDelegationSettlement(record);
+            }
+          }
         }
         break;
       case "turn_end":
@@ -6152,6 +6383,9 @@ Delegation rules:
         });
         break;
       case "agent_end":
+        // Input admitted after pi's last queue poll still belongs to this turn.
+        // Continue after the current run settles; never wake the follow-up FIFO.
+        if (this.pendingSteering.size && this.acceptingSteering && !this.runCancelled && !this.turnHadError) break;
         if (
           this.suppressOverflowRunEnd ||
           this.suppressProviderRetryRunEnd ||
@@ -6160,6 +6394,8 @@ Delegation rules:
           this.keepTurnOpenForDelegates()
         )
           break;
+        this.acceptingSteering = false;
+        this.retainPendingSteering();
         this.autonomousExecution = false;
         this.clearAgentActivity();
         this.reportMutationTermination();
@@ -6292,6 +6528,7 @@ Delegation rules:
   ): Promise<{ turnId: string }> {
     if (this.disposed) throw new Error("runtime disposed");
     this.assertNotRunning();
+    this.retainPendingSteering();
     if (execution.sessionId !== this.sessionId) {
       throw Object.assign(new Error("approved plan belongs to another session"), {
         errorCode: "PLAN_EXECUTION_NOT_FOUND",
@@ -6311,6 +6548,7 @@ Delegation rules:
     this.pathInstructionClaims.clear();
     this.hostTurnId = durableTurnId;
     this.turnId = durableTurnId;
+    this.acceptingSteering = true;
     this.pendingUserMessageId = undefined;
     this.gracefulStopRequested = false;
     this.runCancelled = false;
@@ -6361,7 +6599,7 @@ Delegation rules:
     ).messages;
     this.setAgentActivity({ phase: "starting", since: Date.now() });
     await this.agent.continue();
-    await this.agent.waitForIdle();
+    await this.waitForIdleAndSteering();
     // Same recovery contract as a user prompt: a plan execution that overflows,
     // hits a retriable stream failure, or comes back silent must not end as a
     // run with no end events at all.
@@ -6381,9 +6619,14 @@ Delegation rules:
   ): Promise<{ turnId: string }> {
     if (this.disposed) throw new Error("runtime disposed");
     this.assertNotRunning();
+    const modelInput = typeof input !== "string" && input.sessionMessage
+      ? { ...input, text: formatSessionMessage(input.text, input.sessionMessage), sessionMessage: undefined }
+      : input;
+    this.retainPendingSteering();
     const nextTurnId = durableTurnId?.trim() || randomUUID();
     this.hostTurnId = nextTurnId;
     this.turnId = nextTurnId;
+    this.acceptingSteering = true;
     this.gracefulStopRequested = false;
     this.runCancelled = false;
     this.turnSubagentUsage = undefined;
@@ -6398,7 +6641,7 @@ Delegation rules:
     this.requestStartedAt = Date.now();
     this.setAgentActivity({ phase: "starting", since: Date.now() });
     try {
-      const content = promptContent(input);
+      const content = promptContent(modelInput);
       const incomingUserMessage: AgentMessage = {
         role: "user",
         content,
@@ -6431,13 +6674,13 @@ Delegation rules:
           return { turnId: this.turnId };
         }
       }
-      await this.extensionBeforeAgentStart(input);
-      if (typeof input === "string") {
-        await this.agent.prompt(input);
+      await this.extensionBeforeAgentStart(modelInput);
+      if (typeof modelInput === "string") {
+        await this.agent.prompt(modelInput);
       } else {
-        await this.agent.prompt(input.text, promptImages(input));
+        await this.agent.prompt(modelInput.text, promptImages(modelInput));
       }
-      await this.agent.waitForIdle();
+      await this.waitForIdleAndSteering();
       void this.extensionRunner?.emit("agent_settled", { type: "agent_settled" });
 
       if (!(await this.runPendingRecoveries())) return { turnId: this.turnId };
@@ -6550,7 +6793,69 @@ Delegation rules:
     });
   }
 
+  /** Resolve attachments against the configuration of the running turn. */
+  steeringContext(expectedTurnId: string): { projectPath?: string; supportsVision: boolean } {
+    if (
+      this.disposed || !this.acceptingSteering || this.runCancelled ||
+      this.turnHadError || !this.getStatus().isRunning ||
+      !expectedTurnId || expectedTurnId !== this.turnId ||
+      this.planningState === "awaiting_approval"
+    ) {
+      throw Object.assign(new Error("The target turn is no longer accepting input"), {
+        errorCode: "TURN_NOT_FOUND",
+      });
+    }
+    return { projectPath: this.projectPath, supportsVision: this.model.input.includes("image") };
+  }
+
+  steer(input: RuntimePrompt, expectedTurnId: string, message: UiMessage): { accepted: boolean; turnId: string } {
+    this.steeringContext(expectedTurnId);
+    const queued: AgentMessage = { role: "user", content: promptContent(input), timestamp: Date.now() };
+    this.pendingSteering.set(queued, message.id);
+    this.agent.steer(queued);
+    this.steeringWaitAbort?.abort();
+    // Main persists this echo through the same outbox as assistant messages.
+    this.emit({ type: "message_start", message });
+    this.emit({
+      type: "message_end", message,
+      ...(this.currentAssistant?.status === "streaming"
+        ? { precedingAssistant: { ...this.currentAssistant } } : {}),
+    });
+    return { accepted: true, turnId: this.turnId! };
+  }
+
+  private retainPendingSteering(): void {
+    this.agent.clearSteeringQueue();
+    for (const [message, id] of this.pendingSteering) {
+      if (!this.agent.state.messages.includes(message)) this.agent.state.messages = [...this.agent.state.messages, message];
+      this.appendLiveEntry(id, message);
+    }
+    this.pendingSteering.clear();
+  }
+
+  private async waitForIdleAndSteering(): Promise<void> {
+    await this.agent.waitForIdle();
+    if (!this.acceptingSteering || this.runCancelled || this.turnHadError) {
+      this.retainPendingSteering();
+      return;
+    }
+    // Recovery owns the next request when the previous response failed. Its
+    // continuation will consume steering after repairing the context/backoff.
+    if (this.suppressOverflowRunEnd || this.suppressProviderRetryRunEnd ||
+        this.suppressSilentTurnRunEnd || this.suppressProgressTurnRunEnd) return;
+    while (this.pendingSteering.size && this.acceptingSteering && !this.runCancelled && !this.turnHadError) {
+      this.steeringContinuation = true;
+      try {
+        await this.agent.continue();
+        await this.agent.waitForIdle();
+      } finally {
+        this.steeringContinuation = false;
+      }
+    }
+  }
+
   async abort(): Promise<void> {
+    this.acceptingSteering = false;
     this.gracefulStopRequested = false;
     this.runCancelled = true;
     this.resolvePendingAskTools();
@@ -6567,6 +6872,7 @@ Delegation rules:
     if (this.disposed || !this.agent.state.isStreaming) {
       return { requested: false };
     }
+    this.acceptingSteering = false;
     this.gracefulStopRequested = true;
     return { requested: true };
   }
@@ -6592,7 +6898,9 @@ Delegation rules:
     const runner = this.extensionRunner;
     this.extensionRunner = undefined;
     if (runner) await runner.dispose().catch(() => undefined);
+    this.streamSink.dispose();
     this.disposed = true;
+    this.acceptingSteering = false;
     this.runCancelled = true;
     this.resolvePendingAskTools();
     this.abortRunningDelegations();

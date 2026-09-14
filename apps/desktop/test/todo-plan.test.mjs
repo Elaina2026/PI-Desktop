@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readMainSource, readTranscriptSource } from "./helpers/source-contracts.mjs";
 
 const workPanelTabs = await readFile(
   new URL("../src/lib/work-panel-tabs.ts", import.meta.url),
@@ -10,18 +11,12 @@ const protocol = await readFile(
   new URL("../../../packages/shared/src/protocol.ts", import.meta.url),
   "utf8",
 );
-const electronMain = await readFile(
-  new URL("../electron/main/index.ts", import.meta.url),
-  "utf8",
-);
+const electronMain = await readMainSource();
 const topbar = await readFile(
   new URL("../src/components/ConversationTopbar.tsx", import.meta.url),
   "utf8",
 );
-const chatTranscript = await readFile(
-  new URL("../src/components/ChatTranscript.tsx", import.meta.url),
-  "utf8",
-);
+const chatTranscript = await readTranscriptSource();
 const messagesCss = await readFile(
   new URL("../src/styles/messages.css", import.meta.url),
   "utf8",

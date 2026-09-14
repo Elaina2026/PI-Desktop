@@ -2,6 +2,22 @@ import type { ChangelogEntry } from "./changelog.js";
 
 export const trEntries: ChangelogEntry[] = [
   {
+    "version": "0.14.8",
+    "date": "2026-09-14",
+    "highlights": [
+      "MCP pazarında resmi kayıttan ve kullanıcı tanımlı kaynaklardan MCP sunucularını tarayıp yükleyin.",
+      "Skill pazarında seçilmiş ve GitHub kaynaklarından skill tarayıp yükleyin; kurulum herkese açık HTTPS ve boyut sınırlarıyla yapılır.",
+      "Dosya görünümünü birlikte gelen File Manager eklentisi olarak sunar; paketlenmiş bir eklenti pazar güncellemesini koruyabilir.",
+      "Çalışma paneli önizleme modu ekler, sohbet sütununun tabanını 450px'e yükseltir ve üç sütunlu düzende MainChat'i öne alır.",
+      "Bağımsız oturumları keşfeder, host'a ait işbirliği iletileri gönderir ve işbirliği bağlantılarını açar.",
+      "Alt ajanlar ebeveyn araçlarını devralabilir, Ayarlar'da birlikte gelen yerleşikler listelenir, bir UI tasarımcı yerleşiği eklenir ve oluşturma durumu ayrı gösterilir.",
+      "Alt+Enter ile süren turu yönlendirin ve yapıştırılan metin dosyalarını düzenlemek için bestecide genişletin.",
+      "Proje oluşturmayı yeniden tasarlar: çok klasörlü çalışma alanları, projeye ait bellek ve görsel bellek düzenleyici.",
+      "İçe aktarılan pi paketlerinin bildirdiği bağımlılıkları ve skill'leri host güvenlik sınırının ardında yükler.",
+      "Model bağlam penceresi ve en yüksek çıktı için hazır yongalar ekler, araç yongalarında Read satır aralıklarını gösterir ve başarısız sıkıştırmadan sonra bağlamı kurtarılabilir tutar.",
+    ],
+  },
+  {
     "version": "0.14.6",
     "date": "2026-09-10",
     "highlights": [
@@ -76,7 +92,6 @@ export const trEntries: ChangelogEntry[] = [
     "version": "0.13.11",
     "date": "2026-09-07",
     "highlights": [
-      "İkinci bir modelin mevcut konuşmayı incelemesini sağlamak için birlikte verilen Danışman eklentisini etkinleştirin.",
       "Eklentilerin modelleri listelemesine, oturum içi oturum bağlamını okumasına ve kimlik bilgileri almadan ana bilgisayarın sahip olduğu tamamlamaları talep etmesine izin verin."
     ]
   },

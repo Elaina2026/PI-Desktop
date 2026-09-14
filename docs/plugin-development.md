@@ -15,7 +15,7 @@ A plugin can contribute one or more of these capabilities:
 | Panel | A small isolated HTML interface | `ui.panel`, `ui.panel` permission, `window.pluginBridge` |
 | Work panel view | An interface docked in the app's right work panel | `contributes.views`, `ui.view` permission, `window.pluginBridge` |
 | Agent tool | A function the Agent can call | `contributes.agentTools`, `pi.agent.registerTool` |
-| Reviewer completion | A host-owned one-shot against the user's models | `pi.models.list`, `pi.session.getLlmContext`, `pi.agent.complete` |
+| One-shot completion | A host-owned completion against the user's models | `pi.models.list`, `pi.session.getLlmContext`, `pi.agent.complete` |
 | Skill | Instructions loaded by the Agent on demand | `contributes.skills`, `agent.prompt.inject` permission |
 | Theme | Design-token overrides | `contributes.themes`, `ui.theme` permission |
 | MCP server | Tools discovered from a local or remote MCP server | `contributes.mcpServers`, an MCP permission |
@@ -39,6 +39,7 @@ For the recommended app-first path, you need:
 - a running PI-Desktop build;
 - an empty folder for the plugin; and
 - a text editor.
+- To import a pi extension directory with npm dependencies, a system `npm` executable must be on `PATH`. Release builds ship no standalone Node/npm; without it, PI-Desktop reports a warning and the imported dependency cannot load.
 
 For the repository CLI path, you also need Node.js 22.19 or newer, pnpm 10 or
 newer, and a checkout of this repository. The devkit and SDK are currently
@@ -408,6 +409,8 @@ because Electron does not expose a cross-platform read-only OS permission API;
 `unknown` means the platform has not reported a result yet, and
 `unsupported` means desktop notifications are unavailable. Native plugin
 notifications are not added to PI-Desktop's durable task notification inbox.
+Clicking a delivered notification restores and focuses the main window, but
+does not activate a session.
 
 The panel bridge also exposes `ui.showToast`, `ui.closePanel`,
 `plugin.getSettings`, and `workspace.get`. A channel the host does not implement
@@ -566,10 +569,11 @@ plugin's own persisted session partition, and network limited to
 plugin restricted to certain projects does not offer its views in others.
 
 `examples/plugins/hello` ships a working view at `views/greetings.html`, and
-PI-Desktop's own **Files** panel is a bundled plugin built the same way —
-`apps/desktop/resources/plugins/pi.files` is a complete, non-toy example of a
-view that reads the workspace over the public `fs.list` / `fs.readPreview` /
-`fs.glob` / `fs.openDefault` / `fs.reveal` bridge.
+PI-Desktop's own file view is a bundled plugin built the same way —
+`apps/desktop/resources/plugins/pi.file-manager` is a complete, non-toy example
+of a view that reaches the workspace over the public bridge: `fs.openDefault`
+and `fs.reveal` for the two actions only the host can perform, and the plugin's
+own `onPanelInvoke` channels for everything it reads and writes itself.
 
 ### 6.9 MCP server
 
@@ -721,7 +725,18 @@ What to know before you use it:
   other terminal-only surfaces) are inert and reported in the plugin row's
   details, never thrown.
 - **Existing pi extensions** need no changes: Plugins → overflow menu →
-  "Import pi extension" wraps a file or directory in a generated plugin.
+  "Import pi extension" wraps a file or directory in a generated plugin. If
+  the directory declares production or optional dependencies, PI-Desktop first
+  runs `npm install --package-lock-only --omit=dev --legacy-peer-deps --no-audit
+  --no-fund --ignore-scripts`, validates the generated registry-only lockfile,
+  then runs `npm ci` with the same safety flags. Direct dependency specs are
+  checked across production, optional, dev, and peer fields; git resolution is
+  disabled, and no third-party lifecycle script runs. A native module that
+  needs a build script fails with a diagnostic — rebuild it against Electron
+  headers (`npx @electron/rebuild -v <electron version>`) inside the plugin
+  directory to fix it. Failed installs clean partial dependencies and report a
+  warning toast without blocking the import; the row shows a load error only if
+  the extension actually fails to load.
 
 ## 7. Permission design
 

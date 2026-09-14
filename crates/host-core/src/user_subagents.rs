@@ -105,18 +105,30 @@ fn normalize_tools(requested: Option<&Vec<String>>) -> Vec<String> {
                 .map(|tool| (*tool).to_string())
                 .collect()
         });
+    let mut inherit = false;
     let mut result = Vec::new();
     for tool in &requested {
+        let trimmed = tool.trim();
+        if trimmed.eq_ignore_ascii_case("inherit") {
+            inherit = true;
+            continue;
+        }
         if let Some(canonical) = ASSIGNABLE_TOOLS
             .iter()
-            .find(|candidate| candidate.eq_ignore_ascii_case(tool.trim()))
+            .find(|candidate| candidate.eq_ignore_ascii_case(trimmed))
         {
             if !result.iter().any(|value: &String| value == canonical) {
                 result.push((*canonical).to_string());
             }
         }
     }
-    result
+    if inherit {
+        let mut tools = vec!["inherit".to_string()];
+        tools.extend(result);
+        tools
+    } else {
+        result
+    }
 }
 
 fn normalize_thinking(value: Option<&str>) -> Option<String> {
@@ -214,7 +226,11 @@ fn render_document(record: &UserSubagentRecord, body: &str) -> String {
         "description: {}\n",
         record.description.replace('\n', " ")
     ));
-    output.push_str(&format!("tools: [{}]\n", record.tools.join(", ")));
+    if record.tools.len() == 1 && record.tools[0].eq_ignore_ascii_case("inherit") {
+        output.push_str("tools: inherit\n");
+    } else {
+        output.push_str(&format!("tools: [{}]\n", record.tools.join(", ")));
+    }
     if let Some(model) = &record.model {
         output.push_str(&format!("model: {model}\n"));
     }
@@ -508,6 +524,35 @@ mod tests {
             normalize_tools(Some(&vec!["read".into(), "Nope".into(), "Bash".into()])),
             vec!["Read", "Bash"]
         );
+    }
+
+    #[test]
+    fn inherit_token_is_kept_and_unknown_tools_still_drop() {
+        assert_eq!(
+            normalize_tools(Some(&vec!["inherit".into()])),
+            vec!["inherit"]
+        );
+        assert_eq!(
+            normalize_tools(Some(&vec!["inherit".into(), "Bash".into(), "Nope".into()])),
+            vec!["inherit".to_string(), "Bash".to_string()]
+        );
+    }
+
+    #[test]
+    fn inherit_only_documents_round_trip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("worker.md");
+        fs::write(
+            &path,
+            "---\nname: worker\ndescription: Uses the parent tools.\ntools: inherit\n---\n\nDo the job.\n",
+        )
+        .unwrap();
+        let state = CapabilityState::new(dir.path(), SUBAGENT_KIND);
+        let record = parse_record(&path, &state).expect("inherit-only document must load");
+        assert_eq!(record.tools, vec!["inherit"]);
+        let rendered = render_document(&record, "Do the job.");
+        assert!(rendered.contains("tools: inherit\n"));
+        assert!(!rendered.contains("tools: [inherit]"));
     }
 
     #[test]

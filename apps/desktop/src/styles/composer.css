@@ -270,6 +270,15 @@
   -webkit-user-select: none;
 }
 
+.composer-chip[data-action="expand-text-reference"] {
+  cursor: pointer;
+}
+
+.composer-chip[data-action="expand-text-reference"]:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--ds-accent) 72%, transparent);
+  outline-offset: 1px;
+}
+
 .composer-chip-icon {
   display: inline-flex;
   flex: 0 0 auto;
@@ -701,4 +710,43 @@
     flex: 0 0 auto;
   }
 
+}
+
+/* A folder drop asks for an explicit choice instead of attaching contents. */
+.composer-directory-drop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  border: 1px solid var(--ds-border-default);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  background: var(--ds-tile);
+  color: var(--ds-text-primary);
+  font-size: var(--text-sm);
+}
+
+.composer-directory-drop-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-directory-drop-action {
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  background: var(--ds-tile-deep);
+  color: var(--ds-text-primary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.composer-directory-drop-action:nth-of-type(1) {
+  margin-left: auto;
+}
+
+.composer-directory-drop-action:hover {
+  background: var(--ds-tile-hover);
 }

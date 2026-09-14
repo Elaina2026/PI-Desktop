@@ -18,6 +18,12 @@ Local plugins usable → developer-friendly → marketplace distribution → sig
 
 ### R2 — Agent Extension (partial ✅)
 - Full agentTools pipeline ✅
+- Official `pi.session-orchestrator` worker-session plugin ✅ — real durable
+  sessions, host-owned bidirectional delivery, turn-bound results,
+  at-most-once completion callbacks, bounded status projections, and
+  parent-scoped persistence; it composes the reviewed `desktop.control`
+  operations while the durable ledger remains in host-core (ADR 0237 / ADR
+  0239)
 - Skills contribution is activated: declared skills reach the model as a `# Skills`
   catalog in the system prompt when `agent.prompt.inject` is granted, and the model
   loads a body on demand through the `Skill` tool ✅ (ADR 0039, D174)

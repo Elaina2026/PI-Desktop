@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
   AgentEventEnvelope,
@@ -189,9 +189,92 @@ describe("AgentHost ingest", () => {
     expect(host.getTurn("rt_1").status).toBe("interrupted");
     expect(done.session.status).toBe("idle");
   });
+
+  it("applies delta-only message_update onto the live item snapshot", async () => {
+    const { host } = build();
+    host.ingest(envelope("s1", "rt_1", { type: "agent_start" }));
+    host.ingest(envelope("s1", "rt_1", { type: "message_start", message: message("m1", "") }));
+    host.ingest(envelope("s1", "rt_1", {
+      type: "message_update",
+      stream: "delta",
+      message: { id: "m1", role: "assistant", content: "", createdAt: "2026-09-10T00:00:00.000Z", status: "streaming" },
+      deltaText: "partial ",
+    }));
+    host.ingest(envelope("s1", "rt_1", {
+      type: "message_update",
+      stream: "delta",
+      message: { id: "m1", role: "assistant", content: "", createdAt: "2026-09-10T00:00:00.000Z", status: "streaming" },
+      deltaText: "text",
+    }));
+    const streaming = await host.snapshot("s1");
+    expect((streaming.activeItems[0]!.content as UiMessage).content).toBe("partial text");
+  });
 });
 
 describe("AgentHost turns", () => {
+  it("serializes same-session admission while independent sessions can start", async () => {
+    const { host, runtime, sessions } = build();
+    sessions.summaries.set("s2", summary("s2"));
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const starting = new Promise<void>((resolve) => { entered = resolve; });
+    const prompt = runtime.prompt.bind(runtime);
+    vi.spyOn(runtime, "prompt").mockImplementation(async (request) => {
+      if (request.content === "first") {
+        entered();
+        await gate;
+      }
+      return prompt(request);
+    });
+    const first = host.startTurn(owner, {
+      sessionId: "s1", admission: "queue", input: { text: "first", sessionMessageId: "m1" }, context: { requestId: "r1" },
+    });
+    await starting;
+    const second = host.startTurn(owner, {
+      sessionId: "s1", admission: "queue", input: { text: "second", sessionMessageId: "m2" }, context: { requestId: "r2" },
+    });
+    const sibling = await host.startTurn(owner, {
+      sessionId: "s2", input: { text: "sibling" }, context: { requestId: "r3" },
+    });
+    expect(sibling.turn.status).toBe("running");
+    release();
+    const [started, queued] = await Promise.all([first, second]);
+    expect(started.turn.status).toBe("running");
+    expect(queued.turn.status).toBe("queued");
+    expect(runtime.prompts.filter((request) => request.sessionId === "s1").map((request) => request.sessionMessageId)).toEqual(["m1"]);
+    expect(host.queueEntries("s1")[0]?.sessionMessageId).toBe("m2");
+    host.ingest(envelope("s1", started.turn.id, { type: "agent_end", messageIds: [] }));
+    await vi.waitFor(() => expect(runtime.prompts.at(-1)?.sessionMessageId).toBe("m2"));
+  });
+
+  it("includes collaboration identity in idempotency checks", async () => {
+    const { host, runtime } = build();
+    const request = {
+      sessionId: "s1", idempotencyKey: "delivery", input: { text: "same text", sessionMessageId: "m1" }, context: { requestId: "r1" },
+    };
+    const [first, same] = await Promise.all([host.startTurn(owner, request), host.startTurn(owner, request)]);
+    expect(same.turn.id).toBe(first.turn.id);
+    expect(runtime.prompts).toHaveLength(1);
+    await expect(host.startTurn(owner, { ...request, input: { ...request.input, sessionMessageId: "m2" } })).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+  });
+
+  it("cancels a queued collaboration message without dispatching it", async () => {
+    const store = new MemoryQueueStore();
+    const { host, runtime } = build({ queueStore: store });
+    const first = await host.startTurn(owner, { sessionId: "s1", input: { text: "first" }, context: { requestId: "r1" } });
+    const second = await host.startTurn(owner, {
+      sessionId: "s1", admission: "queue", input: { text: "later", sessionMessageId: "m2" }, context: { requestId: "r2" },
+    });
+    expect(await host.cancelSessionMessage(owner, "s1", "unknown")).toBe(false);
+    expect(await host.cancelSessionMessage(owner, "s1", "m2")).toBe(true);
+    expect(host.getTurn(second.turn.id).status).toBe("canceled");
+    expect(await store.listAll()).toEqual([]);
+    host.ingest(envelope("s1", first.turn.id, { type: "agent_end", messageIds: [] }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(runtime.prompts.map((request) => request.content)).toEqual(["first"]);
+  });
+
   it("starts immediately, applies the ceiling, and honors idempotency", async () => {
     const { host, runtime } = build({ permissionMode: "auto" });
     const started = await host.startTurn(controller, {
@@ -287,6 +370,7 @@ describe("AgentHost turns", () => {
       sessionId: "s1",
       principalSubject: "phone",
       content: "after reboot",
+      sessionMessageId: "restored-message",
       effectivePermissionMode: "ask",
       inputHash: "h",
       createdAt: 1,
@@ -300,6 +384,7 @@ describe("AgentHost turns", () => {
     await host.attach(controller, { sessionId: "s1" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(runtime.prompts.map((prompt) => prompt.content)).toEqual(["after reboot"]);
+    expect(runtime.prompts[0]?.sessionMessageId).toBe("restored-message");
   });
 });
 
@@ -490,4 +575,3 @@ describe("AgentHost queue extras", () => {
     expect(runtime.prompts.map((prompt) => prompt.content)).toEqual(["later"]);
   });
 });
-

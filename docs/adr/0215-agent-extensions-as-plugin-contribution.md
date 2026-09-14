@@ -47,7 +47,7 @@ used as one.
   untouched; only the ownership layer moved.
 - Sandbox level is unchanged and now explicit as a permission. A sandboxed
   variant that runs modules in the plugin host process remains a v2 option.
-- The v1 E2E harness moved to plugin-form fixtures and passes end to end.
+- The v1 harness covers plugin-form fixtures and the importer/runtime contracts; the native picker, npm install, and provider-turn journey remain separate environment-dependent validation.
 
 ## Alternatives considered
 

@@ -70,6 +70,9 @@ Before editing any file for a new request:
 - [ ] Mutable, incompatible, or concurrency-sensitive environment state stays
   worktree-local and ignored.
 - [ ] The current branch is not `main` before implementation begins.
+- [ ] Delivery scope is recorded: a commit request includes local `main`
+  integration; a push request includes PR-based remote `main` integration and
+  local synchronization. Explicit branch-only or draft-only limits are honored.
 
 ---
 
@@ -112,12 +115,17 @@ After implementation (or alongside it):
   cross-component regression risk makes them necessary.
 - [ ] The smallest necessary targeted local checks passed, or local validation
   was assessed as unnecessary with no separate approval or waiver required.
-- [ ] No E2E suite or command was run unless the user explicitly requested E2E
-  validation.
-- [ ] If the user requested E2E validation, the requested suite and its result
-  are documented in the handoff.
-- [ ] Automatically triggered remote E2E jobs are treated as merge gates, but
-  are not manually dispatched or rerun without an explicit user request.
+- [ ] Relevant E2E suites were selected and passed after the code-bearing
+  change was integrated into `main`; required validation needs no separate user
+  request. Documentation-only changes retain their existing exemption.
+- [ ] Results apply to the executable commit currently integrated into `main`.
+  Any required suite not run is recorded with its reason, alternative
+  validation, and remaining risk; delivery remains incomplete until that gate
+  passes.
+- [ ] Required remote E2E jobs passed for authorized remote delivery after the
+  change reached remote `main`; pre-merge jobs do not replace this result.
+  Dispatch or rerun follows the hosting platform's or repository workflow's
+  requirements.
 
 ---
 
@@ -134,17 +142,25 @@ After implementation (or alongside it):
 
 ## 6. Pull/Merge Request Checklist
 
-Before marking the request complete:
+Before marking requested integration complete, apply the R4 delivery scope;
+explicit branch-only or draft-only requests retain their narrower scope:
 
-- [ ] Request branch is pushed to the remote.
-- [ ] PR/MR targets `main` and contains only the request's logical changes.
-- [ ] PR description lists impacted specs and e2e scenarios.
-- [ ] PR self-review checklist completed.
-- [ ] Required remote checks and reviews pass.
-- [ ] PR/MR is merged into `main` using a permitted merge strategy.
+- [ ] Requested commit/push delivery is integrated into local `main`; a
+  task-branch commit or push alone was not reported as completion, and no second
+  merge confirmation was requested.
+- [ ] Commit-only or local-merge delivery did not publish remotely without
+  separate authorization.
+- [ ] For authorized remote delivery: the request branch was pushed, its PR/MR
+  targeted `main` with only this task's changes, and the description documented
+  impacted specs, E2E scenarios, and validation.
+- [ ] For authorized remote delivery: PR self-review, required checks, and
+  reviews passed; the PR/MR merged into remote `main` using a permitted strategy;
+  local `main` was synchronized with the landed change.
+- [ ] No direct push to `main`, force-push, discarded unrelated work, or bypassed
+  gate was inferred from the delivery request. Genuine blockers were reported.
 - [ ] Request worktree is removed after merge.
 - [ ] Merged request branch is deleted locally (`git branch -d`).
-- [ ] Remote request branch is deleted after merge.
+- [ ] Any remotely published request branch is deleted after merge.
 - [ ] Issue reference is included when applicable (e.g. `Refs #12` or
   `Closes #12`).
 
@@ -155,7 +171,8 @@ Before marking the request complete:
 Run immediately after the request branch is integrated into `main`, whether the
 merge happened remotely via PR/MR or locally in the primary checkout:
 
-- [ ] Expected merge commits are verified present in `main`.
+- [ ] Expected commits are verified present in local `main`, and remote `main`
+  when remote delivery was requested.
 - [ ] The request worktree is clean — no uncommitted or untracked request files
   remain.
 - [ ] `git worktree remove <worktree-path>` succeeded without forcing.
@@ -164,6 +181,8 @@ merge happened remotely via PR/MR or locally in the primary checkout:
 - [ ] `git worktree prune` leaves `git worktree list` free of stale entries for
   this request.
 - [ ] No other agent's worktree or branch was removed.
+- [ ] If launch was requested after delivery, the app was built and started
+  from the integrated `main` checkout and its development environment.
 
 ---
 
@@ -195,7 +214,8 @@ documentation-only work or non-release chores.
 
 ## 8. Final Definition-of-Done Gate
 
-Before marking work complete, verify **all** of the following:
+Before marking work complete, verify **all applicable** conditions under the
+user's delivery scope:
 
 | # | Gate | Source |
 |---|---|---|
@@ -203,13 +223,14 @@ Before marking work complete, verify **all** of the following:
 | 2 | Code/doc implements the planned change | Step 4 of [development loop](03-ai-development-workflow.md#2-development-loop) |
 | 3 | All impacted specs updated | [R1 — Spec-sync](03-ai-development-workflow.md#r1--spec-first--spec-sync) |
 | 4 | E2E scenarios documented (or confirmed not needed) | [R3 — E2E coverage doc](03-ai-development-workflow.md#r3--e2e-coverage-doc) |
-| 5 | Necessary targeted local validation passed, or was assessed as unnecessary; automatically triggered remote gates passed; agents ran or dispatched E2E only if explicitly requested | Steps 7 and 11 of development loop |
+| 5 | Targeted local checks follow the existing risk standard; relevant E2E passed after code-bearing local/remote `main` integration and applicable remote gates passed; required tests need no separate user request | Steps 7 and 11 of development loop |
 | 6 | Change committed with conventional message | [R2 — Commit-per-change](03-ai-development-workflow.md#r2--commit-per-change) |
 | 7 | BOARD updated if milestone deliverable completed | Step 9 of development loop |
 | 8 | No secrets or local data in commit | [§4.4 Never commit](03-ai-development-workflow.md#44-never-commit) |
-| 9 | PR/MR merged into `main`; request worktree and branch removed | [R4 — Request branch + worktree + merge gate](03-ai-development-workflow.md#r4--request-branch--worktree--merge-gate) |
+| 9 | Requested local/remote `main` integration completed under R4; expected commits verified and merged worktree/branch removed; any requested launch uses integrated `main` | [R4 — Request branch + worktree + merge gate](03-ai-development-workflow.md#r4--request-branch--worktree--merge-gate) |
 | 10 | No merged worktree left on disk; `git worktree list` has no stale entry for this request | [§6.1 Merge Cleanup Checklist](#61-merge-cleanup-checklist) |
 | 11 | If a GitHub issue was linked: verified before work; commented in the issue language; closed when conclusive | [R5 — Verify linked GitHub issues](03-ai-development-workflow.md#r5--verify-linked-github-issues-before-work-then-reply-and-close) |
 | 12 | If a GitHub pull request was linked: principle reviewed; merged first when sound; follow-up after merge; contributor work not discarded | [R6 — Merge a linked pull request whose principle is sound, then follow up](03-ai-development-workflow.md#r6--merge-a-linked-pull-request-whose-principle-is-sound-then-follow-up) |
 
-If any gate fails, the change is **not Done**.
+If any applicable gate fails, the requested integration is **not Done**; report
+the blocker without weakening the gate.

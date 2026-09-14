@@ -94,6 +94,16 @@ CDP 插件工具在 Plan 中仍被拒绝）。 Bash 在 Plan 中仍然可用：�
 结构化 title/question 字段。 Renderer 和 sidecar 状态无法写入或
 替换一个工件。
 
+## 4.1 技能市场出网
+
+渲染层不拉取技能目录或 SKILL.md。Electron 主进程按公网策略发起 HTTPS 请求（ADR 0243 / D413）：仅 `https`、共享的公网主机语法检查、对每个解析地址做 DNS 分类，以及 `redirect: "manual"` 的逐跳再校验。回环、RFC1918、ULA、link-local 与 mapped IPv6 一律拒绝。安装只通过 `skills.create` 写入 markdown。内联相邻 markdown 后仍受 128 KiB 宿主上限约束。
+
+## 4.2 MCP 市场出网
+
+MCP 市场只接受无凭据的公网 HTTPS 源和目录端点。Main 在每次连接前解析主机名，并把选中的公网地址固定到 HTTPS socket，同时保留原主机名用于 TLS SNI 和 HTTP Host。重定向手动跟随、仅限 HTTPS、最多五跳，并在每次连接前重新检查。响应上限为 4 MiB，请求共享 8 秒截止时间，源、缓存和条目数量均有界。跨 origin 的用户 MCP 重定向不会转发调用方 header。
+
+手动配置的用户 MCP 仍遵循 ADR 0142，可以显式使用本地/LAN 端点；市场路径不会扩大该策略。
+
 ## 5. 命令执行
 
 - Bash默认需要确认（风险分级权限卡）；在
@@ -149,7 +159,9 @@ CDP 插件工具在 Plan 中仍被拒绝）。 Bash 在 Plan 中仍然可用：�
 - 客户端不携带 GitHub 令牌。私人或其他无法访问的提要
   关闭失败；自动故障保持在环境状态，显式检查会暴露
   错误。
-- 未签名 macOS 分发包为可信来源提供明确的首次启动助手。它只搜索
+- 未签名 macOS 分发包为可信来源保留范围明确的首次启动兜底路径。DMG 只展示名为
+  `If app won't open, read this.txt` 的文本说明，其中给出手动的 `com.apple.quarantine` 命令，并说明
+  已签名/公证版本无需执行。ZIP 安装包还包含可执行助手：它只搜索
   `/Applications/PI-Desktop.app` 和 `~/Applications/PI-Desktop.app`，并在删除前先校验
   `CFBundleIdentifier=com.pi-desktop.app`，再删除唯一的 `com.apple.quarantine` 属性并
   打开应用。它不接受任意路径，不提升权限，也不替代 Developer ID 签名或公证。
@@ -205,6 +217,7 @@ CDP 插件工具在 Plan 中仍被拒绝）。 Bash 在 Plan 中仍然可用：�
 | 即时注入破坏性工具的使用 | 主机拥有的持久模式策略、权限确认、路径边界、秘密隔离 |
 | 依赖性中毒 | 锁定文件、几个 dep、本机模块审查 |
 | 恶意本地插件 | 声明的权限、无秘密访问、MVP 后跟踪的进程隔离 (ADR 0008) |
+| 技能市场 SSRF（用户源 URL） | 主进程公网 HTTPS 分类器 + DNS + 逐跳 redirect；渲染层 CSP 禁止该 fetch（ADR 0243） |
 
 ## 11. 安检门
 

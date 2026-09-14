@@ -17,6 +17,7 @@ import type { ModelConfig } from "@pi-desktop/agent-runtime";
 
 export const MODELS_DEV_API_URL = "https://models.dev/api.json";
 export const MODELS_DEV_TIMEOUT_MS = 10_000;
+const LOOKUP_MEMO_LIMIT = 1_024;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8_192;
 const DEFAULT_THINKING_LEVELS: ThinkingLevel[] = ["low", "medium", "high"];
@@ -771,9 +772,69 @@ export function modelConfigFromModelsDev(
   if (model.modelApi !== undefined) config.api = model.modelApi;
   return config;
 }
+type IndexedModel = { model: ModelsDevModel; provider: ModelsDevProvider };
+
+/**
+ * Per-generation candidate index built from a loaded catalog. Bounding the
+ * lookup by the number of distinct model ids in the catalog (not by the number
+ * of distinct queries) keeps the work of a single session-list read constant
+ * regardless of how many distinct bindings it contains: no per-query eviction
+ * can force an earlier key to be rescanned. It is rebuilt only when the
+ * provider map is replaced and is cleared on a failed or fresh load.
+ */
+class ModelsDevLookupIndex {
+  private readonly byModelId = new Map<string, IndexedModel[]>();
+
+  constructor(providers: ReadonlyMap<string, ModelsDevProvider>) {
+    for (const provider of providers.values()) {
+      for (const model of provider.models) {
+        if (!isTextAgentModel(model)) continue;
+        const entry: IndexedModel = { model, provider };
+        for (const key of registrationKeys(model.modelId)) {
+          let bucket = this.byModelId.get(key);
+          if (!bucket) {
+            bucket = [];
+            this.byModelId.set(key, bucket);
+          }
+          if (!bucket.includes(entry)) bucket.push(entry);
+        }
+      }
+    }
+  }
+
+  candidates(requested: string): readonly IndexedModel[] {
+    return this.byModelId.get(requested) ?? EMPTY_CANDIDATES;
+  }
+}
+
+/** The normalized id, the `@region`-less base, and every vendor-prefixed form
+ * `modelIdsMatch` treats as equivalent, so a query finds all matching catalog
+ * models through the index without a full scan. */
+function registrationKeys(modelId: string): string[] {
+  const keys = new Set<string>();
+  const raw = modelId.trim();
+  keys.add(normalizedModelId(raw));
+  const at = raw.indexOf("@");
+  if (at > 0) keys.add(normalizedModelId(raw.slice(0, at)));
+  for (const separator of ["/", "-", "."] as const) {
+    for (const prefix of MODEL_VENDOR_PREFIXES) {
+      const head = `${prefix}${separator}`;
+      if (raw.startsWith(head) && raw.length > head.length) {
+        keys.add(normalizedModelId(raw.slice(head.length)));
+      }
+    }
+  }
+  return [...keys];
+}
+
+const EMPTY_CANDIDATES: readonly IndexedModel[] = [];
+
+
 
 export class ModelsDevCatalog {
   private providers = new Map<string, ModelsDevProvider>();
+  private lookupIndex: ModelsDevLookupIndex | undefined;
+  private readonly lookupMemo = new Map<string, ModelsDevModel | undefined>();
   private loadPromise: Promise<boolean> | undefined;
   private loaded = false;
   private source: ModelsDevCatalogStatus["source"] = "empty";
@@ -804,6 +865,9 @@ export class ModelsDevCatalog {
         const parsed = parseModelsDevCatalog(raw);
         if (parsed.length === 0) throw new Error("models.dev snapshot contained no providers");
         this.providers = new Map(parsed.map((provider) => [provider.providerKey, provider]));
+        // Replacing the provider map invalidates the derived lookup index.
+        this.lookupIndex = undefined;
+        this.lookupMemo.clear();
         this.loaded = true;
         this.source = "bundled";
         this.lastError = undefined;
@@ -842,6 +906,9 @@ export class ModelsDevCatalog {
         const parsed = parseModelsDevCatalog(await response.json());
         if (parsed.length === 0) throw new Error("models.dev catalog contained no usable providers");
         this.providers = new Map(parsed.map((provider) => [provider.providerKey, provider]));
+        // Replacing the provider map invalidates the derived lookup index.
+        this.lookupIndex = undefined;
+        this.lookupMemo.clear();
         this.loaded = true;
         this.source = "remote";
         this.fetchedAt = new Date(this.now()).toISOString();
@@ -895,25 +962,42 @@ export class ModelsDevCatalog {
   findModel(input: { vendorKey?: string; baseUrl?: string; modelId: string }): ModelsDevModel | undefined {
     const requested = normalizedModelId(input.modelId);
     if (!requested) return undefined;
+    // Resolve through the index of the current catalog generation. The candidate
+    // set is bounded by the catalog's model count, never by the number of
+    // distinct lookups a single read performs, so no eviction policy can force
+    if (!this.lookupIndex) this.lookupIndex = new ModelsDevLookupIndex(this.providers);
+    // Memoize the exact lookup so repeated reads of the same binding never re-touch
+    // the matched model. The memo is bounded and cleared wholesale on pressure;
+    // even if many distinct keys clear it mid-read, re-resolution goes through the
+    // small candidate index, never a full catalog scan.
+    const memoKey = `${input.vendorKey ?? ""}\u0000${input.baseUrl ?? ""}\u0000${requested}`;
+    if (this.lookupMemo.has(memoKey)) return this.lookupMemo.get(memoKey);
     const preferredProvider = this.providerFor(input);
-    const providers = preferredProvider
-      ? [preferredProvider, ...[...this.providers.values()].filter((item) => item !== preferredProvider)]
-      : [...this.providers.values()];
+    // Keep the same tie-breaking order as the scanned lookup: preferred-provider
+    // entries first, then the remaining providers in provider-map order.
+    const preferred: IndexedModel[] = [];
+    const rest: IndexedModel[] = [];
+    for (const entry of this.lookupIndex.candidates(requested)) {
+      (entry.provider === preferredProvider ? preferred : rest).push(entry);
+    }
     const candidates: Array<{ model: ModelsDevModel; score: number }> = [];
-    for (const provider of providers) {
-      for (const model of provider.models) {
-        if (!isTextAgentModel(model) || !modelIdsMatch(model.modelId, requested)) continue;
-        let score = model.modelId.toLowerCase() === requested ? 20 : 10;
-        if (provider === preferredProvider) score += 100;
-        if (apiMatches(input.baseUrl, provider.api)) score += 80;
-        if (modelMatchesProvider(model, input.vendorKey)) score += 60;
-        candidates.push({ model, score });
-      }
+    for (const { model, provider } of [...preferred, ...rest]) {
+      if (!modelIdsMatch(model.modelId, requested)) continue;
+      let score = model.modelId.toLowerCase() === requested ? 20 : 10;
+      if (provider === preferredProvider) score += 100;
+      if (apiMatches(input.baseUrl, provider.api)) score += 80;
+      if (modelMatchesProvider(model, input.vendorKey)) score += 60;
+      candidates.push({ model, score });
     }
     candidates.sort((left, right) =>
       right.score - left.score || left.model.modelId.length - right.model.modelId.length,
     );
-    return candidates[0]?.model;
+    const result = candidates[0]?.model;
+    // Cache the result (a miss included) so a repeated miss is also O(1) and
+    // cannot grow the candidate index with query-dependent keys.
+    this.lookupMemo.set(memoKey, result);
+    if (this.lookupMemo.size > LOOKUP_MEMO_LIMIT) this.lookupMemo.clear();
+    return result;
   }
 
   modelsForProvider(input: { vendorKey?: string; baseUrl?: string; providerId: string }): ModelInfo[] {

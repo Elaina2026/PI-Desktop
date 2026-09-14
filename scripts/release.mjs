@@ -20,8 +20,10 @@
  * GitHub auto-generated release bodies are web-only and are not a substitute.
  *
  * This script runs `scripts/check-release-docs.mjs <version>` after bumping and
- * refuses to tag while any surface disagrees. Use --skip-docs-check only for a
- * deliberate non-release bump.
+ * refuses to tag while any surface disagrees. Prereleases skip that preflight
+ * (changelog catalogs the next stable version, not `x.y.z-beta.*`); still run
+ * `node scripts/check-release-docs.mjs x.y.z` against the stable version being
+ * previewed. Use --skip-docs-check only for a deliberate non-release bump.
  *
  * Pushing the tag triggers .github/workflows/release.yml, which builds the
  * macOS / Windows / Linux installers and publishes them to a GitHub Release:

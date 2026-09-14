@@ -32,6 +32,8 @@ import {
   RACP_ACTIVE_TURN_STATUSES,
   RACP_DEFAULT_LIMITS,
   RACP_DEFAULT_POLICY,
+  applyMessageUpdate,
+  deltaStreamPayloadFits,
   effectiveRemotePermissionMode,
   racpKindForAgentEvent,
   rolesAllowOperation,
@@ -78,6 +80,7 @@ export type AgentHostOptions = {
 export type QueueEntryView = {
   turn: RacpTurn;
   content: string;
+  sessionMessageId?: string;
   attachments?: AgentPromptAttachment[];
 };
 
@@ -85,7 +88,7 @@ export type StartTurnParams = {
   sessionId: string;
   idempotencyKey?: string;
   admission?: RacpTurnAdmission;
-  input: { text: string; attachments?: AgentPromptAttachment[] };
+  input: { text: string; attachments?: AgentPromptAttachment[]; sessionMessageId?: string };
   context: RacpRequestContext;
 };
 
@@ -158,6 +161,7 @@ export class AgentHost {
   private readonly runtimeAliases = new Map<string, string>();
   private readonly idempotency = new Map<string, IdempotencyEntry>();
   private readonly draining = new Set<string>();
+  private readonly admissions = new Map<string, Promise<void>>();
 
   constructor(options: AgentHostOptions) {
     this.runtime = options.runtime;
@@ -251,7 +255,12 @@ export class AgentHost {
       case "tool_update": {
         const itemId = event.type === "message_update" ? event.message.id : event.toolCallId;
         const item = state.activeItems.get(itemId);
-        if (item) item.content = event.type === "message_update" ? event.message : { ...(item.content as object), partialResult: event.partialResult };
+        if (item) {
+          item.content =
+            event.type === "message_update"
+              ? applyMessageUpdate(item.content as UiMessage | undefined, event)
+              : { ...(item.content as object), partialResult: event.partialResult };
+        }
         this.emit(state, mapping.kind, { itemType: mapping.itemType, itemId, event }, meta2);
         return;
       }
@@ -407,6 +416,10 @@ export class AgentHost {
 
   async startTurn(principal: Principal, params: StartTurnParams): Promise<StartTurnResult> {
     this.requireRole(principal, "turn/start");
+    return this.withAdmission(params.sessionId, () => this.startTurnAdmitted(principal, params));
+  }
+
+  private async startTurnAdmitted(principal: Principal, params: StartTurnParams): Promise<StartTurnResult> {
     const summary = await this.requireSession(params.sessionId);
     const state = this.state(summary.id);
     state.permissionMode = summary.permissionMode;
@@ -446,6 +459,7 @@ export class AgentHost {
         sessionId: state.id,
         principalSubject: principal.subject,
         content: params.input.text,
+        ...(params.input.sessionMessageId ? { sessionMessageId: params.input.sessionMessageId } : {}),
         ...(params.input.attachments ? { attachments: params.input.attachments } : {}),
         effectivePermissionMode,
         ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -466,6 +480,7 @@ export class AgentHost {
       const started = await this.runtime.prompt({
         sessionId: state.id,
         content: params.input.text,
+        ...(params.input.sessionMessageId ? { sessionMessageId: params.input.sessionMessageId } : {}),
         ...(params.input.attachments ? { attachments: params.input.attachments } : {}),
         effectivePermissionMode,
         ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -516,6 +531,18 @@ export class AgentHost {
       throw racpError("CONFLICT", "only a queued turn can be canceled");
     }
     return this.cancelQueued(state, turn);
+  }
+
+  /** Remove a collaboration delivery from both the live and durable queue. */
+  async cancelSessionMessage(principal: Principal, sessionId: string, messageId: string): Promise<boolean> {
+    this.requireRole(principal, "turn/cancel");
+    return this.withAdmission(sessionId, async () => {
+      const record = this.queue.list(sessionId).find((entry) => entry.sessionMessageId === messageId);
+      if (!record) return false;
+      const state = this.state(sessionId);
+      await this.cancelQueued(state, this.ensureTurn(state, record.id));
+      return true;
+    });
   }
 
   /** Move a queued turn to the head of its session's queue ("send now"). */
@@ -624,6 +651,7 @@ export class AgentHost {
     return this.queue.list(sessionId).map((record) => ({
       turn: this.toRacpTurn(state, this.ensureTurn(state, record.id)),
       content: record.content,
+      ...(record.sessionMessageId ? { sessionMessageId: record.sessionMessageId } : {}),
       ...(record.attachments ? { attachments: record.attachments } : {}),
     }));
   }
@@ -650,6 +678,13 @@ export class AgentHost {
     if (this.draining.has(sessionId)) return;
     this.draining.add(sessionId);
     try {
+      await this.withAdmission(sessionId, () => this.drainAdmitted(sessionId));
+    } finally {
+      this.draining.delete(sessionId);
+    }
+  }
+
+  private async drainAdmitted(sessionId: string): Promise<void> {
       while (true) {
         const state = this.state(sessionId);
         if (this.queue.isHeld(sessionId) || this.isOccupied(state)) return;
@@ -660,6 +695,7 @@ export class AgentHost {
           const started = await this.runtime.prompt({
             sessionId,
             content: record.content,
+            ...(record.sessionMessageId ? { sessionMessageId: record.sessionMessageId } : {}),
             ...(record.attachments ? { attachments: record.attachments } : {}),
             effectivePermissionMode: record.effectivePermissionMode,
             ...(record.idempotencyKey ? { idempotencyKey: record.idempotencyKey } : {}),
@@ -689,8 +725,18 @@ export class AgentHost {
           this.notifyQueue(sessionId);
         }
       }
+  }
+
+  /** Keep busy checks and queue writes atomic across concurrent senders. */
+  private async withAdmission<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.admissions.get(sessionId) ?? Promise.resolve();
+    const result = previous.then(operation);
+    const settled = result.then(() => undefined, () => undefined);
+    this.admissions.set(sessionId, settled);
+    try {
+      return await result;
     } finally {
-      this.draining.delete(sessionId);
+      if (this.admissions.get(sessionId) === settled) this.admissions.delete(sessionId);
     }
   }
 
@@ -782,6 +828,7 @@ export class AgentHost {
   }
 
   private boundPayload(payload: unknown): unknown {
+    if (deltaStreamPayloadFits(payload, this.limits.maxFrameBytes)) return payload;
     const encoded = JSON.stringify(payload);
     if (encoded === undefined || encoded.length <= this.limits.maxFrameBytes) return payload;
     const record = (payload ?? {}) as { event?: { type?: string }; itemId?: string; itemType?: string };
@@ -1024,8 +1071,12 @@ function requireSessionId(sessionId: string | undefined): string {
 }
 
 /** Small stable hash so a reused idempotency key with other input is detected. */
-export function hashInput(input: { text: string; attachments?: AgentPromptAttachment[] }): string {
-  const encoded = JSON.stringify({ text: input.text, attachments: input.attachments ?? [] });
+export function hashInput(input: StartTurnParams["input"]): string {
+  const encoded = JSON.stringify({
+    text: input.text,
+    attachments: input.attachments ?? [],
+    ...(input.sessionMessageId ? { sessionMessageId: input.sessionMessageId } : {}),
+  });
   let hash = 5381;
   for (let index = 0; index < encoded.length; index += 1) {
     hash = ((hash << 5) + hash + encoded.charCodeAt(index)) | 0;

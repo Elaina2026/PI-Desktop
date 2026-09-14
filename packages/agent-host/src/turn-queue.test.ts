@@ -36,12 +36,13 @@ describe("TurnQueue", () => {
 
   it("restores persisted records held until a controller resumes them", async () => {
     const store = new MemoryQueueStore();
-    await store.push(record("late", "s1", 5));
+    await store.push({ ...record("late", "s1", 5), sessionMessageId: "message-late" });
     await store.push(record("early", "s1", 1));
     await store.push(record("other", "s2", 3));
     const queue = new TurnQueue(store, 8);
     expect(await queue.restore()).toBe(3);
     expect(queue.list("s1").map((entry) => entry.id)).toEqual(["early", "late"]);
+    expect(queue.find("late")?.sessionMessageId).toBe("message-late");
     expect(queue.isHeld("s1")).toBe(true);
     expect(queue.isHeld("s2")).toBe(true);
     expect(queue.isHeld("s3")).toBe(false);

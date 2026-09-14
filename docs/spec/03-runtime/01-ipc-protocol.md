@@ -19,6 +19,7 @@ Principles:
 | `agent` | Conversation, queued-send stop/abort, status, and interactive asktool resolution |
 | `plan` | Plan proposal listing, resolution, and change events |
 | `session` | Session CRUD / history / title metadata and summarization |
+| `session collaboration` | Read-only bounded collaboration status for sidebar projections; mutation stays in the reviewed plugin gateway |
 | `settings` | Config read/write |
 | `secrets` | Secret write/delete/exists (never return plaintext to UI logs) |
 | `project` | Workspace selection and query |
@@ -45,6 +46,7 @@ event: pi-desktop/<domain>/event/<name>
 Examples:
 
 - `pi-desktop/agent/prompt`
+- `pi-desktop/agent/steer`
 - `pi-desktop/agent/stop`
 - `pi-desktop/agent/abort`
 - `pi-desktop/agent/event/message`
@@ -52,9 +54,12 @@ Examples:
 - `pi-desktop/session/list`
 - `pi-desktop/session/summarizeTitle`
 - `pi-desktop/project/open`
+- `pi-desktop/project/pickFolders`
+- `pi-desktop/project/clone`
 - `pi-desktop/project/openFolder`
 - `pi-desktop/session/getScratchPath`
 - `pi-desktop/session/openScratchPath`
+- `pi-desktop/session/collaboration`
 
 ## 4. Common Response Envelope
 
@@ -79,6 +84,8 @@ type AppError = {
 type AgentPromptRequest = {
  sessionId: string;
  content: string;
+ /** Host-owned collaboration delivery; its ledger supplies content and provenance. */
+ sessionMessageId?: string;
  attachments?: AgentPromptAttachment[];
  /** Truncate durable transcript to N leading messages before append (regenerate). */
  truncateBefore?: number;
@@ -175,6 +182,44 @@ current turn. On a vision runtime, persisted image refs are hydrated from the
 session-bound attachment/scratch roots when history is rebuilt; oversized or
 unavailable images remain path fallbacks. This keeps renderer, main, sidecar, the models.dev catalog, and host
 persistence on one capability-aware contract.
+
+### 5.1a Steer an active turn
+
+`pi-desktop/agent/steer` accepts `AgentSteerRequest`:
+
+```ts
+type AgentSteerRequest = {
+ sessionId: string;
+ expectedTurnId: string;
+ content: string;
+ messageId?: string;
+ attachments?: AgentPromptAttachment[];
+};
+```
+
+It returns `{ accepted: true, turnId }` for the existing turn. Main checks its
+active durable turn, asks the existing sidecar runtime for the active project's
+attachment roots and model image capability, then applies the ordinary bounded
+attachment preparation. The sidecar revalidates `expectedTurnId` after that IO.
+A missing, ended, stopping, or mismatched turn, or a pending plan/goal approval,
+fails with `TURN_NOT_FOUND`; it never falls back to starting or queueing a turn.
+An empty payload fails with `INVALID_ARGUMENT`.
+
+The internal `agent.steeringContext` and `agent.steer` methods use only an
+existing runtime. They do not run launch configuration, `runtimeFor`, or
+`session.beginTurn`. Steering cannot change the active model, permission mode,
+workspace, or approved execution. Slash text is literal input on this channel.
+
+Accepted input is echoed as ordinary user message events with the current
+`turnId`, main-prepared attachment refs, and `UiMessage.steering: true`. This
+persisted marker protects accepted input from Smart Stop after renderer reload.
+A user `message_end` can additionally
+carry `precedingAssistant`, a streaming snapshot that reserves the reply's
+position before the input is persisted. Main writes both through its replayable
+outbox; the host replaces only that provisional assistant row with its terminal
+snapshot, preserving its id, sequence and owning turn. No image bytes enter the
+durable message. This is an additive desktop channel and event field; it does
+not change RACP, the host RPC version, or the storage schema. See ADR active-turn-steering.
 
 ### 5.2 stop at the next turn boundary
 
@@ -458,6 +503,67 @@ at the next boundary. `remove` cancels an entry that has not started. A
 restored queue stays held until the desktop attaches as the owner, so a
 reboot never starts work unattended.
 
+### 5.7 Session collaboration projection
+
+The renderer has one read-only Electron channel for the sidebar hover card:
+
+```ts
+// pi-desktop/session/collaboration({ sessionId }) -> SessionCollaborationSummary
+type SessionCollaborationSummary = {
+  sessionId: string;
+  title: string;
+  status: "idle" | "waiting_permission" |
+    "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+  observedAt: string;
+  modelKey?: string;
+  providerName?: string;
+  modelName?: string;
+  createdBySession?: { sessionId: string; title: string; available?: boolean };
+  createdSessions?: Array<{ sessionId: string; title: string; available?: boolean }>;
+  currentTask?: {
+    messageId: string;
+    senderSession: { sessionId: string; title: string; available?: boolean };
+    text: string;
+    status: string;
+    turnId?: string;
+    createdAt: string;
+  };
+  result?: { messageId: string; turnId?: string; status: string; text?: string; error?: string };
+  recentExchanges: Array<{
+    messageId: string;
+    direction: "incoming" | "outgoing";
+    peer: { sessionId: string; title: string; available?: boolean };
+    kind: "task" | "message" | "completion";
+    status: string;
+    preview: string;
+    createdAt: string;
+  }>;
+};
+```
+
+`available` is `false` when the referenced session was deleted or is otherwise
+absent; the host then also falls back to the Session ID as the title. The
+renderer renders an unavailable reference as text rather than a
+keyboard-focusable navigation control, and activating a reference whose session
+no longer exists reports a visible error instead of committing an empty
+selection. Independently created sessions never receive a fabricated creator
+reference. `session_collaboration_messages.source_session_id` intentionally has
+no foreign key, so a delivery record survives deletion of its sender; such
+references are reported as unavailable rather than removed.
+
+Electron overlays live Agent status on the durable host projection, bounds the
+exchange previews, and fetches it only while a session row is hovered or
+focused. The renderer cannot invoke the host's mutating
+`session.collaboration.*` methods. The plugin's `desktop.control` gateway is
+the sole reviewed mutation surface and binds send/cancel authorization to the
+active plugin Agent tool invocation.
+
+A hover-card read that does not settle within the card's deadline is abandoned,
+its late result is ignored, and the next bounded read is scheduled. While the
+card is mounted but not visible (a hidden window, or a window without focus) the
+loop keeps polling at a slower idle interval so a later focus change is picked
+up. Polling still never overlaps reads and stops on unmount.
+
 ## 6. Agent Events
 
 Pushed from main → renderer:
@@ -481,7 +587,8 @@ type AgentEvent =
  | { type: "turn_end"; subagentUsage?: MessageUsage }
  | { type: "message_start"; message: UiMessage }
  | { type: "message_update"; message: UiMessage;
-     deltaText?: string; deltaThinking?: string }
+     deltaText?: string; deltaThinking?: string;
+     stream?: "delta"; resetText?: boolean; resetThinking?: boolean }
  | { type: "message_end"; message: UiMessage }
  | { type: "tool_start"; toolCallId: string; toolName: string; args: unknown }
  | { type: "tool_update"; toolCallId: string; partialResult?: unknown }
@@ -505,6 +612,15 @@ type AgentEvent =
 
 > These are **UI-normalized events**, not a pass-through of raw pi events.
 > `packages/agent-runtime` is responsible for mapping pi events to this model.
+
+Append-only `message_update` frames set `stream: \"delta\"` and omit growing
+`content` / `thinking` from `message`. Consumers apply `deltaText` /
+`deltaThinking` onto the live row (replace instead of append when `resetText`
+or `resetThinking` is set). The runtime coalesces those frames on an ~16ms
+interval and flushes immediately before tool, terminal, abort, error, and
+retry events. `message_start` and `message_end` still carry a full
+`UiMessage`. Snapshot replacements omit `stream`. These fields are additive
+in protocol v11 (D412).
 
 `status` events include an optional runtime-owned `activity` phase while a turn
 is active. `starting` is the prompt handoff; `waiting-model` is the interval
@@ -631,6 +747,19 @@ Plugin-owned session mutations additionally emit
 handles this host-owned event by calling its existing `refreshSessions()` path;
 plugins never send a sidebar event and a skipped import does not emit one.
 
+Calls to the renderer store's `refreshSessions()` action have at most one
+session-list request in flight per store instance. Calls arriving while that
+request is running share one follow-up request; their promises resolve
+after that later response is committed, rather than accepting the older read.
+Further calls during the follow-up form the next batch. Each batch commits
+once, and a failed batch does not prevent a queued or later refresh. An import
+refresh retains its own pre-refresh session baseline and project-reveal intent,
+even if an earlier ordinary refresh already observed the imported rows.
+Ordinary refreshes do not gain import-reveal behavior or change the current
+session, project, or page. Bursts from parallel plugin workers therefore remain
+current without issuing overlapping full-list reads within this refresh path.
+Bootstrap and provider-refresh snapshots remain independent reads.
+
 Electron owns the native surface while the renderer derives localized
 title/body text from the structured record. Electron accepts `showNative` only
 for a valid notification/session pair. For `kind: "task"`, it shows a native
@@ -671,10 +800,21 @@ type SessionSummary = {
  createdAt: string;
 };
 
+type SessionMessageOrigin = {
+ messageId: string;
+ sourceSessionId: string;
+ sourceTitle: string;
+ targetSessionId: string;
+ kind: "task" | "message" | "completion";
+ replyToMessageId?: string;
+};
+
 type UiMessage = {
  id: string;
  role: "user" | "assistant" | "system" | "tool";
  content: string;
+ /** Host-authenticated session collaboration origin; absent for human input. */
+ sessionMessage?: SessionMessageOrigin;
  thinking?: string; // assistant reasoning, never folded into content
  usage?: MessageUsage; // provider-reported assistant usage
  responseDurationMs?: number; // model stream duration for throughput
@@ -738,7 +878,7 @@ for the reserved `Alt+Space` binding. Host-core emits the notification
 keyboard hook detects the chord; the hook consumes that chord so the active
 window system menu does not open. Non-Windows hosts treat the method as a
 no-op. `responseDurationMs` and `responseOutputTokens` are optional transcript
-metadata persisted in message metadata, so protocol v11 and storage schema v14
+  metadata persisted in message metadata, so protocol v11 and storage schema v16
 remain unchanged.
 
 The Settings font picker (ADR 0083) reads installed system font families
@@ -757,6 +897,9 @@ Minimal interface:
 
 - `session/list`
 - `session/create`
+- `session/open(sessionId)` — validate and select an existing durable session
+  through the reviewed desktop-control path; it does not create or mutate the
+  session
 - `session/fork({ sessionId, title?, throughMessageId? }) -> { session: SessionDetail }`
 - `session/get({ id, messageBefore?, messageLimit?, contentLimit? })` — without
   read-window options returns the complete UI projection; with them returns a
@@ -786,7 +929,17 @@ Minimal interface:
 - `modelConfig/importScan -> { providers }`
 - `modelConfig/importRun(candidates) -> { imported, skipped, failed }`
 
-Import candidates carry `projectPath: string | null`. A successful import
+Import candidates carry `projectPath: string | null` and
+`messageCount: number | null`. A scan reads each source file fully up to the
+importer's sampled-scan threshold; larger files are sampled (head + tail) so
+scanning a multi-gigabyte archive stays interactive, and their `messageCount`
+is null — the import list renders an em dash for it, while imported sessions
+always compute their real message count at convert time. Scan titles come
+from the first real user message: known synthetic injections (repo
+instructions, the IDE-context family such as `# Context from my IDE setup:`
+or `# Browser comments:`) are skipped, while pasted markdown starting with
+`#` is kept. A corrupt or out-of-range stored timestamp falls back to the
+source file's mtime, never to the import moment. A successful import
 refreshes both sessions and the durable Projects index.
 
 `modelConfig/importScan` reads Claude Code, Codex, OpenCode, Pi, and CC
@@ -1013,10 +1166,21 @@ authorization code. `accountLabel` is a display string.
 ## 9. Project API
 
 - `project/open()`: system directory picker
+- `project/pickFolders()`: multi-select directory picker used by the
+  renderer-owned Create project dialog; returns selected absolute paths without
+  changing the active workspace
+- `project/clone({ url })`: pick a parent directory, `git clone` the URL into
+  it, and return the cloned workspace (the renderer then activates it)
 - `project/openFolder(path)`: open a known project directory in the system file
   manager
 - `project/get()`: current workspace
 - `project/list()`: durable project records, including import-created entries
+- `project/memory/get(path)`: read the host-owned memory for a canonical project
+  path
+- `project/memory/save(path, entries)`: replace that project's durable memory
+  entries; the host derives a readable `content` value, caps it at 32 KiB, and
+  uses it as context in the next session launch. Legacy callers may still save
+  plain `content`.
 - `project/set(path)`: set workspace
 - `project/clear()`
 
@@ -1035,6 +1199,18 @@ type ProjectRecord = {
  pinned: boolean;
  createdAt: number;
  lastOpenedAt: number;
+};
+
+type ProjectMemory = {
+ content: string;
+ entries?: ProjectMemoryEntry[];
+ updatedAt?: number;
+};
+
+type ProjectMemoryEntry = {
+ id: string;
+ title: string;
+ content: string;
 };
 ```
 
@@ -1198,6 +1374,29 @@ Only the description enters the prompt, and the body is fetched when the model
 invokes `Skill` (D174). A missing file is removed from the list and its local
 state is pruned during the next scan.
 
+Desktop-only skill market channels (not host RPC) live on Electron IPC:
+
+- `pi-desktop/skill/market/search` — `{ query, sources[] }` → `{ entries, failedSources }`.
+  Main aggregates builtin-safe catalog JSON and GitHub repo SKILL.md scans.
+  Source URLs must pass the public-HTTPS policy (ADR 0243). One failing source
+  is dropped; the rest still return.
+- `pi-desktop/skill/market/fetch` — `{ entry }` → `{ name?, description?, body, resources? }`.
+  Main fetches the document over the same policy, splits frontmatter, and may
+  attach sibling `.md` files from a jsDelivr listing. The renderer installs
+  through existing `skills.create`. That policy is the main-process
+  public-network client: syntactic URL guard, DNS classification, per-hop
+  redirect revalidation, and bounded responses — the renderer never reaches
+  the network directly. Catalog ids are sanitized to host
+  `valid_capability_id` (`[a-z0-9][a-z0-9-]{0,63}`).
+
+Desktop-only MCP market channels (not host RPC) live on Electron IPC:
+
+- `pi-desktop/mcp/market/search` — `{ query?, sources[], more? }` →
+  `{ entries, failedSources, exhausted }`. Main validates source URLs, pins
+  each resolved public address, follows only bounded HTTPS redirects, and keeps
+  cursor state for browse and server-side search. One failed source does not
+  discard successful sources; the response and caches are bounded.
+
 ## 12c. Subagent API (D202)
 
 User-owned subagents are global-only Markdown documents under
@@ -1225,9 +1424,15 @@ because no resolver could ever look it up. The provider half is matched by a
 normalized alias at both ends of the app, so a display name containing spaces
 is valid.
 
+The `tools` array may include the token `inherit` (ADR 0246). `inherit` alone
+is a valid grant; host-core must not drop the document. Settings round-trips
+the token as `tools: inherit` or `tools: [inherit, Bash]`.
+
 Electron's `subagent/list` IPC channel exposes the same global-only list to
-Settings > Agent > Subagents. The runtime catalog combines these global user
-documents with its builtins; it does not scan `.pi/agents` or any project
+Settings > Agent > Subagents. `subagent/catalog` returns the effective Task
+catalog (enabled user documents merged with the five shipped builtins) so the
+page can render those defaults as read-only rows. The runtime catalog
+combines the same sources; it does not scan `.pi/agents` or any project
 capability directory.
 
 ## 12d. Capability level and local activation
@@ -1699,6 +1904,13 @@ plan-resolution tools require `confirm: true`. That flag is an agent
 acknowledgement, not a desktop user prompt. All calls still pass through the
 existing IPC handler validation, host permissions, workspace boundaries, and
 error model. Both the text payload and `structuredContent` are size-bounded.
+
+The six `session/collaboration/*` operations are first-party-plugin-only: they
+require an authenticated plugin tool invocation context, so they appear in
+`pi.desktop.listOperations` and are callable through `pi.desktop.invoke`, but
+they are excluded from the MCP-visible catalog (`tools/list`,
+`pi_control_describe`, and the `pi_desktop_invoke` operation enum) and an MCP
+caller cannot invoke them.
 
 After successful **mutating** external calls, Electron Main may emit the existing
 `pi-desktop/session/event/changed` event with additive fields:

@@ -1,8 +1,8 @@
 export const PROTOCOL_VERSION = 11 as const;
-export const SCHEMA_VERSION = 14 as const;
+export const SCHEMA_VERSION = 16 as const;
 export const APP_ID = "com.pi-desktop.app";
 export const APP_NAME = "PI-Desktop";
-export const APP_VERSION = "0.14.6";
+export const APP_VERSION = "0.14.8";
 
 export const APP_MENU_COMMANDS = [
   "newTask",
@@ -68,6 +68,7 @@ export const IPC = {
     notificationShowNative: "pi-desktop/notification/showNative",
     notificationSetViewingSession: "pi-desktop/notification/setViewingSession",
     agentPrompt: "pi-desktop/agent/prompt",
+    agentSteer: "pi-desktop/agent/steer",
     promptEnhance: "pi-desktop/prompt/enhance",
     agentCompact: "pi-desktop/agent/compact",
     agentAbort: "pi-desktop/agent/abort",
@@ -82,7 +83,11 @@ export const IPC = {
     sessionList: "pi-desktop/session/list",
     sessionCreate: "pi-desktop/session/create",
     sessionFork: "pi-desktop/session/fork",
+    sessionMoveProject: "pi-desktop/session/moveProject",
     sessionGet: "pi-desktop/session/get",
+    sessionCollaboration: "pi-desktop/session/collaboration",
+    /** Validate and select a durable session from a reviewed host operation. */
+    sessionOpen: "pi-desktop/session/open",
     sessionDelete: "pi-desktop/session/delete",
     sessionRename: "pi-desktop/session/rename",
     sessionSummarizeTitle: "pi-desktop/session/summarizeTitle",
@@ -106,6 +111,10 @@ export const IPC = {
     secretsDelete: "pi-desktop/secrets/delete",
     secretsHas: "pi-desktop/secrets/has",
     projectOpen: "pi-desktop/project/open",
+    projectPickFolders: "pi-desktop/project/pickFolders",
+    projectMemoryGet: "pi-desktop/project/memory/get",
+    projectMemorySave: "pi-desktop/project/memory/save",
+    projectClone: "pi-desktop/project/clone",
     projectGet: "pi-desktop/project/get",
     projectList: "pi-desktop/project/list",
     projectSet: "pi-desktop/project/set",
@@ -168,9 +177,12 @@ export const IPC = {
     mcpSetScope: "pi-desktop/mcp/setScope",
     mcpTest: "pi-desktop/mcp/test",
     mcpImport: "pi-desktop/mcp/import",
+    mcpMarketSearch: "pi-desktop/mcp/market/search",
     skillList: "pi-desktop/skill/list",
     skillCreate: "pi-desktop/skill/create",
     skillImport: "pi-desktop/skill/import",
+    skillMarketSearch: "pi-desktop/skill/market/search",
+    skillMarketFetch: "pi-desktop/skill/market/fetch",
     skillUpdate: "pi-desktop/skill/update",
     skillRemove: "pi-desktop/skill/remove",
     skillSetEnabled: "pi-desktop/skill/setEnabled",

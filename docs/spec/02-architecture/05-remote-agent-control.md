@@ -98,7 +98,10 @@ model: the server side is bootstrapped over the user's own SSH session and
 the client reaches it through a forwarded loopback port.
 
 PI-Desktop does not revive the withdrawn subagent A2A/Peer channel. ADR 0165
-continues to govern subagent coordination.
+continues to govern `Task` subagent coordination. The separate official
+Session Orchestrator plugin may use the host-owned, local-only collaboration
+ledger defined by ADR 0239; that reviewed path is not a remote Gateway or A2A
+transport and does not change the remote-control target.
 
 ## 4. Logical components
 
@@ -374,7 +377,10 @@ Host   -> next queued turn starts
 `turn/start` is an admission call. It returns quickly with a `turnId`; it must
 not hold an HTTP request open until model execution ends. With
 `admission: "queue"` the Host places the turn in its per-session queue and
-releases it after the active turn's terminal event; the queue is Host state,
+releases it after the active turn's terminal event and durable finalization;
+when terminal-event draining observes a busy runtime, the desktop must wake
+the queue again after releasing turn ownership and its finalization guard.
+Shutdown does not wake queued work. The queue is Host state,
 persisted by host-core, restored after a restart, and held until a controller
 attaches, so the local desktop and every remote client see the same pending
 prompts.

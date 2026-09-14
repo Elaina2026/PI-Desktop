@@ -27,6 +27,7 @@ pub struct QueuedTurnInput {
     pub idempotency_key: Option<String>,
     pub input_hash: String,
     pub content: String,
+    pub session_message_id: Option<String>,
     pub attachments: Option<Value>,
     pub permission_mode: String,
 }
@@ -41,6 +42,8 @@ pub struct QueuedTurn {
     pub idempotency_key: Option<String>,
     pub input_hash: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_message_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Value>,
     pub permission_mode: String,
@@ -57,6 +60,7 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueuedTurn> {
         idempotency_key: row.get(3)?,
         input_hash: row.get(4)?,
         content: row.get(5)?,
+        session_message_id: row.get(10)?,
         attachments: attachments.and_then(|text| serde_json::from_str(&text).ok()),
         permission_mode: row.get(7)?,
         position: row.get(8)?,
@@ -65,7 +69,7 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueuedTurn> {
 }
 
 const SELECT: &str = "SELECT id, session_id, principal, idempotency_key, input_hash, content,
-        attachments_json, permission_mode, position, created_at
+        attachments_json, permission_mode, position, created_at, session_message_id
  FROM turn_queue";
 
 /// Append an entry. A reused `(session, principal, idempotencyKey)` returns
@@ -86,7 +90,10 @@ pub fn push(db: &Database, input: QueuedTurnInput) -> Result<QueuedTurn> {
             .prepare_cached(&format!(
                 "{SELECT} WHERE session_id = ?1 AND principal = ?2 AND idempotency_key = ?3"
             ))?
-            .query_row(params![input.session_id, input.principal, key], row_to_entry)
+            .query_row(
+                params![input.session_id, input.principal, key],
+                row_to_entry,
+            )
             .optional()?;
         if let Some(existing) = existing {
             if existing.input_hash == input.input_hash {
@@ -117,8 +124,8 @@ pub fn push(db: &Database, input: QueuedTurnInput) -> Result<QueuedTurn> {
     tx.execute(
         "INSERT INTO turn_queue (
             id, session_id, principal, idempotency_key, input_hash, content,
-            attachments_json, permission_mode, position, created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            attachments_json, permission_mode, position, created_at, session_message_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             id,
             input.session_id,
@@ -129,7 +136,8 @@ pub fn push(db: &Database, input: QueuedTurnInput) -> Result<QueuedTurn> {
             attachments_json,
             input.permission_mode,
             max_position + 1,
-            created_at
+            created_at,
+            input.session_message_id
         ],
     )?;
     tx.commit()?;
@@ -140,6 +148,7 @@ pub fn push(db: &Database, input: QueuedTurnInput) -> Result<QueuedTurn> {
         idempotency_key: input.idempotency_key,
         input_hash: input.input_hash,
         content: input.content,
+        session_message_id: input.session_message_id,
         attachments: input.attachments,
         permission_mode: input.permission_mode,
         position: max_position + 1,
@@ -231,6 +240,7 @@ mod tests {
             idempotency_key: key.map(str::to_string),
             input_hash: format!("hash:{content}"),
             content: content.to_string(),
+            session_message_id: None,
             attachments: None,
             permission_mode: "ask".into(),
         }
@@ -245,7 +255,13 @@ mod tests {
         assert_eq!(second.position, 2);
         assert!(!first.created_at.is_empty());
         let listed = list(&db, Some(&session_id)).unwrap();
-        assert_eq!(listed.iter().map(|e| e.content.as_str()).collect::<Vec<_>>(), ["one", "two"]);
+        assert_eq!(
+            listed
+                .iter()
+                .map(|e| e.content.as_str())
+                .collect::<Vec<_>>(),
+            ["one", "two"]
+        );
         assert!(remove(&db, &first.id).unwrap());
         assert!(!remove(&db, &first.id).unwrap());
         assert_eq!(list(&db, None).unwrap().len(), 1);
@@ -277,7 +293,10 @@ mod tests {
         chosen.attachments = Some(serde_json::json!([{ "name": "a.txt" }]));
         let entry = push(&db, chosen).unwrap();
         assert_eq!(entry.id, "turn_client_1");
-        assert_eq!(list(&db, Some(&session_id)).unwrap()[0].attachments, entry.attachments);
+        assert_eq!(
+            list(&db, Some(&session_id)).unwrap()[0].attachments,
+            entry.attachments
+        );
     }
 
     #[test]

@@ -1,3 +1,10 @@
+import {
+  readStoreSource,
+  readStoreModule,
+  readTranscriptSource,
+  readMainSource,
+  readSharedTypesSource,
+} from "./helpers/source-contracts.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -11,6 +18,7 @@ const [
   main,
   api,
   store,
+  events,
   runtime,
   commands,
   hostRpc,
@@ -24,17 +32,18 @@ const [
   enLocale,
 ] = await Promise.all([
   read("../../../packages/shared/src/protocol.ts"),
-  read("../../../packages/shared/src/types.ts"),
-  read("../electron/main/index.ts"),
+  readSharedTypesSource(),
+  readMainSource(),
   read("../src/lib/api.ts"),
-  read("../src/stores/app-store.ts"),
+  readStoreSource(),
+  readStoreModule("slices/events-slice.ts"),
   read("../../../packages/agent-runtime/src/runtime.ts"),
   read("../electron/main/builtin-commands.ts"),
   read("../../../crates/host-core/src/rpc/mod.rs"),
   read("../../../crates/host-core/src/permissions.rs"),
   read("../../../crates/host-core/src/sessions.rs"),
   read("../../../crates/host-core/src/transcripts.rs"),
-  read("../src/components/ChatTranscript.tsx"),
+  readTranscriptSource(),
   read("../src/components/ContextUsageInspector.tsx"),
   read("../src/lib/assistant-turns.ts"),
   loadStyles(),
@@ -201,7 +210,7 @@ test("compaction lifecycle keeps the renderer busy until its actual terminal eve
 
 test("every compaction announces itself once, on top of the specific toasts", () => {
   const compactionEnd =
-    store.match(/case "compaction_end":[\s\S]*?\n      case "agent_end":/)?.[0] ??
+    events.match(/case "compaction_end":[\s\S]*?\n        case "agent_end":/)?.[0] ??
     "";
   assert.ok(compactionEnd.length > 0, "compaction_end handler not found");
   // Codex warns after every compaction; ours is unconditional and lands before
@@ -228,6 +237,38 @@ test("every compaction announces itself once, on top of the specific toasts", ()
     "unexpected number of compaction toasts",
   );
   assert.match(enLocale, /longThreadWarning:/);
+});
+
+test("a failed compaction checkpoint still restores a non-empty context", () => {
+  // A retained-tail fallback must not persist an empty tail on a completed
+  // turn: with no real summary to carry the boundary, an empty tail restores
+  // as an empty context after a runtime rebuild (model switch / restart) —
+  // the session reads as if it had just started (#224).
+  assert.match(
+    runtime,
+    /const retainedTail =\s*preparation\.retainedTail\.length > 0\s*\? preparation\.retainedTail\s*: selectRetainedUserMessages\(/,
+  );
+  assert.match(
+    runtime,
+    /fallback: "retained_tail" satisfies ContextCompactionFallback,/,
+  );
+});
+
+test("a fallback notice is stripped without discarding its carried summary", () => {
+  // pi copies `previousSummary` from the previous compaction entry. A fallback
+  // entry stores its carried-forward summary ahead of the recovery notice, so
+  // the notice must be stripped without taking the real summary with it —
+  // otherwise older task context is silently lost (#224). Both the normal and
+  // the rebuild path share one extraction helper.
+  assert.match(runtime, /function stripCompactionFallbackNotice\(/);
+  assert.match(
+    runtime,
+    /const previousSummary = stripCompactionFallbackNotice\(\s*prepared\.value\.previousSummary,\s*\)/,
+  );
+  assert.match(
+    runtime,
+    /previousSummary:\s*stripCompactionFallbackNotice\(terminal\.summary\)/,
+  );
 });
 
 test("the transcript shows one row per compaction, the inspector the newest", () => {

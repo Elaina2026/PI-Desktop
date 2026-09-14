@@ -310,7 +310,12 @@ type ThinkingLevel =
 `ModelBinding.availableForSubagents`（布尔值，默认 false）：这是一个选择加入
 的标志，让该模型可用于 AI 驱动的子代理委托。启用后，该模型会出现在注入父
 agent 系统提示的委托目录中。父 agent 随后就能通过 Task 工具的 `model` 参数
-选中它。
+选中它。为某个定义解析固定模型不代表授予此许可。启动载荷通过独立的
+`subagentModelKeys` 传递允许覆盖的模型键；仅供定义固定使用的绑定仍只通过
+正常的固定模型解析生效，包括 `Task.model` 重复该定义自己的固定键。按需匹配使用唯一
+provider id/vendor/name 查找，不得用另一账号凭据覆盖固定模型。多个账号的 vendor/model 别名冲突时，已勾选账号改用
+确切的提供商 ID 作为覆盖键。优先级保持 Task.model → 定义固定模型 → 会话模型
+（D278；ADR subagent-model-opt-in）。
 
 ## 8. 秘密
 

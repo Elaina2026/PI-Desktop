@@ -1,3 +1,4 @@
+import { readAppSource } from "./helpers/source-contracts.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -7,10 +8,7 @@ const sidebarSource = await readFile(
   new URL("../src/components/Sidebar.tsx", import.meta.url),
   "utf8",
 );
-const appSource = await readFile(
-  new URL("../src/App.tsx", import.meta.url),
-  "utf8",
-);
+const appSource = await readAppSource();
 const topbarSource = await readFile(
   new URL("../src/components/ConversationTopbar.tsx", import.meta.url),
   "utf8",
@@ -217,15 +215,16 @@ test("reduced motion drops the collapse animation and its top-bar tracking", () 
 });
 
 test("the sidebar toggle never captures a stale collapsed state", () => {
-  // The keydown and native-menu handlers register once; toggleSidebar must be
-  // a stable callback driven by a functional update. Otherwise the second
-  // Cmd/Ctrl+B reuses the first render's closure (collapsed=false) and keeps
-  // collapsing instead of re-expanding the sidebar.
-  assert.match(
+  // The keydown and native-menu handlers register once; toggleSidebar reads the
+  // shell state through refs and spends work-panel width on reopen, so the old
+  // functional-update form must not come back.
+  assert.match(appSource, /const toggleSidebar = useCallback\(\(\) => \{/);
+  assert.match(appSource, /if \(sidebarCollapsedRef\.current\) reopenSidebar\(\);/);
+  assert.match(appSource, /else setSidebarCollapsed\(true\);/);
+  assert.doesNotMatch(
     appSource,
-    /const toggleSidebar = useCallback\(\(\) => \{\s*setSidebarCollapsed\(\(collapsed\) => !collapsed\);/,
+    /setSidebarCollapsed\(\(collapsed\) => !collapsed\)/,
   );
-  assert.match(appSource, /\},\s*\[\]\);/);
   // The exit flag is adjusted during render, never in an effect: an effect runs
   // after the commit, so the collapsing render unmounts the dock outright and
   // the effect remounts it — one painted frame with no dock at all.

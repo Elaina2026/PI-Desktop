@@ -3,17 +3,15 @@ use std::sync::RwLock;
 
 const PROXY_URL_MAX: usize = 2048;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ProxyMode {
+    #[default]
     System,
     Direct,
-    Custom { url: String, bypass: String },
-}
-
-impl Default for ProxyMode {
-    fn default() -> Self {
-        Self::System
-    }
+    Custom {
+        url: String,
+        bypass: String,
+    },
 }
 
 static MARKET_PROXY: RwLock<ProxyMode> = RwLock::new(ProxyMode::System);
@@ -35,7 +33,11 @@ pub fn proxy_from_settings(value: Option<&Value>) -> ProxyMode {
     let Some(proxy) = proxy else {
         return ProxyMode::System;
     };
-    match proxy.get("mode").and_then(Value::as_str).unwrap_or("system") {
+    match proxy
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("system")
+    {
         "direct" => ProxyMode::Direct,
         "custom" => {
             let url = proxy
@@ -74,7 +76,10 @@ pub fn validate_network_proxy(value: &Value) -> Result<(), String> {
     let Some(proxy) = proxy.as_object() else {
         return Err("networkProxy must be an object".into());
     };
-    let mode = proxy.get("mode").and_then(Value::as_str).unwrap_or("system");
+    let mode = proxy
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("system");
     match mode {
         "system" | "direct" => Ok(()),
         "custom" => {
@@ -106,10 +111,7 @@ pub fn parse_proxy_url(raw: &str) -> Result<String, String> {
     ) {
         return Err("proxy scheme must be http, https, or socks5".into());
     }
-    let hostport = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or(rest);
+    let hostport = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     let hostport = match hostport.rfind('@') {
         Some(at) => &hostport[at + 1..],
         None => hostport,

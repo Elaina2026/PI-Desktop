@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { readMainSource } from "./helpers/main-source.mjs";
 import { resolveOpenablePath } from "../electron/main/fs-panel.ts";
 
 test("resolveOpenablePath resolves ~/.agents and subagent extra roots", () => {
@@ -27,10 +28,7 @@ test("TodoPlanTab exports extractTodosFromPlanMarkdown and parses action steps",
 });
 
 test("statsGetModelUsageSummary normalizes model keys and handles force refresh", async () => {
-  const electronMain = await readFile(
-    new URL("../electron/main/index.ts", import.meta.url),
-    "utf8",
-  );
+  const electronMain = await readMainSource();
   assert.match(electronMain, /normalizeModelKey/);
   assert.match(electronMain, /invalidateModelUsageSummaryCache/);
   assert.match(electronMain, /persistenceOutbox\?\.getEntries/);

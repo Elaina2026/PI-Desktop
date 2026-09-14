@@ -219,6 +219,7 @@ opacity-only changes, so actions remain legible in dark and light themes.
 Light-surface polish (D148):
 
 - Docked work panel uses quiet inset paper (`#fafafa`) with a white header band and a combined create trigger in the header so the tool column stays on content without any divider (D297 removed the remaining edge rules).
+- The work-panel header keeps its add-tab action in a separated rail: a tokenized 60px safe lane reserves the viewport-fixed panel toggle, with at least 24px of visual separation between the two hit targets on supported window sizes.
 - Shared form fields, browser URL, settings segment tracks, and shortcut keycaps use `--ds-tile` fills with no stroke (D297); focus lifts to white with an accent-tinted ring. An Unbound shortcut uses a localized text state instead of an empty keycap and keeps its recorder and restore controls keyboard-focusable.
 - Settings toggles keep a near-black on-track and force a white knob in light mode.
   Off/on track and knob colours come from the `--ds-switch-*` theme tokens; a
@@ -491,11 +492,9 @@ same 6px contract and scroll-reveal mark. This keeps first-party surfaces such
 as the Files view aligned with the host renderer; the external page loaded
 inside the Browser guest remains page-owned and keeps its own scrollbar style.
 
-The expanded sidebar's resize handle keeps its 8px hit area transparent when
-the sidebar surface is merely hovered. Direct handle hover reveals only a
-centered 32px semantic-ink marker; keyboard focus and active dragging may use
-the accent marker. The handle never paints a full-height hover rail or changes
-the sidebar layout.
+The expanded sidebar is a fixed 275px column. Collapse/open changes only whether
+the column is present; the historical resize handle is hidden and legacy width
+preferences are not persisted.
 
 The profile menu is `280px` wide, opens `8px` above the footer, and uses the
 standard opaque elevated-menu surface, subtle border, and dialog shadow. Its
@@ -518,8 +517,9 @@ overlap it and rely only on descendant `no-drag`, so every visible control
 pixel remains clickable. Termination is geometric: a region ends where the
 element's border box ends, so an element that only pads its content clear of
 the band still covers the controls with its rectangle. The open work-panel
-header uses one compact resource switcher with menu-owned close actions; it
-does not add a second `×` beside the native Windows close control. The band
+header uses a horizontally scrollable tab strip with a fixed `+` add trigger;
+each tab owns its close action and the header does not add a second `×` beside
+the native Windows close control. The band
 floats over the destination pages, so on Windows/Linux a page frame and any
 right-edge detail sheet start below it instead of placing their own header
 actions or close control under the window controls. No application menu is
@@ -527,6 +527,17 @@ rendered inside the window.
 Other menu popovers use the standard opaque elevated-menu surface, `radius-sm`,
 subtle border, and dialog shadow; they are never translucent over readable
 content.
+
+All renderer-owned custom dropdowns and menus are viewport-fixed floating layers:
+they are body-portaled (or use the shared anchored-menu primitive), measured
+before reveal, clamped to the viewport, and repositioned when the anchor or
+viewport moves. Opening one never adds to or squeezes its parent layout. The
+work-panel header has no dropdown: its `+` action creates a real New launcher
+tab, and the tool choices live in that tab's body. Native plugin surfaces such
+as Browser therefore keep their full measured bounds while the user creates a
+new page or selects another tab.
+Native `<select>` popups remain OS-owned and are outside this renderer
+contract.
 
 Composer elevation (Codex `elevation-prominent`):
 
@@ -552,6 +563,12 @@ floating layers where an edge is an elevation cue rather than a partition.
 | Page | `--ds-bg-primary` | The route or dialog body itself |
 | Tile | `--ds-tile` (3.5% text mix); hover `--ds-tile-hover` (6%); deep `--ds-tile-deep` (8%) | Panels, list rows, cards, form fields, chips, code blocks, empty states |
 | Raised | `--ds-raised` + `--ds-raised-shadow` | The active pill of a segmented control, a disclosed detail block, a recorder keycap |
+| Dock | `--ds-bg-dock` (the column), `--ds-bg-dock-raised` (its header and viewer strips) | The work-panel column and the bars inside it. Both are tokens, not literals, so a contributed theme can move them (D419) |
+
+Every surface colour the shell paints must come from a token. A
+`:root[data-theme="light"]` override that writes a literal raises specificity
+above the base token rule and does not read a variable, so it silently pins that
+surface out of every theme's reach — see D419.
 
 | Context | Treatment |
 |---|---|
@@ -788,14 +805,17 @@ transcript paints those same references as composer-matching leaf-name chips
 rather than full-path text (D320).
 
 Large text pastes use a second presentation: text-only input at or below the
-configured `largePasteThreshold` remains native textarea content, while input
+configured `largePasteThreshold` remains native editor content, while input
 above it is written as UTF-8 under the active session's scratch `pasted/`
-directory. The textarea receives a generated `@<temporary-name>` token at the
-paste caret, including when pasted in the middle of an existing draft. The
-renderer keeps the token-to-canonical-path mapping out of the visible text and
-resolves that token exactly once immediately before dispatch. The threshold is
-an AI → Defaults setting, defaults to 600 characters, and applies only to
-text-only pastes; clipboard files and images retain their chip presentation.
+directory and rendered as one sentinel-backed `pasted-text-*.txt` chip at the
+paste caret. The chip remains atomic until the user clicks it or presses
+Enter/Space; the composer then reads the bounded text file, replaces the
+sentinel at its current position with editable text, removes the reference, and
+places the caret after the inserted content. A failed or unsupported read keeps
+the chip in place. The renderer resolves any remaining sentinel references
+exactly once immediately before dispatch. The threshold is an AI → Defaults
+setting, defaults to 600 characters, and applies only to text-only pastes;
+clipboard files and images retain their chip presentation.
 
 ## 8.2 Composer runtime controls
 
@@ -922,31 +942,48 @@ Codex parity decisions (D034/D070) supersede any older value here.
 |---|---|---|
 | Titlebar row height | 46px | Codex toolbar rhythm (D034); traffic lights {x:16,y:16} |
 | Sidebar width (collapsed) | 48px | Icon-only rail |
-| Sidebar width (expanded) | `240px–520px` (default 275px) | Right-edge resize handle; persisted preferred width |
-| Main pane minimum readable width | 360px | Target when the panel is closed; an open internal panel may reduce MainChat below this target on small windows |
+| Sidebar width (expanded) | 275px | Fixed column; collapse/open does not resize it |
+| Main pane minimum readable width | 450px | The MainChat hard floor; the sidebar yields before it is breached (ADR 0238) |
 | Work panel width (closed) | 0px | Hidden by default |
-| Work panel width (open) | `244px–720px` (default 280px), fixed at the committed width | the panel is an in-flow column whose width is taken from the existing client area; the renderer owns its divider (ADR 0151) |
+| Work panel width (open) | `≥244px` (new-profile default 360px), capped by `client width - 450px - expanded sidebar` with no fixed pixel cap | the panel is an in-flow column whose width is taken from the existing client area; the renderer owns its divider (ADR 0033 / ADR 0151 / ADR 0238); saved widths remain unchanged |
 | Composer shell minimum | ~80px | One-line draft + toolbar padding |
+| Composer toolbar | MainChat `≥450px` | Left/right control groups stay on one row and do not shrink; mode/permission labels stay single-line and ellipsize |
 | Composer draft height | 1–7 text lines | Auto-grow; internal scroll beyond line 7 |
 | Chat message max width | 720px assistant / 560px user plate | Prevent eye-span over-stretch; user turns stay compact |
 | Window min width | 1040px | Enforced by Electron for the whole app; opening the panel never changes native bounds |
 | Window min height | 700px | Enforced by Electron |
 
 An open work panel is a fixed-width in-flow column inside the existing client
-area (ADR 0151). Its flex allocation comes from MainChat, and the renderer's
+area (ADR 0033 / ADR 0151). Its flex allocation comes from MainChat, but MainPane
+retains a 450px hard minimum and the panel's effective maximum is the remaining
+client width after the expanded sidebar and that floor (ADR 0238). When the
+budget is exhausted the expanded sidebar collapses immediately, and the shared
+budget keeps counting it while `sidebar-out` occupies flex space. Side-dock
+allocation therefore cannot paint over or claim MainChat's floor. The renderer's
 measured panel rect continues to position the native Browser view. Opening and
 collapsing do not request a positive native reservation or change persisted
-window bounds. Before collapse motion starts, any native Browser preview surface
-is detached because it cannot participate in renderer CSS animation; macOS,
-Windows, and Linux retain the fade-and-slide exit.
+window bounds. Before
+collapse motion starts, any native Browser preview surface is detached because
+it cannot participate in renderer CSS animation; macOS, Windows, and Linux
+retain the fade-and-slide exit.
+
+Preview mode is a transient shell state: MainChat is unmounted and the work
+panel occupies the client width beside the sidebar. A window-level 46px chrome
+row owns the drag area, New Task/sidebar actions, and native window controls.
+Collapsed-sidebar preview reserves 76px on the left for macOS traffic lights in
+windowed mode and 8px in fullscreen. The maximized panel header retains that
+native reserve, then adds the preview action lane and an 8px gap before its
+first tab.
 
 ### 10.1 Responsive collapse
 
 - The work panel never participates in responsive collapse. It keeps its
-  committed `244..720px` width (default 280px) while visible.
+  committed preferred width of at least `244px` (new-profile default 360px)
+  while visible, capped by the shared budget; saved widths remain unchanged.
 - The inner panel divider changes the panel width in the renderer. Moving it
-  left takes more internal space from MainChat; moving it right returns that
-  space. Native window edges resize only the fixed app window.
+  left takes internal space from MainChat until the 450px floor is reached, at
+  which point the expanded sidebar yields; moving it right returns that space.
+  Native window edges resize only the fixed app window.
 - Panel open and collapse change only the in-flow flex allocation. No positive
   native reservation is requested, and the panel's preferred width remains a
   renderer-local setting.

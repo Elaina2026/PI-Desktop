@@ -16,10 +16,10 @@ destination, chat as the home surface, tools and permissions inline.
 +----------------------------------------------------------------------+
 | Platform titlebar: macOS traffic lights / Windows/Linux actions     |
 +------------------+--------------------------------+------------------+
-| Sidebar (240–520px) | Main pane (active destination) | Work panel       |
+| Sidebar (275px) | Main pane (active destination) | Work panel       |
 |                  |  chat home / transcript        |  (optional,      |
 |                  |  or Extensions page            |   resizable      |
-|                  |                                |   244–720px)     |
+|                  |                                |   ≥244px, dynamic|
 |  Sessions     +↕ |                                | surface          |
 |   Recent rows ↕  |                                |                  |
 |  Projects      + |                                | ◫ | App.tsx  ⌄ × |
@@ -40,8 +40,8 @@ destination, chat as the home surface, tools and permissions inline.
   non-destructive pin/archive actions, an independent conversation-branch
   command, and sortable views. Projects not retained in the sidebar remain
   discoverable through Settings → Project archive.
-  Collapsible to an icon rail (Cmd/Ctrl+B). When expanded, its right edge is a
-  drag handle for a persisted 240–520px width (275px by default).
+  Collapsible to an icon rail (Cmd/Ctrl+B). Its expanded column is fixed at
+  275px; persisted resize preferences from older builds are ignored.
 - **Product identity**: runtime shell copy uses `PI-Desktop`; the home hero and
   sidebar reuse the derived `src/assets/brand/logo-*.png` marks, while composer prompt
   rows have no leading brand icon and session-creation controls use a dedicated
@@ -65,9 +65,10 @@ destination, chat as the home surface, tools and permissions inline.
   the right outside the traffic-light safety area; no logo/title is rendered
   there, including in fullscreen. When the work panel is open, native window
   controls stay viewport-fixed at the window's right edge and the panel header
-  reserves that band plus the work-panel toggle. Resource switching and close
-  actions stay together in the panel menu, so the Windows native close control
-  is not visually duplicated by a second header `×`.
+  reserves that band plus the work-panel toggle. The panel header is a
+  horizontally scrollable tab strip followed by a fixed `+` add trigger; tab
+  close actions stay in the tabs, so the Windows native close control is not
+  visually duplicated by a second header `×`.
   Windows/Linux use a menu-free frameless 46px row with sidebar actions on the
   left and accessible minimize / maximize-or-restore / close controls at the
   right edge of the conversation pane when the panel is closed (D129). When
@@ -75,25 +76,35 @@ destination, chat as the home surface, tools and permissions inline.
   header rather than travelling with MainPane. Destination history is shortcut-only (`Cmd/Ctrl+[` and
   `Cmd/Ctrl+]`); no back/forward buttons are rendered. The main titlebar has no
   notification action; the durable local inbox opens from the sidebar footer
-  bell instead (D130/D117).
+  bell instead (D130/D117). In work-panel preview mode, MainChat is unmounted
+  and a window-level 46px chrome row keeps New Task, sidebar, and native window
+  controls available. In macOS collapsed-sidebar preview, the panel header
+  reserves the 76px windowed (8px fullscreen) traffic-light inset plus the
+  preview action lane and an 8px gap, so its first tab never overlaps either
+  the traffic lights or the preview controls.
 - **Work panel**: docked right column (not an overlay) opened by an artifact,
-  the viewport-fixed toggle, or `Cmd/Ctrl + J`. File, URL, browser-preview, and successful workspace-edit
-  artifacts create their resources atomically. A combined panel entry keeps
-  Browser and in-scope plugin views available while
-  the panel is visible; opened-but-inactive views show a quiet dot and the active
-  resource has a restrained edge marker. The 46px content header names the
-  current resource and opens a compact switcher for all current session
-  resources. Resource close actions live on the switcher's menu rows. File
-  paths stay distinct in that switcher while
-  plugin views deduplicate by view reference. The viewport-fixed toggle and
-  `Cmd/Ctrl + J` both toggle the active session's retained panel context —
+  the viewport-fixed toggle, or `Cmd/Ctrl + J`. File, URL, browser-preview, and
+  successful workspace-edit artifacts create their resources atomically. The
+  46px content header exposes a tablist and a fixed `+` trigger. Its tokenized
+  60px right-side safe lane plus separated action rail keep the trigger distinct
+  from the viewport-fixed work-panel toggle. Clicking `+` creates and activates
+  a unique New launcher tab; its body presents the same data-driven Review and
+  plugin-view rows as buttons, so the user chooses a destination in the page
+  instead of opening a dropdown. Selecting a row replaces that launcher tab with
+  the destination or activates an existing singleton. File paths stay distinct
+  while plugin views deduplicate by view reference. The viewport-fixed toggle
+  and `Cmd/Ctrl + J` both toggle the active session's retained panel context —
   revealing it without creating a resource tab and collapsing it without
   discarding one; the create trigger remains unavailable while the panel is
-  closed. A
+  closed. Closing the final tab keeps the panel open and shows the New launcher.
+  A
   successful active-session workspace Write/Edit artifact opens Review;
-  scratch, failed, and background-session writes never steal focus. The outer
-  inner divider resizes the panel from 244px to 720px; moving it left takes
-  more space from MainChat and moving it right gives space back. The sole
+  scratch, failed, and background-session writes never steal focus. The inner
+  divider resizes the panel through the shared three-column budget; moving it
+  left takes space until MainChat reaches 450px, at which point the expanded
+  sidebar yields immediately, and moving it right gives space back. A manual
+  sidebar reopen spends work-panel width first and otherwise targets a 460px
+  MainChat width. The sole
   panel-level control is the viewport-fixed toggle; each session retains its own runtime
   open state, tab set, active tab, and Browser resource in renderer memory.
   Selecting another session swaps the visible panel context without deleting
@@ -104,12 +115,22 @@ destination, chat as the home surface, tools and permissions inline.
   retained session contexts, and only the preferred panel width persists across
   launches.
   The work panel remains a fixed-width in-flow column beside MainChat inside
-  the existing client area (ADR 0151). Opening and collapsing change only the
+  the existing client area (ADR 0033 / ADR 0151). MainChat keeps a hard 450px
+  minimum; the work panel's effective maximum is the remaining client width
+  after the expanded sidebar and that floor (ADR 0238). When the budget is
+  exhausted the sidebar collapses immediately through its existing animation
+  (the budget still counts it while `sidebar-out` occupies flex space) and
+  returns when the panel closes. Opening and collapsing change only the
   shell's internal flex allocation and never expand or shrink native window
-  bounds. The renderer-measured panel rectangle continues to position the
-  native Browser view. Native window edges resize the app window only; they do
-  not change the panel target. The outer window remains natively resizable from
-  all OS edges and corners, with a minimum supported size of 1040×700. Replaces
+  bounds; no panel action requests a positive native reservation. The
+  panel-header preview toggle temporarily unmounts MainChat and expands the
+  panel across the client area beside the sidebar; leaving preview restores the
+  prior panel width and sidebar state without changing native bounds. The
+  renderer-measured panel
+  rectangle continues to position the native Browser view. Native window edges
+  resize the app window only; they do not change the panel target. The outer
+  window remains natively resizable from all OS edges and corners, with a
+  minimum supported size of 1040×700. Replaces
   the former context-panel overlay; workspace/model/status info lives in the
   composer chips and Settings instead.
 - **Composer**: workspace-agnostic floating pill anchored to the conversation
@@ -129,11 +150,13 @@ destination, chat as the home surface, tools and permissions inline.
 ## 3. Destinations
 
 ### 3.1 Chat home (default)
-- Empty state: a restrained hero title ("What can I help you build?" — project name
-  becomes a dotted-underline button when a workspace is open), an optional
-  first-run checklist, and a bottom-reserved composer. Task entry starts
-  directly in the composer; no redundant supporting paragraph, developer
-  starter cards, or contextual quick-action row is rendered (D204/D206).
+- Empty state: a restrained hero title ("What can I help you build?" — a
+  project-bound session turns the project name into a dotted-underline
+  switcher that lists the sidebar's open projects, can search them, can
+  clone a git repository from a syntactically public remote (ADR 0247 / D416), and can open another local folder), an optional first-run
+  checklist, and a bottom-reserved composer. Task entry starts directly in the composer; no
+  redundant supporting paragraph, developer starter cards, or contextual
+  quick-action row is rendered (D204/D206).
 - With transcript: message stream + tool disclosure rows (D071), a contextual
   message-scoped review card immediately after each successful workspace
   Write/Edit row, docked composer, and a session-scoped permission card inline.
@@ -162,7 +185,8 @@ destination, chat as the home surface, tools and permissions inline.
   overflow menu. The directory title is one full-row disclosure target;
   collapse/expand affects only child visibility, and adjacent groups form one
   dense tree rather than detached cards. Hovering or focusing the project title
-  reveals the full project path.
+  reveals the full project path. Pressing the title and moving 8px reorders
+  the group.
 - **Project actions**: open folder reveals the project directory; rename edits
   the renderer-local display name while the normalized path remains the
   project identity; pin/unpin changes presentation priority; archive/restore
@@ -175,8 +199,9 @@ destination, chat as the home surface, tools and permissions inline.
   never removes the transcript. Open folder is a project action, not a
   conversation action.
 - **Sort**: user-facing modes are Recently updated, Created date, Oldest
-  first, and Name. Pinned rows precede unpinned rows. A legacy persisted
-  `manual` value remains readable but does not imply a drag-reorder gesture.
+  first, and Name. Pinned rows precede unpinned rows. Project groups switch
+  to `manual` by dragging a title or using ArrowUp/ArrowDown on that
+  title. Session `manual` remains a compatibility value.
 - **Conversation list**: each group shows the ten most-recent sessions in the
   active sort order by default; the remainder folds behind a **Load N more…**
   row that expands the full time-grouped list on click. Pinned rows precede
@@ -274,6 +299,7 @@ shared capability contract:
 | Profile menu | sidebar footer | Settings / Logs / Theme cycle (D041) |
 | Notification inbox | sidebar footer bell | All/Unread views, task failure rows only (successful completions are hidden, D295), mark-all-read and clear actions (D130/D117) |
 | Toasts | events (plugin toast, backend restored, copy) | top-center; 4s default, 8s for errors |
+| Project switcher | empty-home underlined project name | sidebar open projects + search + clone git project + open project |
 
 ## 5. Navigation model
 
@@ -288,9 +314,11 @@ shared capability contract:
   `chat`. Selecting a temporary thread clears the visible active workspace
   before loading it.
 - Empty home has three explicit session states: a project-bound session shows
-  the existing project-underlined welcome; a temporary session shows dedicated
-  temporary-chat copy with no project underline or folder-open action; and no
-  active session keeps the generic welcome title.
+  the project-underlined welcome; clicking the name opens a searchable
+  switcher of the sidebar's open projects instead of the folder picker. A
+  temporary session shows dedicated temporary-chat copy with no project
+  underline or switcher; and no active session keeps the generic welcome
+  title.
 - New task resolves the current project or temporary group by its most recent
   session: if that session has `messageCount = 0`, it is selected and reused;
   otherwise a durable empty session is created immediately and appears in the
@@ -309,7 +337,7 @@ shared capability contract:
 | Cmd/Ctrl+O | open project |
 | Cmd/Ctrl+, | settings |
 | Cmd/Ctrl+. | abort current run |
-| Enter / Shift+Enter | send / newline (configurable Enter-to-send) |
+| Enter / Shift+Enter / Cmd/Ctrl+Enter | send / newline (Enter-to-send; when off, Cmd/Ctrl+Enter sends) |
 | Esc | dismiss overlay/menu |
 
 ## 7. State-dependent chrome

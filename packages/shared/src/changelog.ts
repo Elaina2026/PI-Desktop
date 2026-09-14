@@ -29,6 +29,22 @@ export type ChangelogEntry = {
 
 const enEntries: ChangelogEntry[] = [
   {
+    version: "0.14.8",
+    date: "2026-09-14",
+    highlights: [
+      "Browse and install MCP servers from the official registry and user-configured sources in the MCP market.",
+      "Browse and install skills from curated and GitHub sources in the Skill market, with public-HTTPS and size gates.",
+      "Ship the file view as the vendored File Manager plugin, and let a bundled plugin keep a marketplace update.",
+      "Add a work-panel preview mode, raise the chat column floor to 450px, and prioritize MainChat in the three-column shell.",
+      "Discover independent sessions, send host-owned collaboration messages, and open collaboration links.",
+      "Let subagents inherit parent tools, list shipped builtins in Settings, add a UI-designer builtin, and show a distinct creating state.",
+      "Steer an active turn with Alt+Enter, and expand pasted text files in the composer for editing.",
+      "Redesign project creation with multi-folder workspaces, project-owned memory, and a visual memory editor.",
+      "Install declared dependencies and skills from imported pi packages behind a host-owned security boundary.",
+      "Add preset chips for model context-window and max-output, show Read line ranges on tool chips, and keep context recoverable after a failed compaction.",
+    ],
+  },
+  {
     version: "0.14.6",
     date: "2026-09-10",
     highlights: [
@@ -103,7 +119,6 @@ const enEntries: ChangelogEntry[] = [
     version: "0.13.11",
     date: "2026-09-07",
     highlights: [
-      "Enable the bundled Advisor plugin to have a second model review the current conversation.",
       "Let plugins list models, read in-flight session context, and request host-owned completions without receiving credentials.",
     ],
   },
@@ -744,6 +759,22 @@ const enEntries: ChangelogEntry[] = [
 
 const zhCNEntries: ChangelogEntry[] = [
   {
+    version: "0.14.8",
+    date: "2026-09-14",
+    highlights: [
+      "在 MCP 市场中浏览并安装官方注册表和自定义来源的 MCP 服务器。",
+      "在 Skill 市场中从精选来源和 GitHub 浏览并安装技能，安装走公开 HTTPS 并受大小限制。",
+      "将文件视图作为内置 File Manager 插件随应用分发，内置插件也可继续接收市场更新。",
+      "新增工作面板预览模式，将对话列最小宽度提升到 450px，三栏布局优先保证主对话区。",
+      "发现独立会话、发送宿主所有的协作消息，并打开协作链接。",
+      "子智能体可继承父级工具，设置中列出随应用提供的内置子智能体，新增 UI 设计师内置，并在创建过程显示独立状态。",
+      "用 Alt+Enter 在进行中的回合追加引导，粘贴的文本文件可在输入框中展开编辑。",
+      "重新设计项目创建：支持多文件夹工作区、项目级记忆和可视化记忆编辑。",
+      "从导入的 pi 扩展安装其声明的依赖和技能，安装过程由宿主安全边界约束。",
+      "为模型上下文窗口和最大输出提供预设芯片，在工具芯片上显示 Read 行范围，压缩失败后仍可恢复上下文。",
+    ],
+  },
+  {
     version: "0.14.6",
     date: "2026-09-10",
     highlights: [
@@ -817,7 +848,6 @@ const zhCNEntries: ChangelogEntry[] = [
     version: "0.13.11",
     date: "2026-09-07",
     highlights: [
-      "启用内置 Advisor 插件后，可用第二个模型审阅当前对话。",
       "插件可列出模型、读取当前会话，并请求宿主代发补全，不会拿到凭据。",
     ],
   },
@@ -1458,6 +1488,22 @@ const zhCNEntries: ChangelogEntry[] = [
 
 const zhTWEntries: ChangelogEntry[] = [
   {
+    version: "0.14.8",
+    date: "2026-09-14",
+    highlights: [
+      "在 MCP 市場中瀏覽並安裝官方登錄檔和自訂來源的 MCP 伺服器。",
+      "在 Skill 市場中從精選來源和 GitHub 瀏覽並安裝技能，安裝走公開 HTTPS 並受大小限制。",
+      "將檔案檢視作為內建 File Manager 外掛隨應用程式發佈，內建外掛也可繼續接收市場更新。",
+      "新增工作面板預覽模式，將對話欄最小寬度提升到 450px，三欄版面優先保證主對話區。",
+      "發現獨立工作階段、傳送宿主所有的協作訊息，並開啟協作連結。",
+      "子智慧體可繼承父級工具，設定中列出隨應用程式提供的內建子智慧體，新增 UI 設計師內建，並在建立過程顯示獨立狀態。",
+      "用 Alt+Enter 在進行中的回合追加引導，貼上的文字檔可在輸入框中展開編輯。",
+      "重新設計專案建立：支援多資料夾工作區、專案級記憶和視覺化記憶編輯。",
+      "從匯入的 pi 擴充功能安裝其宣告的相依套件和技能，安裝過程由宿主安全邊界約束。",
+      "為模型上下文視窗和最大輸出提供預設晶片，在工具晶片上顯示 Read 行範圍，壓縮失敗後仍可復原上下文。",
+    ],
+  },
+  {
     version: "0.14.6",
     date: "2026-09-10",
     highlights: [
@@ -1532,7 +1578,6 @@ const zhTWEntries: ChangelogEntry[] = [
     version: "0.13.11",
     date: "2026-09-07",
     highlights: [
-      "啟用內建 Advisor 外掛後，可用第二個模型審閱當前對話。",
       "外掛可列出模型、讀取當前會話，並請求宿主代發補全，不會拿到憑據。",
     ],
   },

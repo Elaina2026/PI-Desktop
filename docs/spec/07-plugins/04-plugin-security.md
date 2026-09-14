@@ -14,6 +14,7 @@ Main risks:
 4. Hijacking agent tools
 5. Phishing via the UI
 6. Spending the user's model quota, or sending the conversation to another model (`agent.complete` / `session.read`)
+7. Triggering work in another durable session or spoofing its sender/provenance
 
 ## 2. Default-deny principle
 
@@ -35,6 +36,12 @@ Main risks:
 4. The plugin-private data directory is separate from the host core library
 5. Session transcripts from `session.getLlmContext` are a bounded projection of
    the in-flight tool session only (D336 / D019)
+6. Session collaboration is available only through the reviewed
+   `desktop.control` catalog. The broker derives the source plugin, Session ID,
+   turn ID, and invocation ID from the active Agent tool call; plugin payloads
+   cannot provide those identities. Host-core owns the target Session ID,
+   delivery ledger, permission ceiling, turn binding, callback, cancellation,
+   and transcript provenance.
 
 Clipboard history is host-owned and remains in the Electron main process only.
 It is never written to the plugin data directory or the host database. The host
@@ -44,6 +51,27 @@ through `clipboard.read`, which is also the permission used by `readText`;
 every `getHistory` call is audited with its returned entry count. The bounded
 in-memory retention limits the privacy exposure to the current app run and is
 cleared on exit.
+
+### 3.2 Session collaboration boundary
+
+The Session Orchestrator may create bounded worker sessions, address existing
+Agent sessions, inspect bounded status/result projections, and cancel work when
+the user grants `desktop.control`. This capability deliberately does not grant
+the plugin direct `session.create`, `agent.prompt`, host RPC, SQLite, transcript
+file, or MCP-token access. A send or spawn call must run inside the plugin's
+currently executing Agent tool invocation; calls from a service, panel, or
+ordinary plugin code without that context fail closed. A plugin panel may
+request cancellation for that plugin's own deliveries as an explicit user
+control, but cancellation cannot create or retarget a delivery.
+
+Host-core snapshots the source permission ceiling and rejects targets above it,
+rechecks the target mode before beginning the turn, and enforces inbox,
+worker, and autonomous-hop limits. Existing target sessions retain their own
+project/model/context configuration. Completion callbacks are host-authored,
+at-most-once session messages and cannot authorize tools or trigger another
+callback. Restart recovery retains a durable queued delivery but never starts
+an interrupted turn unattended. Session-message provenance is immutable across
+transcript replacement and regeneration.
 
 ### Goals
 1. Plugin main runs in a separate process
@@ -56,10 +84,26 @@ A theme contribution (`ui.theme`) is the one case where plugin-authored content
 runs inside the host renderer, so it crosses a sanitizer in the main process
 before it is ever sent to the UI:
 
+- Only CSS the browser applies is inspected: comment bodies and string literals
+  are blanked first, with one space per masked character so any offset still
+  points at the source, and each `url(...)` argument is kept verbatim and judged
+  by its target. A sheet that merely *mentions* a banned token in a comment or a
+  string is therefore accepted
 - Rejected: `@import`, any `url()` target that is not a `data:` URI, a `url(`
   the parser cannot resolve, `javascript:`, `expression(`, and markup sequences
   (`<style`, `</style`, `<!--`); an empty sheet is refused too
 - Capped at 256KB per file, 8 themes per plugin
+- A theme may declare `assets` (package-relative, whitelisted image and font
+  extensions, 4MB summed). Each matching `url()` is rewritten to
+  `plugin-asset://<pluginId>/<path>` and served by a host handler that resolves
+  only through the loaded plugin's own declared list: read-only,
+  package-scoped, `nosniff`, and revoked when the plugin unloads. An undeclared
+  reference is still refused, and the raw path never reaches the renderer
+- `contributes.windowAppearance` (`#rrggbb` / `#rrggbbaa`) requires
+  `ui.window.appearance` and applies only while one of that plugin's themes is
+  the selected one; leaving the theme restores the host background, because the
+  colour is derived from the live catalog rather than remembered. macOS keeps
+  `vibrancy` and is never sent one
 - The CSS is read from disk at load time and delivered whole over IPC; the
   renderer injects it into a single dedicated `<style>` element appended after
   the app's own stylesheets, so it can override tokens but never inject markup
@@ -298,10 +342,14 @@ manifest did not name:
 
 `desktop.control` hands a plugin the reviewed operation catalog the local MCP
 control plane exposes (ADR 0203 / D370): project, session, Agent, and
-workspace operations, each tagged `read`, `write`, or `dangerous`. The plugin
-sees ids, descriptions, and risk, never Electron channel names or the MCP
-bearer token, and every invocation crosses the same IPC validation, lifecycle
-checks, completion event, and audit entry as an MCP call.
+workspace operations, each tagged `read`, `write`, or `dangerous`. The
+plugin-only exception covers the six `session/collaboration/*` operations: they
+are callable through the plugin gateway but deliberately absent from the
+MCP-visible catalog, because they need an authenticated plugin invocation
+context and no renderer mutation channel exists for them. The plugin sees ids,
+descriptions, and risk, never Electron channel names or the MCP bearer token,
+and every invocation crosses the same IPC validation, lifecycle checks,
+completion event, and audit entry as an MCP call.
 
 A `dangerous` operation is decided by the user, not by the caller. The
 controller's `confirm: true` is only the plugin's acknowledgement (MCP treats

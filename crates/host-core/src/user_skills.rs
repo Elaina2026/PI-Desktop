@@ -120,7 +120,7 @@ fn merge_active_records(
         }
     }
     result.retain(|record| record.enabled);
-    result.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    result.sort_by_key(|record| record.name.to_lowercase());
     result
 }
 
@@ -417,7 +417,7 @@ impl UserSkillRegistry {
                 enabled,
             )?;
         }
-        Ok(self.find(id, level, record.project_path.as_deref())?)
+        self.find(id, level, record.project_path.as_deref())
     }
 
     pub fn read(
@@ -540,7 +540,16 @@ mod tests {
             .unwrap();
         let target = app.path().join(".agents/skills/review.md");
         assert_eq!(record.level.as_deref(), Some("project"));
-        assert_eq!(record.path, target.to_string_lossy());
+        let normalized_project =
+            crate::agent_capabilities::normalize_project_path(app.path().to_str().unwrap());
+        let expected = crate::agent_capabilities::capability_dir(
+            CapabilityLevel::Project,
+            Some(&normalized_project),
+            "skills",
+        )
+        .unwrap()
+        .join("review.md");
+        assert_eq!(record.path, expected.to_string_lossy());
         assert_eq!(fs::read_to_string(target).unwrap(), raw);
         assert!(source.is_file());
     }

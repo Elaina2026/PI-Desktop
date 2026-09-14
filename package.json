@@ -1,7 +1,7 @@
 {
   "name": "pi-desktop",
   "private": true,
-  "version": "0.14.6",
+  "version": "0.14.8",
   "description": "Local-first AI coding agent desktop client",
   "packageManager": "pnpm@11.18.0",
   "engines": {
@@ -23,20 +23,30 @@
     "test:e2e": "node scripts/e2e-smoke.mjs",
     "test:e2e:plan": "node scripts/e2e-plan.mjs",
     "test:e2e:plan-ui": "node scripts/e2e-plan-ui.mjs",
+    "test:e2e:transcript": "node scripts/e2e-transcript-render.mjs",
     "test:e2e:boot": "node scripts/e2e-electron-boot.mjs",
+    "test:e2e:layout": "node scripts/e2e-three-column-layout.mjs",
     "test:e2e:supervision": "node scripts/e2e-supervision.mjs",
     "test:e2e:subagents": "node scripts/e2e-subagents.mjs",
+    "test:e2e:subagent-models": "node scripts/e2e-subagent-models.mjs",
     "check:marketplace": "node scripts/check-marketplace-catalog.mjs",
     "check:release-docs": "node scripts/check-release-docs.mjs",
     "docs:dev": "pnpm --filter @pi-desktop/docs dev",
     "docs:build": "pnpm --filter @pi-desktop/docs build",
     "docs:preview": "pnpm --filter @pi-desktop/docs preview",
     "docs:check": "pnpm --filter @pi-desktop/docs check:locales",
-    "lint": "pnpm -r --filter \"!pi-desktop\" --if-present lint",
+    "lint": "pnpm lint:biome && pnpm -r --if-present lint",
     "host:dev": "cargo run -p host-core",
-    "clean": "pnpm -r --filter \"!pi-desktop\" --if-present clean && cargo clean"
+    "clean": "pnpm -r --if-present clean && cargo clean",
+    "lint:biome": "biome lint",
+    "test:e2e:mcp-market": "node scripts/e2e-mcp-market.mjs",
+    "test:e2e:skill-market": "node scripts/e2e-skill-market.mjs",
+    "test:e2e:plugin-import-deps": "node scripts/e2e-plugin-import-deps.mjs",
+    "test:e2e:trusted-extensions": "node scripts/e2e-trusted-extensions.mjs",
+    "test:e2e:collaboration": "node scripts/e2e-session-collaboration.mjs"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.13",
     "@pi-desktop/plugin-devkit": "workspace:*"
   }
 }

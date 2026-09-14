@@ -1,33 +1,31 @@
+import { readMainModule, readMainSource } from "./helpers/source-contracts.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { loadStyles } from "./helpers/styles.mjs";
 
-const mainSource = await readFile(
-  new URL("../electron/main/index.ts", import.meta.url),
-  "utf8",
-);
+const mainSource = await readMainSource();
+const windowSource = await readMainModule("bootstrap/window.ts");
+const lifecycleSource = await readMainModule("bootstrap/app-lifecycle.ts");
 const stylesSource = await loadStyles();
 
-const createWindowSource = mainSource.slice(
-  mainSource.indexOf("async function createWindow()"),
-);
+const createWindowSource = windowSource.slice(windowSource.indexOf("export async function createWindow("));
 const mainWindowBlock =
   createWindowSource.match(/mainWindow = new BrowserWindow\(\{[\s\S]*?\n  \}\);/)?.[0] ?? "";
 const macOptions =
   mainWindowBlock.match(
-    /\.\.\.\(process\.platform === "darwin"[\s\S]*?\n      : \{\n          frame: false,\n          backgroundColor: nativeTheme\.shouldUseDarkColors \? "#181818" : "#ffffff",\n        \}\),/,
+    /\.\.\.\(process\.platform === "darwin"[\s\S]*?\n      : \{[\s\S]*?\n        \}\),/,
   )?.[0] ?? "";
 
 function styleBlock(selector) {
   return stylesSource.match(new RegExp(`${selector}\\s*\\{[^}]*\\}`))?.[0] ?? "";
 }
 
-function functionSource(name) {
-  const start = mainSource.indexOf(`function ${name}(`);
+function functionSource(source, name) {
+  const start = source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `expected function ${name}`);
-  const next = mainSource.indexOf("\nfunction ", start + 1);
-  return mainSource.slice(start, next === -1 ? undefined : next);
+  const next = source.indexOf("\n  function ", start + 1);
+  return source.slice(start, next === -1 ? undefined : next);
 }
 
 test("macOS main window enables native sidebar vibrancy only in its platform branch", () => {
@@ -43,10 +41,11 @@ test("macOS main window enables native sidebar vibrancy only in its platform bra
     "non-mac branch must not set under-window vibrancy",
   );
 
-  // The shared opaque fallback remains in place for Windows/Linux.
+  // The shared opaque fallback remains in place for Windows/Linux, and comes
+  // from the built-in theme table rather than a local literal.
   assert.match(
     mainWindowBlock,
-    /backgroundColor:\s*nativeTheme\.shouldUseDarkColors \? "#181818" : "#ffffff"/,
+    /backgroundColor:\s*builtinWindowBackground\(\s*nativeTheme\.shouldUseDarkColors \? "dark" : "light",?\s*\)/,
   );
   assert.match(mainWindowBlock, /frame: false/);
   assert.doesNotMatch(
@@ -57,14 +56,14 @@ test("macOS main window enables native sidebar vibrancy only in its platform bra
 });
 
 test("native theme source maps preferences and only resets vibrancy on change", () => {
-  const applyNative = functionSource("applyNativeThemeSource");
-  const applyMenu = functionSource("applyApplicationMenuSettings");
-  const send = functionSource("sendToRenderer");
+  const applyNative = functionSource(lifecycleSource, "applyNativeThemeSource");
+  const applyMenu = functionSource(lifecycleSource, "applyApplicationMenuSettings");
+  const send = functionSource(mainSource, "sendToRenderer");
 
   assert.match(applyNative, /let next: "system" \| "light" \| "dark" = "system"/);
   assert.match(
     applyNative,
-    /if \(preference === "light" \|\| preference === "dark"\) \{\s*next = preference;/,
+    /if \(isThemeColorScheme\(preference\)\) \{\s*next = preference;/,
   );
   assert.match(applyNative, /preference\.startsWith\("plugin:"\)/);
   assert.match(
@@ -80,13 +79,13 @@ test("native theme source maps preferences and only resets vibrancy on change", 
   assert.match(applyNative, /if \(nativeTheme\.themeSource === next\) return;/);
   assert.match(
     applyNative,
-    /nativeTheme\.themeSource = next;\s*if \(process\.platform === "darwin" && mainWindow && !mainWindow\.isDestroyed\(\)\) \{\s*mainWindow\.setVibrancy\("sidebar"\);/,
+    /nativeTheme\.themeSource = next;\s*if \(process\.platform === "darwin" && state\.mainWindow && !state\.mainWindow\.isDestroyed\(\)\) \{\s*state\.mainWindow\.setVibrancy\("sidebar"\);/,
   );
 
   assert.match(applyMenu, /applyNativeThemeSource\(settings\)/);
   assert.match(
     send,
-    /if \(channel === IPC\.event\.pluginChanged\) \{\s*applyNativeThemeSource\(\{ theme: appThemePreference \}\);/,
+    /if \(channel === IPC\.event\.pluginChanged\) \{\s*applicationLifecycle\?\.applyNativeThemeSource\(\{\s*theme: applicationAppearanceState\.appThemePreference,/,
   );
 });
 

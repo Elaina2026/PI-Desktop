@@ -1,3 +1,4 @@
+import { readAppSource } from "./helpers/source-contracts.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -7,11 +8,16 @@ const sidebarSource = await readFile(
   new URL("../src/components/Sidebar.tsx", import.meta.url),
   "utf8",
 );
-const globalStyles = await loadStyles();
-const appSource = await readFile(
-  new URL("../src/App.tsx", import.meta.url),
+const hoverSource = await readFile(
+  new URL("../src/features/sessions/SessionHoverCard.tsx", import.meta.url),
   "utf8",
 );
+const hoverHookSource = await readFile(
+  new URL("../src/features/sessions/useSessionHoverCard.ts", import.meta.url),
+  "utf8",
+);
+const globalStyles = await loadStyles();
+const appSource = await readAppSource();
 const panelSource = await readFile(
   new URL("../src/components/workpanel/WorkPanel.tsx", import.meta.url),
   "utf8",
@@ -256,6 +262,16 @@ test("project rows expose folder actions and full-path hover", () => {
   assert.match(sidebarSource, /className="sr-only">\s*\{entry\.path\}/);
 });
 
+test("sidebar row menus omit project reassignment and switching actions", () => {
+  assert.doesNotMatch(sidebarSource, /data-action="move-session-to-project"/);
+  assert.doesNotMatch(sidebarSource, /t\("nav\.moveToProject"/);
+  assert.doesNotMatch(sidebarSource, /t\("project\.switch"/);
+  assert.match(
+    sidebarSource,
+    /if \(!entry\.active && !\(await selectProject\(entry\.path\)\)\) return;/,
+  );
+});
+
 test("session rows use the hover card instead of a native title tooltip", () => {
   const sessionMain = sidebarSource.match(
     /className="thread-item-main"[\s\S]*?<\/button>/,
@@ -264,6 +280,27 @@ test("session rows use the hover card instead of a native title tooltip", () => 
   assert.match(sessionMain, /showSessionHoverCard\(/);
   assert.doesNotMatch(sessionMain, /title=\{taskTitle\(session\.title\)\}/);
   assert.doesNotMatch(sessionMain, /\btitle=\{/);
-  assert.match(sidebarSource, /className="sidebar-session-hover-card"/);
-  assert.match(sidebarSource, /className="sidebar-session-hover-card-title"/);
+  assert.match(hoverSource, /className="sidebar-session-hover-card"/);
+  assert.match(hoverSource, /className="sidebar-session-hover-card-title"/);
+  assert.match(sessionMain, /onFocusCapture=/);
+  assert.match(sessionMain, /aria-describedby=/);
+  assert.match(hoverHookSource, /\}, 500\)/);
+  assert.match(hoverHookSource, /event\.key === "Escape"/);
+  assert.match(hoverHookSource, /addEventListener\("scroll", hide, true\)/);
+  assert.match(hoverHookSource, /addEventListener\("visibilitychange", onVisibility\)/);
+});
+
+test("session hover cards expose readable models and keyboard-navigable session links", () => {
+  assert.match(hoverSource, /role="dialog"/);
+  assert.match(hoverSource, /summary\?\.providerName/);
+  assert.match(hoverSource, /summary\?\.modelName/);
+  assert.doesNotMatch(hoverSource, /modelKey\?\.includes\("\/"\)/);
+  assert.match(hoverSource, /data-session-link=\{summary\.createdBySession\.sessionId\}/);
+  assert.match(hoverSource, /summary\.createdSessions\.slice\(0, 8\)/);
+  assert.match(hoverSource, /type="button"/);
+  assert.match(hoverSource, /onClick=\{\(\) => openSessionReference/);
+  assert.match(hoverSource, /onFocusCapture=\{keepVisible\}/);
+  assert.match(hoverHookSource, /setTimeout\(\(\) => \{[\s\S]*?hide\(\);[\s\S]*?\}, 160\)/);
+  assert.match(globalStyles, /\.sidebar-session-hover-card\s*\{[\s\S]*?pointer-events:\s*auto;/);
+  assert.match(globalStyles, /\.sidebar-session-hover-card-session-link:focus-visible\s*\{[\s\S]*?outline:/);
 });

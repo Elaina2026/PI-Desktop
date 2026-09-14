@@ -1,4 +1,4 @@
-# 04. Data Storage (Schema v15)
+# 04. Data Storage (Schema v16)
 
 ## 0. Ownership decision
 
@@ -208,6 +208,7 @@ CREATE TABLE kv (
 | `ui` | non-critical UI state the renderer asks the host to keep |
 | `cache` | model-refresh stamps, recent model refs (spec 13 §3) |
 | `plugin:<id>` | per-plugin settings; uninstall = `DELETE WHERE ns = ?` |
+| `projectMemory` | durable user-authored context keyed by canonical project path; structured values contain `format: "entries-v1"`, visual `entries`, derived `content`, and `updatedAt` |
 
 New config domains (e.g. MCP servers) start as a namespace; they graduate to
 tables only when they need relations or indexes.
@@ -223,13 +224,13 @@ type SidebarPreferences = {
   sessionMeta: Record<string, {
     pinned?: boolean;
     archived?: boolean;
-    order?: number; // compatibility/future manual order
+    order?: number; // renderer-local manual order
   }>;
   projectMeta: Record<string, {
     pinned?: boolean;
     archived?: boolean;
     collapsed?: boolean;
-    order?: number; // compatibility/future manual order
+    order?: number; // renderer-local manual order
   }>;
   projectSort: "recent" | "created" | "oldest" | "name" | "manual";
   sessionView: {
@@ -242,9 +243,12 @@ type SidebarPreferences = {
 
 - Project keys and retained paths use normalized full paths; session keys use
   durable session ids. Duplicate/slash-variant paths are discarded on load.
-- `manual`/`order` are compatibility fields. This baseline exposes no
-  drag/manual-reorder interaction; values without a usable order fall back to
-  a stable recent ordering.
+- `projectSort: "manual"` and `projectMeta[*].order` store renderer-local
+  project presentation order. Dragging a project title or using ArrowUp
+  and ArrowDown on that title writes contiguous order values for the visible normalized paths.
+  Missing or invalid values fall back to stable path order; pinned and archived
+  priority remains applied before manual order. Session `manual`/`order` remain
+  compatibility fields and are not exposed by the sidebar.
 - Missing, malformed, or unwritable preferences fall back to empty metadata,
   `recent`, archived hidden, and the host-selected project. Preference failure
   never blocks a host operation.
@@ -284,6 +288,14 @@ CREATE TABLE projects (
 - The *current* visible workspace is `kv(app, currentProjectId)` — no singleton
   table, no partial-unique flag. Retained tabs do not add more current-project
   fields.
+- Project memory is host-owned in `kv(ns='projectMemory', key=<canonical path>)`
+  rather than renderer preferences. It is independent for every project path,
+  capped at 32 KiB, and is loaded by Electron main when a project session
+  starts. Visual entries are normalized and rendered to plain `content` for
+  the runtime; legacy plain-text values remain readable and are shown as one
+  untitled entry when opened in the editor. The runtime labels it as
+  user-provided context so it cannot become a replacement for safety, tool, or
+  collaboration rules.
 
 ### 4.3 providers
 
@@ -584,6 +596,79 @@ CREATE UNIQUE INDEX idx_turn_queue_idempotency
 - After a restart the module lists every entry, holds each session's queue
   until a controller attaches, and drains one entry after the active turn's
   terminal event. Deleting the session cascades to its entries.
+
+### 4.6c session collaboration ledger — Host-owned delivery state (schema v16)
+
+```sql
+CREATE TABLE session_collaboration_links (
+  session_id            TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  created_by_session_id TEXT NOT NULL,
+  plugin_id             TEXT NOT NULL,
+  created_at            INTEGER NOT NULL
+);
+
+CREATE TABLE session_collaboration_messages (
+  id                    TEXT PRIMARY KEY,
+  plugin_id             TEXT NOT NULL,
+  source_session_id     TEXT NOT NULL,
+  source_title          TEXT NOT NULL,
+  target_session_id     TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  target_title          TEXT NOT NULL,
+  kind                  TEXT NOT NULL CHECK(kind IN ('task', 'message', 'completion')),
+  content               TEXT NOT NULL,
+  status                TEXT NOT NULL CHECK(status IN
+    ('queued', 'running', 'completed', 'failed', 'cancelled', 'interrupted')),
+  notify_on_completion  INTEGER NOT NULL DEFAULT 0,
+  turn_id               TEXT REFERENCES turns(id) ON DELETE SET NULL,
+  reply_to_message_id   TEXT,
+  idempotency_key       TEXT NOT NULL,
+  remaining_hops        INTEGER NOT NULL,
+  permission_ceiling    TEXT NOT NULL CHECK(permission_ceiling IN
+    ('ask', 'accept-edits', 'auto')),
+  result                TEXT,
+  error                 TEXT,
+  created_at            INTEGER NOT NULL,
+  updated_at            INTEGER NOT NULL,
+  UNIQUE(plugin_id, source_session_id, idempotency_key)
+);
+
+CREATE UNIQUE INDEX idx_session_collaboration_turn
+  ON session_collaboration_messages(turn_id) WHERE turn_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_session_collaboration_receipt
+  ON session_collaboration_messages(reply_to_message_id)
+  WHERE kind = 'completion';
+```
+
+- The ledger is the authoritative identity and lifecycle record for a
+  plugin-mediated delivery. `source_session_id` and `target_session_id` are
+  real durable Session IDs; titles are display snapshots only. `turn_id` is
+  assigned when the target actually begins the delivery, not when a plugin
+  creates the record.
+  `source_session_id` deliberately has no foreign key, unlike
+  `target_session_id`, which cascades, so a delivery record and its completion
+  receipt outlive a deleted sender. Read projections therefore report such
+  references with `available: false` instead of dropping the row.
+- `turn_queue.session_message_id` binds a queued Agent Host admission to its
+  ledger row. A retry with the same `(plugin_id, source_session_id,
+  idempotency_key)` returns the original delivery; changing its target, body,
+  kind, or callback flag fails with `IDEMPOTENCY_CONFLICT`.
+- A callback is a `kind = 'completion'` row with
+  `reply_to_message_id` pointing at the original delivery. The partial unique
+  index and the host settlement transaction make callback creation
+  at-most-once. Callback bodies contain a bounded result/error projection; the
+  original target transcript remains the full source of truth.
+- The host snapshots the sender's effective permission ceiling and rejects a
+  target whose current effective mode exceeds it. Autonomous chains decrement
+  `remaining_hops`; completion rows cannot create another automatic callback.
+- On startup, queued work that still has a `turn_queue` row remains held for
+  the Agent Host controller. Running work and queued deliveries without a
+  queue admission are marked `interrupted`; the startup fence never replays a
+  turn without a new controller admission.
+- Collaboration provenance is stored in the transcript line's `meta` as
+  `sessionMessage` and is projected to the UI as `UiMessage.sessionMessage`.
+  Host validation prevents forged, stripped, edited, or regenerated
+  collaboration input from becoming ordinary human input. This metadata is
+  additive and does not require a column in `messages`.
 
 ### 4.7 messages — transcript index
 
@@ -1113,6 +1198,12 @@ truncating at a guessed position.
 - **Schema v15 is additive.** It adds the `turn_queue` table and its two
   indexes (D386 / ADR 0213) so the Host-owned turn queue survives a restart;
   no existing row changes, and a `pi.sqlite.v14.bak` copy precedes the step.
+- **Schema v16 is additive.** It adds the session collaboration link and
+  delivery tables, their lifecycle indexes, and the nullable
+  `turn_queue.session_message_id` binding (D409 / ADR 0239). Existing
+  conversations, turns, queue entries, and plugin data remain valid. A
+  `pi.sqlite.v15.bak` copy precedes the migration; boot recovery retains
+  durable queued deliveries but never replays interrupted work automatically.
 - **Schema v14 is additive.** It adds nullable `sessions.deleted_at`, the
   partial deletion index, and `session_import_origins`. Existing sessions stay
   active and have no origin rows. The migration runs in the same guarded
@@ -1238,3 +1329,30 @@ columns for anything the host filters, joins, sums, or indexes.
     session, `(pluginId, source, externalId)` idempotency, no project or model
     binding unless an explicit host-created `projectId` is supplied,
     ownership-scoped reads/mutations, and recoverable trash before purge.
+21. Schema v16 collaboration rows preserve source/target Session IDs and
+    idempotency across retries, bind deliveries to their actual target turns,
+    persist transcript provenance, create no duplicate completion callback,
+    enforce permission ceilings and hop limits, retain queued work across a
+    restart without replay, and cancel without deleting the target session.
+
+
+
+## Active-turn steering transcript reservations
+
+An accepted steering input is journaled through Electron's existing message
+outbox with `meta.steering: true`, round-tripped as `UiMessage.steering`. Smart
+Stop preserves that input even after renderer reload loses submission state.
+If an assistant is still streaming, its provisional snapshot is queued
+first to reserve its transcript position before the new user row. The host
+stores the provisional row and an in-flight checkpoint, including an empty
+reservation so crash recovery can settle it. Further stream checkpoints remain
+valid while the indexed assistant has `status: streaming`.
+
+`session.appendMessage` retains idempotent replay for completed messages. Its
+narrow exception lets a terminal assistant replace an indexed streaming
+assistant with the same session/message id. It updates exactly that transcript
+line and search text, retaining sequence, owning turn and every other row.
+Late partial snapshots and duplicate terminal snapshots cannot overwrite the
+settled result. Recovery promotes the latest checkpoint in that same position.
+The outbox likewise keeps a newer snapshot that replaces an append while its
+host call is still pending. No schema migration is required.

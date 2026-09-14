@@ -246,6 +246,132 @@ export function subagentRunsEqual(
   );
 }
 
+export function reuseReadonlyMap<K, V>(
+  previous: ReadonlyMap<K, V> | undefined,
+  next: ReadonlyMap<K, V>,
+  valuesEqual: (left: V, right: V) => boolean = Object.is,
+): ReadonlyMap<K, V> {
+  if (!previous || previous.size !== next.size) return next;
+  for (const [key, value] of next) {
+    if (!previous.has(key) || !valuesEqual(previous.get(key) as V, value)) {
+      return next;
+    }
+  }
+  return previous;
+}
+
+function reuseActivityItem(
+  previous: AssistantActivityItem | undefined,
+  next: AssistantActivityItem,
+): AssistantActivityItem {
+  if (!previous || previous.kind !== next.kind || previous.message !== next.message) {
+    return next;
+  }
+  if (previous.kind === "tool" && next.kind === "tool") {
+    if (subagentRunsEqual(previous.delegate, next.delegate)) return previous;
+    if (!next.delegate || !previous.delegate) return next;
+    const items = next.delegate.items.map((item, index) => {
+      const prior = previous.delegate?.items[index];
+      return prior && prior.kind === item.kind && prior.message === item.message
+        ? prior
+        : item;
+    });
+    const delegate =
+      previous.delegate.agentName === next.delegate.agentName &&
+      previous.delegate.items.length === items.length &&
+      items.every((item, index) => item === previous.delegate!.items[index])
+        ? previous.delegate
+        : { ...next.delegate, items };
+    return delegate === previous.delegate ? previous : { ...next, delegate };
+  }
+  return previous;
+}
+
+function reuseTurnPart(
+  previous: AssistantTurnPart | undefined,
+  next: AssistantTurnPart,
+): AssistantTurnPart {
+  if (!previous || previous.kind !== next.kind) return next;
+  if (previous.kind === "message" && next.kind === "message") {
+    return previous.message === next.message ? previous : next;
+  }
+  if (previous.kind === "activity" && next.kind === "activity") {
+    if (previous.endedAt !== next.endedAt) {
+      const items = next.items.map((item, index) =>
+        reuseActivityItem(previous.items[index], item),
+      );
+      return { ...next, items };
+    }
+    const items = next.items.map((item, index) =>
+      reuseActivityItem(previous.items[index], item),
+    );
+    if (
+      items.length === previous.items.length &&
+      items.every((item, index) => item === previous.items[index])
+    ) {
+      return previous;
+    }
+    return { ...next, items };
+  }
+  return next;
+}
+
+function reuseTranscriptEntry(
+  previous: TranscriptEntry | undefined,
+  next: TranscriptEntry,
+): TranscriptEntry {
+  if (!previous || previous.kind !== next.kind) return next;
+  if (previous.kind === "message" && next.kind === "message") {
+    return previous.message === next.message ? previous : next;
+  }
+  if (previous.kind === "compaction" && next.kind === "compaction") {
+    return previous.mark === next.mark ||
+      (previous.mark.id === next.mark.id &&
+        previous.mark.throughMessageId === next.mark.throughMessageId &&
+        previous.mark.generation === next.mark.generation &&
+        previous.mark.summaryTokens === next.mark.summaryTokens &&
+        previous.mark.summarized === next.mark.summarized)
+      ? previous
+      : next;
+  }
+  if (previous.kind === "assistant-turn" && next.kind === "assistant-turn") {
+    if (previous.id !== next.id) return next;
+    const parts = next.parts.map((part, index) =>
+      reuseTurnPart(previous.parts[index], part),
+    );
+    if (
+      previous.anchorId === next.anchorId &&
+      parts.length === previous.parts.length &&
+      parts.every((part, index) => part === previous.parts[index])
+    ) {
+      return previous;
+    }
+    return { ...next, parts };
+  }
+  return next;
+}
+
+/**
+ * Keep object identity for unchanged transcript rows so memoized activity
+ * groups can bail out when only the live tail token changed.
+ */
+export function reuseTranscriptEntries(
+  previous: readonly TranscriptEntry[] | undefined,
+  next: TranscriptEntry[],
+): TranscriptEntry[] {
+  if (!previous || previous.length === 0) return next;
+  const shared = next.map((entry, index) =>
+    reuseTranscriptEntry(previous[index], entry),
+  );
+  if (
+    shared.length === previous.length &&
+    shared.every((entry, index) => entry === previous[index])
+  ) {
+    return previous as TranscriptEntry[];
+  }
+  return shared;
+}
+
 export function assistantTurnMessages(
   entry: AssistantTurnEntry,
 ): UiMessage[] {

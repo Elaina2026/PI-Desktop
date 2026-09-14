@@ -395,6 +395,74 @@ test("an http redirect is rechecked before the next MCP request", async (t) => {
   assert.equal(requests[0].options.redirect, "manual");
 });
 
+test("cross-origin mcp redirects do not forward credentials or session ids", async (t) => {
+  const requests = [];
+  const client = new McpServerClient({
+    pluginId: "com.example.remote",
+    rootPath: mkdtempSync(join(tmpdir(), "pi-mcp-http-")),
+    server: { id: "remote", transport: "http", url: "http://first.example.test/mcp" },
+    values: {
+      Authorization: "Bearer secret",
+      Cookie: "session=secret",
+      "x-api-key": "secret",
+      "x-safe": "keep",
+    },
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      if (requests.length === 1) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "http://second.example.test/mcp" },
+        });
+      }
+      const message = JSON.parse(options.body);
+      if (message.method === "notifications/initialized") return new Response(null, { status: 202 });
+      if (message.method === "tools/list") {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { tools: [] } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} }), {
+        status: 200,
+        headers: { "content-type": "application/json", "mcp-session-id": "sess-1" },
+      });
+    },
+    assertUrlAllowed: () => {},
+    connectTimeoutMs: 5_000,
+  });
+  t.after(() => client.close());
+  await client.connect();
+  assert.equal(requests.length, 4);
+  assert.equal(requests[0].options.headers.Authorization, "Bearer secret");
+  assert.equal(requests[1].options.headers.Authorization, undefined);
+  assert.equal(requests[1].options.headers.Cookie, undefined);
+  assert.equal(requests[1].options.headers["x-api-key"], undefined);
+  assert.equal(requests[1].options.headers["x-safe"], undefined);
+  assert.equal(requests[1].options.headers["mcp-session-id"], undefined);
+});
+
+test("an oversized remote mcp response fails closed", async (t) => {
+  const client = new McpServerClient({
+    pluginId: "com.example.remote",
+    rootPath: mkdtempSync(join(tmpdir(), "pi-mcp-http-")),
+    server: { id: "remote", transport: "http", url: "http://mcp.example.test/mcp" },
+    values: {},
+    fetchImpl: async () =>
+      new Response("x".repeat(4 * 1024 * 1024 + 1), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    connectTimeoutMs: 5_000,
+  });
+  t.after(() => client.close());
+  await assert.rejects(client.connect(), (error) => {
+    assert.equal(error.code, "LIMIT_EXCEEDED");
+    return true;
+  });
+  assert.equal(client.isConnected(), false);
+});
+
 test("the stdio environment carries no host secrets", () => {
   process.env.PI_LEAKED_SECRET = "must-not-cross";
   try {

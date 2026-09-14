@@ -7,6 +7,7 @@ import {
   formatFileInsert,
   normalizeLargePasteThreshold,
   restoreInlineComposerFileReferenceTokens,
+  rewriteIdeographicCommaTrigger,
   serializeComposerFileReferences,
   serializeInlineComposerFileReferences,
   stripInlineComposerFileReferenceTokens,
@@ -46,6 +47,28 @@ describe("detectTrigger — slash mode", () => {
   it("never triggers mid-draft or on later lines", () => {
     expect(detectTrigger("hi /cmd", 7)).toBeNull();
     expect(detectTrigger("hi\n/cmd", 7)).toBeNull();
+  });
+});
+
+describe("rewriteIdeographicCommaTrigger", () => {
+  it("turns a leading ideographic comma into the slash trigger", () => {
+    expect(rewriteIdeographicCommaTrigger("、")).toBe("/");
+    expect(rewriteIdeographicCommaTrigger("、rev")).toBe("/rev");
+  });
+
+  it("leaves the mark alone anywhere else in the draft", () => {
+    expect(rewriteIdeographicCommaTrigger("你好、世界")).toBe("你好、世界");
+    expect(rewriteIdeographicCommaTrigger("/cmd 、")).toBe("/cmd 、");
+    expect(rewriteIdeographicCommaTrigger("")).toBe("");
+  });
+
+  it("opens the menu through the ordinary detector once rewritten", () => {
+    const draft = rewriteIdeographicCommaTrigger("、rev");
+    expect(detectTrigger(draft, draft.length)).toMatchObject({
+      mode: "slash",
+      query: "rev",
+      tokenStart: 0,
+    });
   });
 });
 

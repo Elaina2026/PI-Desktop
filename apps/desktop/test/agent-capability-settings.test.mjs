@@ -1,3 +1,9 @@
+import {
+  readSettingsSourceSync,
+  readPluginsSourceSync,
+  readMainSourceSync,
+  readMainModuleSync,
+} from "./helpers/source-contracts.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -10,19 +16,17 @@ const here = dirname(fileURLToPath(import.meta.url));
 const srcDir = join(here, "../src");
 const settingsDir = join(srcDir, "components/settings");
 const read = (path) => readFileSync(join(here, path), "utf8");
-const settingsPage = read("../src/pages/SettingsPage.tsx");
-const pluginsPage = read("../src/pages/PluginsPage.tsx");
+const settingsPage = readSettingsSourceSync();
+const pluginsPage = readPluginsSourceSync();
 const layout = read("../src/components/settings/AgentCapabilityLayout.tsx");
 const skills = read("../src/components/settings/AgentSkillsPage.tsx");
 const mcp = read("../src/components/settings/AgentMcpPage.tsx");
 const subagents = read("../src/components/settings/AgentSubagentsPage.tsx");
+const subagentSettings = read("../src/components/settings/subagent-settings.ts");
 const hostCollection = read("../src/hooks/use-host-collection.ts");
 const mcpEditor = read("../src/components/extensions/McpEditorSheet.tsx");
-const electron = read("../electron/main/index.ts");
-const skillImport = electron.slice(
-  electron.indexOf("handle(IPC.invoke.skillImport"),
-  electron.indexOf("handle(IPC.invoke.skillUpdate"),
-);
+const electron = readMainSourceSync();
+const skillImport = readMainModuleSync("ipc/skills-ipc.ts");
 const styles = await loadStyles();
 
 // Keep this suite source-oriented like the neighboring desktop contracts: it
@@ -55,6 +59,7 @@ test("skills and MCP filter one list by level instead of stacking two sections",
   assert.match(layout, /settings\.capabilityFilterAll/);
   // Subagents are global-only, so they get no level filter and no project.
   assert.doesNotMatch(subagents, /AgentProjectPicker|projectPath|CapabilityFilter/);
+  assert.doesNotMatch(subagentSettings, /AgentProjectPicker|projectPath|CapabilityFilter/);
   assert.match(subagents, /settings\.globalOnly/);
   assert.match(subagents, /t\("settings\.subagentsEmpty"\)/);
   assert.doesNotMatch(subagents, /settings\.subagents\.empty|t\("subagents\.empty"\)/);
@@ -317,7 +322,28 @@ test("capability state stays outside capability files and active merge shadows d
 });
 
 test("all capability paths are agents roots, not legacy capability directories", () => {
-  for (const source of [layout, skills, mcp, subagents, mcpEditor, electron]) {
+  for (const source of [layout, skills, mcp, subagents, subagentSettings, mcpEditor, electron]) {
     assert.doesNotMatch(source, /\.pi\/(?:agents|skills|mcp)/);
   }
+});
+
+test("Settings lists shipped builtin subagents as read-only rows", () => {
+  assert.match(subagentSettings, /api\.subagentCatalog/);
+  assert.match(subagentSettings, /item\.source === "builtin"/);
+  assert.match(subagentSettings, /fallbackBuiltinDefinitions/);
+  assert.match(subagentSettings, /owned\.filter\(\(row\) => row\.enabled\)/);
+  assert.match(subagents, /extensions\.subagents\.sourceBuiltin/);
+  assert.match(subagents, /extensions\.subagents\.copy/);
+  assert.match(subagents, /draftFromDefinition/);
+  assert.match(subagents, /copyBuiltin/);
+  assert.match(subagents, /presetId: definition\.name/);
+  assert.match(subagents, /initialPresetId=\{editor\.presetId\}/);
+  // Builtins are not files: no enablement switch, reveal, or delete on those rows.
+  const builtinRow = subagents.slice(
+    subagents.indexOf("const renderBuiltin"),
+    subagents.indexOf("const renderRow"),
+  );
+  assert.notEqual(builtinRow, "", "builtin row renderer should be present");
+  assert.doesNotMatch(builtinRow, /CapabilityToggle|setUserSubagentEnabled|revealSubagent|removeUserSubagent/);
+  assert.match(builtinRow, /IconCopy/);
 });

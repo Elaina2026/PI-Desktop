@@ -12,6 +12,7 @@ const {
   assistantTurnResponseOutputIsEstimated,
   assistantTurnUsage,
   buildTranscriptEntries,
+  reuseTranscriptEntries,
   subagentRunsEqual,
 } = await import("../src/lib/assistant-turns.ts");
 
@@ -413,4 +414,51 @@ test("parent tools after a Task fan-out stay out of the delegation card (D319)",
       ["activity", ["think-after", "read", "wait"]],
     ],
   );
+});
+
+test("reuses unchanged activity parts when only the tail thinking token changes", () => {
+  const history = [
+    message("user", "user", "Work through the files"),
+  ];
+  for (let index = 0; index < 40; index += 1) {
+    history.push(
+      message(`read-${index}`, "tool", "ok", {
+        toolName: "Read",
+        toolCallId: `read-${index}`,
+      }),
+    );
+  }
+  history.push(message("mid", "assistant", "Continuing."));
+  const thinking = message("think-live", "assistant", "", {
+    thinking: "Looking at step 1",
+    status: "streaming",
+  });
+  const first = buildTranscriptEntries([...history, thinking]);
+  const nextThinking = {
+    ...thinking,
+    thinking: "Looking at step 1 and 2",
+  };
+  const rebuilt = buildTranscriptEntries([...history, nextThinking]);
+  const shared = reuseTranscriptEntries(first.entries, rebuilt.entries);
+  const firstTurn = first.entries[1];
+  const sharedTurn = shared[1];
+  assert.equal(firstTurn.kind, "assistant-turn");
+  assert.equal(sharedTurn.kind, "assistant-turn");
+  const firstTools = firstTurn.parts[0];
+  const sharedTools = sharedTurn.parts[0];
+  assert.equal(firstTools.kind, "activity");
+  assert.equal(sharedTools.kind, "activity");
+  assert.equal(sharedTools, firstTools);
+  assert.equal(sharedTools.items[0], firstTools.items[0]);
+  assert.equal(sharedTools.items[39], firstTools.items[39]);
+  const firstMid = firstTurn.parts[1];
+  const sharedMid = sharedTurn.parts[1];
+  assert.equal(firstMid.kind, "message");
+  assert.equal(sharedMid, firstMid);
+  const firstThink = firstTurn.parts[2];
+  const sharedThink = sharedTurn.parts[2];
+  assert.equal(firstThink.kind, "activity");
+  assert.equal(sharedThink.kind, "activity");
+  assert.notEqual(sharedThink, firstThink);
+  assert.equal(sharedThink.items[0].message, nextThinking);
 });

@@ -87,6 +87,121 @@ function responseFor(body, status = 200) {
   });
 }
 
+async function loadFixtureCatalog(t, fixture = catalogFixture) {
+  const dir = await mkdtemp(join(tmpdir(), "pi-models-dev-cache-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const catalogPath = join(dir, "api.json");
+  await writeFile(catalogPath, JSON.stringify(fixture), "utf8");
+  const catalog = new ModelsDevCatalog({ catalogPath });
+  assert.equal(await catalog.ensureLoaded(), true);
+  return catalog;
+}
+
+function observeModelIdReads(model) {
+  const modelId = model.modelId;
+  let reads = 0;
+  Object.defineProperty(model, "modelId", {
+    configurable: true,
+    get() {
+      reads += 1;
+      return modelId;
+    },
+  });
+  return () => reads;
+}
+
+test("repeated model matches and misses resolve through the bounded catalog index", async (t) => {
+  const catalog = await loadFixtureCatalog(t);
+  const input = { vendorKey: "anthropic", modelId: "claude-opus-4.6" };
+  const match = catalog.findModel(input);
+  assert.ok(match);
+  const reads = observeModelIdReads(match);
+  const perQuery = reads();
+
+  assert.equal(catalog.findModel({ ...input }), match);
+  assert.equal(catalog.findModel({ ...input, modelId: " CLAUDE-OPUS-4.6 " }), match);
+  // A repeated exact match returns the same catalog object and touches only the
+  // constant-sized candidate bucket, not a full catalog scan.
+  assert.ok(reads() - perQuery <= 8, "a repeated match must reuse the catalog result");
+
+  const missing = { ...input, modelId: "unpublished-model" };
+  assert.equal(catalog.findModel(missing), undefined);
+  const afterMiss = reads();
+  assert.equal(catalog.findModel({ ...missing }), undefined);
+  assert.equal(catalog.findModel({ ...missing, modelId: " UNPUBLISHED-MODEL " }), undefined);
+  // A miss resolves through an empty bucket without scanning or growing the index.
+  assert.equal(reads(), afterMiss, "a repeated miss must not search again");
+});
+
+test("cached matches remain scoped to the requested provider and endpoint", async (t) => {
+  const fixture = Object.fromEntries(["alpha", "beta"].map((key) => [key, {
+    name: key,
+    api: `https://${key}.example/v1`,
+    models: {
+      "shared-model": {
+        id: "shared-model",
+        name: `${key} model`,
+        modalities: { input: ["text"], output: ["text"] },
+      },
+    },
+  }]));
+  const catalog = await loadFixtureCatalog(t, fixture);
+  const queries = [
+    [{ vendorKey: "alpha", modelId: "shared-model" }, "alpha"],
+    [{ vendorKey: "beta", modelId: "shared-model" }, "beta"],
+    [{ vendorKey: "custom", baseUrl: "https://alpha.example/v1", modelId: "shared-model" }, "alpha"],
+    [{ vendorKey: "custom", baseUrl: "https://beta.example/v1", modelId: "shared-model" }, "beta"],
+    [{ vendorKey: "alpha", baseUrl: "https://beta.example/v1", modelId: "shared-model" }, "beta"],
+  ];
+  for (const [input, providerKey] of [...queries, ...queries.toReversed()]) {
+    assert.equal(catalog.findModel(input)?.providerKey, providerKey);
+  }
+});
+
+test("model lookup memory is bounded by the catalog, not by query count", async (t) => {
+  const catalog = await loadFixtureCatalog(t);
+  const input = { vendorKey: "anthropic", modelId: "claude-opus-4.6" };
+  const match = catalog.findModel(input);
+  assert.ok(match);
+  const reads = observeModelIdReads(match);
+
+  // Thousands of distinct miss queries do not grow the per-generation index and
+  // do not evict an already-resolved key from it.
+  for (let index = 0; index < 3_000; index += 1) {
+    assert.equal(catalog.findModel({ ...input, modelId: `unknown-${index}` }), undefined);
+  }
+  const beforeRepeat = reads();
+  assert.equal(catalog.findModel(input), match);
+  // The resolved key stays resolvable to the same object without a catalog rescan.
+  assert.ok(reads() - beforeRepeat <= 8, "a resolved key stays usable after many distinct queries");
+});
+
+test("one read with more distinct keys than any cache budget does not rescan a resolved key", async (t) => {
+  const catalog = await loadFixtureCatalog(t);
+  const input = { vendorKey: "anthropic", modelId: "claude-opus-4.6" };
+  const match = catalog.findModel(input);
+  assert.ok(match);
+  const reads = observeModelIdReads(match);
+  const baseline = reads();
+  const exactRepeats = 2_000;
+  // Interleave the originally resolved key among a burst of distinct keys far
+  // larger than the former 1,024-entry per-key eviction cache.
+  for (let index = 0; index < exactRepeats; index += 1) {
+    catalog.findModel({ ...input, modelId: `unknown-${index}` });
+    catalog.findModel(input);
+  }
+  const touches = reads() - baseline;
+  // Each exact re-query resolves through a bounded candidate bucket, so the work
+  // stays proportional to the repeated queries and independent of the distinct
+  // keys interleaved between them. The old 1,024-entry eviction cache would rescan
+  // the whole catalog (thousands of model reads) on every repeat once its budget
+  // was exceeded, growing with the distinct-key burst.
+  assert.ok(
+    touches <= exactRepeats * 8,
+    `exact re-queries touched the model ${touches} times, expected <= ${exactRepeats * 8}`,
+  );
+});
+
 test("model IDs match provider namespaces without matching model variants", () => {
   assert.equal(modelIdsMatch("anthropic-claude-opus-5", "claude-opus-5"), true);
   assert.equal(modelIdsMatch("anthropic/claude-opus-5", "claude-opus-5"), true);
@@ -529,6 +644,11 @@ test("the application loads the bundled release snapshot without network access"
         throw new Error("startup must not fetch");
       },
     });
+    assert.equal(
+      catalog.findModel({ vendorKey: "anthropic", modelId: "claude-opus-4.6" }),
+      undefined,
+      "a lookup before the bundled snapshot loads can miss",
+    );
     assert.equal(await catalog.ensureLoaded(), true);
     assert.equal(calls, 0);
     assert.equal(catalog.getStatus().source, "bundled");
@@ -576,6 +696,10 @@ test("Settings refresh always refetches models.dev and only updates memory", asy
       ...catalogFixture.anthropic,
       models: {
         ...catalogFixture.anthropic.models,
+        "claude-opus-4.6": {
+          ...catalogFixture.anthropic.models["claude-opus-4.6"],
+          name: "Updated Claude",
+        },
         "new-model": {
           id: "new-model",
           name: "New Model",
@@ -595,11 +719,18 @@ test("Settings refresh always refetches models.dev and only updates memory", asy
       },
     });
     assert.equal(await catalog.ensureLoaded(), true);
+    const existingInput = { vendorKey: "anthropic", modelId: "claude-opus-4.6" };
+    const previousMatch = catalog.findModel(existingInput);
+    assert.ok(previousMatch);
+    assert.equal(catalog.findModel({ vendorKey: "anthropic", modelId: "new-model" }), undefined);
     assert.equal(calls.length, 0);
     assert.equal(await catalog.refresh(), true);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, MODELS_DEV_API_URL);
     assert.deepEqual(calls[0].options.headers, { Accept: "application/json" });
+    const refreshedMatch = catalog.findModel(existingInput);
+    assert.notEqual(refreshedMatch, previousMatch);
+    assert.equal(refreshedMatch?.displayName, "Updated Claude");
     assert.equal(
       catalog.findModel({ vendorKey: "anthropic", modelId: "new-model" })?.displayName,
       "New Model",
@@ -629,7 +760,17 @@ test("a failed settings refresh preserves the bundled snapshot in memory", async
       },
     });
     assert.equal(await catalog.ensureLoaded(), true);
+    const input = { vendorKey: "anthropic", modelId: "claude-opus-4.6" };
+    const match = catalog.findModel(input);
+    assert.ok(match);
+    const reads = observeModelIdReads(match);
+    const missing = { ...input, modelId: "unpublished-model" };
+    assert.equal(catalog.findModel(missing), undefined);
+    const beforeRefresh = reads();
     assert.equal(await catalog.refresh(), false);
+    assert.equal(catalog.findModel(input), match);
+    assert.equal(catalog.findModel(missing), undefined);
+    assert.equal(reads(), beforeRefresh, "a failed refresh preserves both cached matches and misses");
     assert.equal(
       catalog.findModel({ vendorKey: "anthropic", modelId: "claude-opus-4.6" })?.family,
       "claude-opus",

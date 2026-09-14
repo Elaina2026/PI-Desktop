@@ -11,9 +11,10 @@ import { WorkTabEmpty } from "./WorkTabEmpty";
  * The surface itself is a main-process `WebContentsView`, the same isolated
  * page a `ui.panel` window hosts; this component renders nothing into it. It
  * measures the placeholder rect and drives visibility. The view composites
- * above renderer content, so a panel-wide blocking overlay still hides it;
- * the body-level work-panel menu instead clips it below the menu while open
- * rather than exposing the panel background.
+ * above renderer content, so a panel-wide blocking overlay still hides it.
+ * The work-panel menu temporarily blocks the active view while open, which
+ * keeps the menu inside the dock without changing plugin bounds or pushing the
+ * plugin body down.
  */
 export function PluginViewTab({
   pluginId,
@@ -21,7 +22,6 @@ export function PluginViewTab({
   title,
   icon,
   blocked = false,
-  occludedById,
   sessionId,
   location,
 }: {
@@ -30,7 +30,6 @@ export function PluginViewTab({
   title: string;
   icon?: string;
   blocked?: boolean;
-  occludedById?: string;
   sessionId?: string;
   location?: string;
 }) {
@@ -81,28 +80,16 @@ export function PluginViewTab({
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         const rect = surface.getBoundingClientRect();
-        const occludedBy = occludedById
-          ? document.getElementById(occludedById)
-          : null;
-        const occludedBottom = occludedBy?.getBoundingClientRect().bottom;
-        const top = Math.max(
-          rect.y,
-          Math.min(rect.bottom, occludedBottom ?? rect.y),
-        );
         void api.pluginViewSetBounds({
           x: rect.x,
-          y: top,
+          y: rect.y,
           width: rect.width,
-          height: Math.max(0, rect.bottom - top),
+          height: rect.height,
         });
       });
     };
     const observer = new ResizeObserver(report);
     observer.observe(surface);
-    const occludedBy = occludedById
-      ? document.getElementById(occludedById)
-      : null;
-    if (occludedBy) observer.observe(occludedBy);
     window.addEventListener("resize", report);
     report();
     return () => {
@@ -110,7 +97,7 @@ export function PluginViewTab({
       window.removeEventListener("resize", report);
       cancelAnimationFrame(frame);
     };
-  }, [pluginId, viewId, occludedById, failed]);
+  }, [pluginId, viewId, failed]);
 
   if (failed) {
     return (

@@ -20,7 +20,7 @@ import {
   type RuntimeProviderConfig,
 } from "./runtime.js";
 import type { PluginSkillDef } from "./plugin-skills-prompt.js";
-import type { TrustedExtensionSpec } from "@pi-desktop/shared";
+import type { SessionMessageOrigin, TrustedExtensionSpec } from "@pi-desktop/shared";
 import type { ProjectInstructions } from "./project-instructions.js";
 import {
   normalizeSupportedThinkingLevels,
@@ -105,13 +105,17 @@ type RuntimeParams = {
   subagents?: SubagentDefinition[];
   /** Provider bindings for pinned models, keyed by `subagentModelKey`. */
   subagentProviders?: Record<string, RuntimeProviderConfig>;
+  /** Opted-in override keys, separate from definition-only pinned bindings. */
+  subagentModelKeys?: string[];
   scratchDir?: string;
   /** Session-bound workspace root supplied by Electron main. */
   projectPath?: string;
   projectInstructions?: ProjectInstructions;
+  projectMemory?: string;
   compactionSettings?: ContextCompactionSettings;
   attachmentsDir?: string;
   userMessageId?: string;
+  sessionMessage?: SessionMessageOrigin;
   attachments?: RuntimePromptAttachment[];
   tokenSaver?: TokenSaverSettings;
   fallbackProviders?: RuntimeProviderConfig[];
@@ -295,6 +299,7 @@ async function runtimeFor(
   const pluginSkills = params.pluginSkills ?? [];
   const trustedExtensions = params.trustedExtensions ?? [];
   const subagents = params.subagents ?? [];
+  const subagentModelKeys = params.subagentModelKeys ?? [];
   const subagentProviders = Object.fromEntries(
     Object.entries(params.subagentProviders ?? {}).map(([key, pinned]) => [
       key,
@@ -332,7 +337,9 @@ async function runtimeFor(
     trustedExtensions,
     subagents,
     subagentProviders,
+    subagentModelKeys,
     projectInstructions: params.projectInstructions,
+    projectMemory: params.projectMemory,
     projectPath: params.projectPath,
     commandShell: params.commandShell,
     tokenSaver: params.tokenSaver,
@@ -390,10 +397,12 @@ async function runtimeFor(
     trustedExtensions,
     subagents,
     subagentProviders,
+    subagentModelKeys,
     projectPath: params.projectPath,
     projectInstructions: params.projectInstructions,
     tokenSaver: params.tokenSaver,
     fallbackProviders,
+    projectMemory: params.projectMemory,
     scratchDir:
       typeof params.scratchDir === "string" && params.scratchDir
         ? params.scratchDir
@@ -470,7 +479,11 @@ async function handle(method: string, params: any): Promise<unknown> {
         typeof params.userMessageId === "string" && params.userMessageId
           ? params.userMessageId
           : undefined;
-      const prompt: RuntimePrompt = { text: content, attachments };
+      const prompt: RuntimePrompt = {
+        text: content,
+        attachments,
+        ...(params.sessionMessage ? { sessionMessage: params.sessionMessage as SessionMessageOrigin } : {}),
+      };
       void runtime.prompt(prompt, userMessageId, turnId).catch((err) => {
         // Rejected-prompt path (pre-flight/transport failures). Streamed
         // provider errors surface via stopReason "error" and are classified
@@ -486,6 +499,20 @@ async function handle(method: string, params: any): Promise<unknown> {
         });
       });
       return { accepted: true, turnId };
+    }
+    case "agent.steeringContext":
+    case "agent.steer": {
+      const runtime = runtimes.get(String(params.sessionId ?? ""));
+      if (!runtime) {
+        throw Object.assign(new Error("No active turn to steer"), { errorCode: "TURN_NOT_FOUND" });
+      }
+      const expectedTurnId = String(params.expectedTurnId ?? "");
+      if (method === "agent.steeringContext") return runtime.steeringContext(expectedTurnId);
+      return runtime.steer(
+        { text: String(params.content ?? ""), attachments: params.attachments },
+        expectedTurnId,
+        params.message,
+      );
     }
     case "agent.executeApprovedPlan": {
       const sessionId = String(params.sessionId ?? "");
@@ -522,9 +549,13 @@ async function handle(method: string, params: any): Promise<unknown> {
     }
     case "agent.abort": {
       const sessionId = String(params.sessionId);
-      await hostProxy.call("plans.abort", { sessionId }).catch(() => undefined);
       const runtime = runtimes.get(sessionId);
-      if (runtime) await runtime.abort();
+      const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
+      if (turnId && runtime?.getStatus().currentTurnId !== turnId) return { ok: false, aborted: false };
+      await hostProxy.call("plans.abort", { sessionId, ...(turnId ? { turnId } : {}) }).catch(() => undefined);
+      if (runtime && runtimes.get(sessionId) === runtime && (!turnId || runtime.getStatus().currentTurnId === turnId)) {
+        await runtime.abort();
+      }
       return { ok: true };
     }
     case "agent.stop": {

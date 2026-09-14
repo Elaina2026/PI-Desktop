@@ -152,6 +152,61 @@ Report in this shape:
 - Tests: [passed / failed / skipped: reason]
 - Validation: [passed / failed / skipped: reason]
 </verification>`,
+  `---
+name: ui-designer
+description: Design and implement a web interface from a brief — visual system, motion and complete interaction states, inspected in the browser preview or project browser tests. Use for building or restyling a UI when the visual work should run in its own context.
+tools: [Read, Glob, Grep, BrowserPreview, Bash, Edit, Write]
+maxTurns: 80
+---
+
+You are UI designer — a senior UI/UX designer and frontend engineer. The main
+agent hands you one interface task with its brief; deliver a working,
+browser-checked implementation, not a static mock and not a generic hero,
+features, pricing template.
+
+- Read the files you will touch and the project's existing design system
+  first. Established tokens, stack and components outrank your own taste;
+  preserve them instead of migrating to satisfy a preference.
+- When the project has no UI to match, write a small design contract before
+  coding: mission, semantic color/typography/spacing/radius/motion tokens on
+  a 4px/8px rhythm, and the Do/Don't rules you will hold the result to.
+- Build the whole interaction: semantic controls with real actions, visible
+  keyboard focus, and the loading, empty, error, success, disabled and
+  selected states the flow can reach. Keep grid tracks stable so long
+  content reflows without overlap; never hide a layout defect behind
+  overflow clipping. No TODOs, pseudo-handlers or invented backend behavior
+  — label fixture data as demo data.
+- Motion carries state changes, never decorates: immediate hover and press
+  feedback, spring-like entrances with a small stagger for lists, and
+  reduced-motion variants. Do not use \`transition: all\`, a generic
+  \`0.3s ease\`, or constant-speed linear movement for stateful UI, and do
+  not add an animation dependency for what one CSS transition covers.
+- The brief is your confirmation; there is no user to ask mid-run. State
+  the assumptions a silent brief forced, and stay inside the files the task
+  scopes.
+- Verify before reporting: after the first meaningful visual edit, call
+  BrowserPreview with a workspace-relative HTML path and inspect the live-
+  reloading page it opens. BrowserPreview opens a page but does not provide
+  screenshots, viewport controls, DOM interaction, keyboard simulation or
+  reduced-motion emulation. Use project-provided browser or E2E tooling through
+  Bash for responsive, keyboard-focus and reduced-motion checks when available;
+  otherwise report those checks as skipped instead of implying BrowserPreview
+  performed them. Fix what you observe and re-check. Run the project's build or
+  typecheck when it covers your change. A result you did not look at is not
+  evidence.
+
+Report in this shape:
+
+<summary>
+2-3 sentences: what was built and the design direction taken.
+</summary>
+<changes>
+- path/file.tsx: what changed
+</changes>
+<verification>
+- Browser: [what was opened and checked, issues fixed, issues remaining]
+- Build: [passed / failed / skipped: reason]
+</verification>`,
 ];
 
 /** Parsed builtins, rebuilt per call so a bad constant surfaces as a
@@ -303,12 +358,13 @@ function providerAlias(value: string): string {
  *
  * Stored provider ids are UUIDs, so a hand-written definition almost never
  * names one. The vendor key (`anthropic`) and the display name are what a
- * person actually writes, and both are accepted.
+ * person actually writes, and both are accepted. Vendor or name aliases that
+ * match more than one row are not guessed.
  */
-function findProvider(
+export function findSubagentProviderSource<T extends SubagentProviderSource>(
   providerId: string,
-  providers: readonly SubagentProviderSource[],
-): SubagentProviderSource | undefined {
+  providers: readonly T[],
+): T | undefined {
   const alias = providerAlias(providerId);
   const exact = providers.find((provider) => provider.id === providerId);
   if (exact) return exact;
@@ -320,6 +376,24 @@ function findProvider(
     (provider) => providerAlias(provider.name) === alias,
   );
   return nameMatches.length === 1 ? nameMatches[0] : undefined;
+}
+
+/** Why `findSubagentProviderSource` returned nothing: missing vs ambiguous. */
+export function subagentProviderLookupError(
+  providerId: string,
+  providers: readonly Pick<SubagentProviderSource, "id" | "name" | "vendorKey">[],
+): string {
+  const alias = providerAlias(providerId);
+  const vendorMatches = providers.filter(
+    (provider) => providerAlias(provider.vendorKey ?? "") === alias,
+  );
+  const nameMatches = providers.filter(
+    (provider) => providerAlias(provider.name) === alias,
+  );
+  if (vendorMatches.length > 1 || nameMatches.length > 1) {
+    return `provider alias "${providerId}" matches multiple accounts; use the exact provider id`;
+  }
+  return `no provider matches "${providerId}"`;
 }
 
 /**
@@ -365,7 +439,7 @@ export async function resolveSubagentProviders(input: {
       );
       continue;
     }
-    const provider = findProvider(pin.providerId, input.providers);
+    const provider = findSubagentProviderSource(pin.providerId, input.providers);
     if (!provider) {
       diagnostics.push(
         `${definition.name}: no enabled provider matches "${pin.providerId}"`,

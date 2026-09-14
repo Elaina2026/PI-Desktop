@@ -5,14 +5,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_SUBAGENT_IDLE_TIMEOUT_SECONDS,
   MAX_SUBAGENT_PROVIDERS,
+  findSubagentPreset,
   subagentCanMutate,
   type SubagentDefinition,
 } from "@pi-desktop/shared";
 import {
   BUILTIN_SUBAGENT_DOCUMENTS,
+  findSubagentProviderSource,
   loadSubagentDefinitions,
   resolveSubagentProviders,
   subagentDefinitionDir,
+  subagentProviderLookupError,
   type SubagentProviderSource,
 } from "./subagent-definitions.js";
 import {
@@ -30,6 +33,7 @@ describe("builtin subagent documents", () => {
       "code-reviewer",
       "test-runner",
       "fixer",
+      "ui-designer",
     ]);
     expect(definitions).toHaveLength(BUILTIN_SUBAGENT_DOCUMENTS.length);
     for (const definition of definitions) {
@@ -37,15 +41,16 @@ describe("builtin subagent documents", () => {
       expect(definition.description.length).toBeGreaterThan(20);
       expect(definition.prompt.length).toBeGreaterThan(50);
     }
-    // Only `fixer` may write to the workspace; every other builtin is
-    // read-only (the shell delegate reads and runs commands, which is a
-    // permission prompt, not an edit). Builtins inherit the parent session's
-    // permission mode unless they explicitly opt into a narrower scope.
+    // Only `fixer` and `ui-designer` may write to the workspace; every other
+    // builtin is read-only (the shell delegate reads and runs commands, which
+    // is a permission prompt, not an edit). Builtins inherit the parent
+    // session's permission mode unless they explicitly opt into a narrower
+    // scope.
     const mutating = definitions.filter(
       (definition) =>
         definition.tools.includes("Write") || definition.tools.includes("Edit"),
     );
-    expect(mutating.map((d) => d.name)).toEqual(["fixer"]);
+    expect(mutating.map((d) => d.name)).toEqual(["fixer", "ui-designer"]);
     expect(mutating[0]?.permission ?? "inherit").toBe("inherit");
     const explorer = definitions.find((definition) => definition.name === "explorer")!;
     expect(explorer.tools).toEqual(["Read", "Glob", "Grep", "Bash"]);
@@ -56,6 +61,11 @@ describe("builtin subagent documents", () => {
     );
     expect(explorer.maxDurationSeconds).toBe(21_600);
     expect(definitions[2].tools).toContain("Bash");
+    const designer = definitions.find((definition) => definition.name === "ui-designer")!;
+    expect(designer.tools).toContain("BrowserPreview");
+    expect(designer.maxTurns).toBe(80);
+    expect(designer.description).toBe(findSubagentPreset("ui-designer")?.description);
+    expect(designer.prompt).toBe(findSubagentPreset("ui-designer")?.body.trim());
   });
 });
 
@@ -278,6 +288,20 @@ describe("resolveSubagentProviders", () => {
     expect(diagnostics).toEqual([
       'ambiguous: no enabled provider matches "anthropic"',
     ]);
+  });
+
+  it("matches a unique display name after an ambiguous vendor alias", () => {
+    const other = { ...providers[0], id: "33333333-3333-4333-8333-333333333333", name: "Other" };
+    expect(findSubagentProviderSource("anthropic", [...providers, other])?.id).toBe(providers[0].id);
+    expect(findSubagentProviderSource(other.id, [...providers, other])?.id).toBe(other.id);
+  });
+
+  it("does not guess when vendor and display name both collide", () => {
+    const other = { ...providers[0], id: "33333333-3333-4333-8333-333333333333" };
+    expect(findSubagentProviderSource("anthropic", [...providers, other])).toBeUndefined();
+    expect(subagentProviderLookupError("anthropic", [...providers, other])).toBe(
+      'provider alias "anthropic" matches multiple accounts; use the exact provider id',
+    );
   });
 
   it("resolves each distinct pin once and reuses the secret lookup", async () => {

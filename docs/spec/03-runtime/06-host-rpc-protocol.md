@@ -159,12 +159,13 @@ Rules:
    advertises `"a2a"`. A v10 host or client is rejected before the UI becomes
    interactive, so a mixed pair cannot call a missing domain.
 
-Protocol v11 is paired with host-core storage schema v14. Schema v12 had added
+Protocol v11 is paired with host-core storage schema v16. Schema v12 had added
 the A2A tables (`a2a_tasks`, `a2a_messages`, `a2a_artifacts`,
 `a2a_push_configs`) via `migrate_v11_to_v12`; `migrate_v12_to_v13` drops those
 tables, and v14 adds the plugin-session ownership sidecar and soft-delete
-column. A fresh database creates neither A2A tables nor unowned plugin-session
-rows. The schema version is an
+column. Schema v15 adds the Host-owned turn queue, and schema v16 adds the
+session collaboration ledger and its turn-queue binding. A fresh database
+creates neither A2A tables nor unowned plugin-session rows. The schema version is an
 internal persistence invariant, not an additional JSON-RPC field; the
 checkpoint architecture remains host-owned.
 
@@ -205,6 +206,13 @@ type ToolBudgetHealth = {
   by last-opened time; includes records materialized by session imports
 - `projects.create({ path })` — upserts a durable project record without
   changing the active workspace and returns the host-generated project id
+- `project.memory.get({ path })` — returns the durable memory for the canonical
+  project path, or an empty record when no memory has been saved
+- `project.memory.set({ path, entries })` — normalizes and stores visual memory
+  entries, derives readable `content`, and validates the 32 KiB limit. The
+  derived value is injected into that project's next runtime context as
+  user-provided context. `{ path, content }` remains supported for legacy
+  callers and returns a memory record without structured entries.
 
 ### Secrets
 - `secrets.set`
@@ -234,8 +242,10 @@ to later refresh and inference; the vendor picker does not collect them.
 ### Sessions
 - `session.list` — returns summaries with host-authoritative `messageCount`
   alongside the existing session metadata
-- `session.create` — accepts optional `thinkingLevel`; missing/null defaults
-  to `off`
+- `session.create` — accepts optional `thinkingLevel` and optional
+  `inheritPermissionFromSessionId`; when present, the host copies the existing
+  session's persisted permission mode atomically, while omission preserves the
+  existing `inherit` default. Missing/null thinking level defaults to `off`.
 - `session.fork` — accepts `sessionId`, an optional caller-provided display
   `title`, and optional `throughMessageId`; creates
   one independent session from the source's current active canonical
@@ -271,6 +281,14 @@ to later refresh and inference; the vendor picker does not collect them.
   `INVALID_PARAMS`; mode is `plan | goal | agent` and changing any session
   configuration is allowed only while idle and without a pending/queued/running
   Plan or Goal record
+- `session.moveProject({ sessionId, projectPath })` moves an idle session to a
+  project and returns `{ session }` carrying the canonical project path. It
+  upserts the project row and updates only `sessions.project_id` and
+  `updated_at`; transcript, revisions, artifacts, notifications, and scratch
+  data stay with the session. Blank ids or paths are `INVALID_PARAMS`, an
+  unknown session is `NOT_FOUND`, and a session with a running turn is
+  `CONFLICT` so a live agent never switches instruction roots mid-turn.
+  Additive RPC; no protocol version bump.
 - `session.appendMessage`
 - `session.saveInflightMessage` — Electron-main-only checkpoint of the
   assistant reply currently streaming, including the finished `message_end`
@@ -332,7 +350,12 @@ to later refresh and inference; the vendor picker does not collect them.
   last archive is lost. When the family is present in the durable transcript,
   the prefix in front of the restored branch is taken from there rather than
   from the caller. Surviving messages keep their owning `turn_id`
-- `session.beginTurn`
+- `session.beginTurn({ sessionId, providerId?, modelId?, sessionMessageId? })` —
+  starts one durable turn. When `sessionMessageId` is present, host-core
+  atomically verifies that the queued collaboration delivery targets this
+  session, rechecks its permission ceiling, claims the delivery, and binds the
+  new turn to its message id. A collaboration turn cannot be started from
+  caller-supplied replacement text.
 - `session.queuePush` / `session.queueList` / `session.queueRemove` — the
   Host-owned turn queue (D386 / ADR 0213, schema v15); push is idempotent per
   principal and key, bounded at eight entries per session
@@ -365,6 +388,39 @@ Electron main after plugin permission and manifest-source checks:
 - Successful plugin session mutations cause Electron main to emit one
   `sessionsChanged` renderer event; the renderer refreshes the session list,
   and plugins do not emit this UI synchronization event.
+
+Host-internal session collaboration methods are additive to protocol v11 and
+are called by Electron main only after the reviewed plugin gateway has checked
+the plugin permission and active Agent tool invocation. They are not renderer
+or general MCP operations:
+
+- `session.collaboration.spawn` — create a bounded Agent worker session that
+  inherits the source project's, thinking, and permission configuration, create
+  its first `task` delivery, and return the real target `sessionId` plus the
+  message record. Worker creation is limited per parent and plugin; a worker
+  cannot create another worker.
+- `session.collaboration.send` — enqueue a `task` or `message` delivery to an
+  existing Agent session. The host binds `sourceSessionId` and `sourceTurnId`
+  to the current plugin tool invocation, enforces idempotency, a target inbox
+  bound, the source permission ceiling, and a bounded autonomous hop count.
+- `session.collaboration.message` — read one durable delivery by message id for
+  Electron's dispatch and provenance paths.
+- `session.collaboration.status` / `session.collaboration.result` — return a
+  bounded status/result projection without loading a complete worker
+  transcript. `result` may select a delivery by `messageId` or `turnId`.
+- `session.collaboration.pending` — list queued completion callbacks for the
+  Electron drain; `fail` records a dispatch failure and creates the requested
+  failure callback once; `settle` derives the result from the persisted turn
+  and creates at most one completion callback.
+- `session.collaboration.cancel` — cancel queued deliveries or interrupt their
+  exact currently-bound turns while retaining the target session and history.
+
+The ledger is durable across a host restart. A queued entry with its
+`turn_queue.session_message_id` remains held for a new Agent Host controller;
+an unclaimed or running delivery is marked `interrupted` by the startup fence
+and is never replayed automatically. Transcript provenance is host-derived and
+cannot be forged or removed by `session.appendMessage` or transcript
+replacement.
 
 The host rejects unknown roles, non-RFC3339 or non-monotonic timestamps, and
 oversized/deep payloads. Tool values are sanitized for host-reserved keys. The

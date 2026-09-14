@@ -112,3 +112,15 @@ model to call the existing `Skill` tool with the validated id before answering.
 Only Skills active for the current project are listed or accepted, so project
 scope and plugin activation remain enforced at send time. If the Skill is no
 longer active, the text follows the normal unknown-slash prompt path.
+
+## 9. Ideographic comma opens the slash menu (D405)
+
+A Chinese IME produces `、` (U+3001) where the ASCII `/` is meant, so reaching
+the menu otherwise means switching input methods mid-sentence. When the composer
+is empty, a committed `、` as its first character is rewritten to `/` before
+trigger detection runs, and the ordinary slash menu opens with the same
+insertion, filtering, and send behavior described above.
+
+Only the first character of an empty draft is rewritten. A `、` anywhere else in
+the draft is ordinary punctuation and is never touched, and the alias has no
+effect on the `@` file menu.

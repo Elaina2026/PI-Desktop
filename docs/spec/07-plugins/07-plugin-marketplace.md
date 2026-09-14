@@ -34,6 +34,9 @@ The host is responsible for:
 - Default catalog URL: `https://raw.githubusercontent.com/vastsa/pi-desktop-plugins/main/catalog.json`
 - Package URLs may be absolute `https://` / `http://` / `file://`, or relative paths resolved against the catalog URL
 - HTTPS fetch uses `curl` in host-core
+- curl diagnostics are decoded as UTF-8 first and as the active Windows ANSI
+  code page when needed; a network failure remains `PLUGIN_NETWORK`, but its
+  localized message must not cross the RPC boundary as replacement characters
 
 ### Catalog source selection
 
@@ -68,6 +71,22 @@ available as offline fixtures and direct install targets for plugin development,
 but the desktop client filters them before updating its marketplace state. They
 do not appear as cards, categories, or search results. An already-installed
 sample remains visible in Installed so it can still be disabled or uninstalled.
+
+### Bundled plugins in the catalog
+
+An entry whose ID a build also ships from `resources/plugins` stays visible: the
+card resolves against the bundled row, reports the installed version, and offers
+an update when the catalog has a strictly newer one. That is the supported way
+for a user to take a newer upstream release without waiting for an app update
+(ADR 0241). Only a strictly newer version counts as an update — equality is not
+one, and neither is an older catalog entry, which would be a downgrade wearing
+the update affordance.
+
+Updating a bundled plugin keeps it bundled. Removal stays refused by ID against
+what the build ships, not by the row's `source`, so an updated plugin is still
+not the user's to uninstall; and the installed version survives the next launch
+unless this build ships a strictly newer one, so an app update still reaches a
+user who never installed anything.
 
 ### Phase C (partial ✅)
 - Auto-update policy + permission-diff gating implemented

@@ -346,7 +346,7 @@ mapping is fixed:
 | `error` (terminal) | `turn.failed` | yes | Carries the normalized `AppError` |
 | `turn_start`, `turn_end`, `status` | `turn.activity` | no | Model rounds and activity phases such as `waiting-model`, `compacting`, `waiting-subagents` |
 | `message_start` | `item.started` | yes | `itemType: "message"` |
-| `message_update` | `item.delta` | no | Delta text and thinking; content is complete in `item.completed` |
+| `message_update` | `item.delta` | no | `stream: \"delta\"` plus `deltaText`/`deltaThinking`; content is complete in `item.completed` (D412) |
 | `message_end` | `item.completed` | yes | Full `UiMessage` |
 | `tool_start` | `item.started` | yes | `itemType: "tool"` |
 | `tool_update` | `tool.progress` | no | Partial results are complete in `item.completed` |
