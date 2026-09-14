@@ -17,6 +17,8 @@ import {
   IconArchive,
   IconBookOpen,
   IconBot,
+  IconCheck,
+  IconChevronDown,
   IconChevronLeft,
   IconDownload,
   IconFileText,
@@ -28,6 +30,7 @@ import {
   IconSparkles,
 } from "../../components/icons";
 import { Button, cx } from "../../components/ui";
+import { AnchoredMenu } from "../../components/settings/AnchoredMenu";
 import { ModelConfigPage } from "../../components/settings/ModelConfigPage";
 import { UsagesPage } from "../../components/settings/UsagesPage";
 import { KeyboardShortcutsSection } from "../../components/settings/KeyboardShortcutsSection";
@@ -80,6 +83,8 @@ export function SettingsPage() {
   const platform = (window.piDesktop?.platform ?? "darwin") as ShortcutPlatform;
 
   const [query, setQuery] = useState("");
+  const [defaultModeMenuOpen, setDefaultModeMenuOpen] = useState(false);
+  const [defaultPermissionMenuOpen, setDefaultPermissionMenuOpen] = useState(false);
   const [recoveringSettings, setRecoveringSettings] = useState(!settings);
   const [settingsRecoveryFailed, setSettingsRecoveryFailed] = useState(false);
 
@@ -305,8 +310,84 @@ export function SettingsPage() {
                   title={t("settings.permissionMode")}
                   description={t("settings.permissionModeDesc")}
                 >
+                  <AnchoredMenu
+                    className="settings-theme-anchor"
+                    open={defaultPermissionMenuOpen}
+                    onClose={() => setDefaultPermissionMenuOpen(false)}
+                    menuClassName="settings-theme-menu"
+                    label={t("settings.permissionMode")}
+                    align="end"
+                    trigger={(ref) => (
+                      <button
+                        ref={ref}
+                        type="button"
+                        className="settings-theme-trigger"
+                        aria-haspopup="listbox"
+                        aria-expanded={defaultPermissionMenuOpen}
+                        aria-label={t("settings.permissionMode")}
+                        onClick={() => setDefaultPermissionMenuOpen((open) => !open)}
+                      >
+                        <span className="settings-theme-trigger-label">
+                          {t(
+                            settings.defaultPermissionMode === "accept-edits"
+                              ? "settings.permissionModeAcceptEdits"
+                              : settings.defaultPermissionMode === "auto"
+                                ? "settings.permissionModeAuto"
+                                : "settings.permissionModeAsk",
+                          )}
+                        </span>
+                        <IconChevronDown size={14} aria-hidden />
+                      </button>
+                    )}
+                  >
+                    <div className="settings-theme-results">
+                      <ul className="settings-theme-list">
+                        {(["ask", "accept-edits", "auto"] as const).map((candidate) => {
+                          const isCurrent =
+                            (settings.defaultPermissionMode ?? "ask") === candidate;
+                          return (
+                            <li key={candidate}>
+                              <button
+                                type="button"
+                                className={cx(
+                                  "settings-theme-option",
+                                  isCurrent && "is-current is-active",
+                                )}
+                                onClick={() => {
+                                  setDefaultPermissionMenuOpen(false);
+                                  void saveSettings({ defaultPermissionMode: candidate });
+                                }}
+                              >
+                                <div className="settings-theme-option-copy">
+                                  <span className="settings-theme-option-title">
+                                    {t(
+                                      candidate === "accept-edits"
+                                        ? "settings.permissionModeAcceptEdits"
+                                        : candidate === "auto"
+                                          ? "settings.permissionModeAuto"
+                                          : "settings.permissionModeAsk",
+                                    )}
+                                  </span>
+                                  <span className="settings-theme-option-hint">
+                                    {candidate === "ask"
+                                      ? t("settings.permissionAskHint", "Always ask for confirmation before tools/edits")
+                                      : candidate === "accept-edits"
+                                        ? t("settings.permissionAcceptEditsHint", "Automatically accept file edits, ask for commands")
+                                        : t("settings.permissionAutoHint", "Bypass prompts and execute autonomously")}
+                                  </span>
+                                </div>
+                                {isCurrent ? <IconCheck size={14} /> : null}
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  </AnchoredMenu>
                   <select
-                    className="field-select"
+                    className="sr-only"
+                    tabIndex={-1}
+                    aria-hidden="true"
                     aria-label={t("settings.permissionMode")}
                     value={settings.defaultPermissionMode ?? "ask"}
                     onChange={(e) =>
@@ -326,9 +407,85 @@ export function SettingsPage() {
 
               <SettingsCard title={t("settings.defaultsTitle")}>
                 <SettingsRow title={t("settings.mode")} description={t("settings.modeDesc")}>
+                  <AnchoredMenu
+                    className="settings-theme-anchor"
+                    open={defaultModeMenuOpen}
+                    onClose={() => setDefaultModeMenuOpen(false)}
+                    menuClassName="settings-theme-menu"
+                    label={t("settings.mode")}
+                    align="end"
+                    trigger={(ref) => (
+                      <button
+                        ref={ref}
+                        type="button"
+                        className="settings-theme-trigger"
+                        aria-haspopup="listbox"
+                        aria-expanded={defaultModeMenuOpen}
+                        aria-label={t("settings.mode")}
+                        onClick={() => setDefaultModeMenuOpen((open) => !open)}
+                      >
+                        <span className="settings-theme-trigger-label">
+                          {t(
+                            settings.defaultMode === "plan"
+                              ? "settings.modePlan"
+                              : settings.defaultMode === "goal"
+                                ? "settings.modeGoal"
+                                : "settings.modeAgent",
+                          )}
+                        </span>
+                        <IconChevronDown size={14} aria-hidden />
+                      </button>
+                    )}
+                  >
+                    <div className="settings-theme-results">
+                      <ul className="settings-theme-list">
+                        {(["agent", "plan", "goal"] as const).map((candidate) => {
+                          const isCurrent =
+                            (settings.defaultMode ?? "agent") === candidate;
+                          return (
+                            <li key={candidate}>
+                              <button
+                                type="button"
+                                className={cx(
+                                  "settings-theme-option",
+                                  isCurrent && "is-current is-active",
+                                )}
+                                onClick={() => {
+                                  setDefaultModeMenuOpen(false);
+                                  const value = candidate;
+                                  void saveSettings({ defaultMode: value });
+                                }}
+                              >
+                                <div className="settings-theme-option-copy">
+                                  <span className="settings-theme-option-title">
+                                    {t(
+                                      candidate === "plan"
+                                        ? "settings.modePlan"
+                                        : candidate === "goal"
+                                          ? "settings.modeGoal"
+                                          : "settings.modeAgent",
+                                    )}
+                                  </span>
+                                  <span className="settings-theme-option-hint">
+                                    {candidate === "agent"
+                                      ? t("settings.modeAgentDesc", "Autonomous coding agent with full capability")
+                                      : candidate === "plan"
+                                        ? t("settings.modePlanDesc", "Formulate implementation plans for review")
+                                        : t("settings.modeGoalDesc", "Goal-directed execution with automated approvals")}
+                                  </span>
+                                </div>
+                                {isCurrent ? <IconCheck size={14} /> : null}
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  </AnchoredMenu>
                   <div
-                    className="settings-segment"
+                    className="sr-only"
                     role="group"
+                    aria-hidden="true"
                     aria-label={t("settings.mode")}
                   >
                     {([
@@ -339,11 +496,6 @@ export function SettingsPage() {
                       <button
                         key={value}
                         type="button"
-                        className={cx(
-                          "settings-segment-item",
-                          settings.defaultMode === value && "active",
-                        )}
-                        aria-pressed={settings.defaultMode === value}
                         onClick={() => void saveSettings({ defaultMode: value })}
                       >
                         {t(labelKey)}

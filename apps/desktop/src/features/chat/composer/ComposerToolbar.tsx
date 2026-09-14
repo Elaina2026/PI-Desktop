@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import type { TFunction } from "i18next";
 import {
   keybindingDisplayParts,
@@ -105,6 +105,7 @@ export function ComposerToolbar({
   abort,
   submit,
 }: ComposerToolbarProps) {
+  const [modeOpen, setModeOpen] = useState(false);
   const platform = (window.piDesktop?.platform ?? "darwin") as ShortcutPlatform;
   const steeringShortcut = keybindingDisplayParts("Alt+Enter", platform).join("+");
   return (
@@ -118,6 +119,7 @@ export function ComposerToolbar({
             ariaLabel={t("chat.addFiles")}
             disabled={controlsBlocked || pasting}
             onClick={() => {
+              setModeOpen(false);
               setPermissionOpen(false);
               void pickAndAttach();
             }}
@@ -134,6 +136,7 @@ export function ComposerToolbar({
               ariaLabel={t("chat.addImages", "Đính kèm hình ảnh")}
               disabled={controlsBlocked || pasting}
               onClick={() => {
+                setModeOpen(false);
                 setPermissionOpen(false);
                 void pickAndAttachPhotos();
               }}
@@ -142,39 +145,78 @@ export function ComposerToolbar({
             </TooltipButton>
           </div>
         ) : null}
-        <TooltipButton
-          type="button"
-          className="icon-btn mode-chip composer-mode-chip"
-          data-mode={mode}
-          data-planning={planningLive ? "true" : undefined}
-          tooltip={planningLive ? t(`${mode}.planning`) : t("settings.mode")}
-          ariaLabel={planningLive ? t(`${mode}.planning`) : t("settings.mode")}
-          disabled={controlsBlocked}
-          onClick={async () => {
-            modelMenu.setOpen(false);
-            setPermissionOpen(false);
-            const next: Mode = nextMode(mode);
-            try {
-              await configureActiveSession({
-                mode: next,
-                providerId,
-                modelId,
-                thinkingLevel,
-              });
-            } catch (error) {
-              showToast(error instanceof Error ? error.message : String(error), {
-                variant: "error",
-              });
-            }
-          }}
+        <AnchoredMenu
+          className="composer-mode-anchor"
+          open={modeOpen}
+          onClose={() => setModeOpen(false)}
+          menuClassName="composer-permission-menu composer-mode-menu"
+          label={t("settings.mode")}
+          role="menu"
+          align="start"
+          side="top"
+          trigger={(ref) => (
+            <TooltipButton
+              ref={ref}
+              type="button"
+              className="icon-btn mode-chip composer-mode-chip"
+              data-mode={mode}
+              data-open={modeOpen ? "true" : undefined}
+              data-planning={planningLive ? "true" : undefined}
+              tooltip={planningLive ? t(`${mode}.planning`) : t("settings.mode")}
+              ariaLabel={planningLive ? t(`${mode}.planning`) : t("settings.mode")}
+              disabled={controlsBlocked}
+              aria-haspopup="menu"
+              aria-expanded={modeOpen}
+              onClick={() => {
+                modelMenu.setOpen(false);
+                setPermissionOpen(false);
+                setModeOpen((open) => !open);
+              }}
+            >
+              <span className="composer-mode-chip-face" key={mode}>
+                <ModeIcon mode={mode} />
+                <span className="composer-mode-chip-label text-sm">
+                  {t(MODE_LABEL_KEYS[mode])}
+                </span>
+                <IconChevronDown size={12} />
+              </span>
+            </TooltipButton>
+          )}
         >
-          <span className="composer-mode-chip-face" key={mode}>
-            <ModeIcon mode={mode} />
-            <span className="composer-mode-chip-label text-sm">
-              {t(MODE_LABEL_KEYS[mode])}
-            </span>
-          </span>
-        </TooltipButton>
+          {(["agent", "plan", "goal"] as const).map((candidate) => (
+            <button
+              key={candidate}
+              type="button"
+              role="menuitemradio"
+              aria-checked={mode === candidate}
+              disabled={controlsBlocked}
+              className={`composer-plus-item ${mode === candidate ? "active" : ""}`}
+              onClick={async () => {
+                setModeOpen(false);
+                try {
+                  await configureActiveSession({
+                    mode: candidate,
+                    providerId,
+                    modelId,
+                    thinkingLevel,
+                  });
+                } catch (error) {
+                  showToast(error instanceof Error ? error.message : String(error), {
+                    variant: "error",
+                  });
+                }
+              }}
+            >
+              <span className="composer-model-thinking-icon">
+                <ModeIcon mode={candidate} />
+              </span>
+              <span className="flex-1 text-left">
+                {t(MODE_LABEL_KEYS[candidate])}
+              </span>
+              {mode === candidate ? <IconCheck size={13} /> : null}
+            </button>
+          ))}
+        </AnchoredMenu>
         <AnchoredMenu
           className="composer-permission"
           open={permissionOpen && mode !== "goal"}
@@ -208,6 +250,7 @@ export function ComposerToolbar({
               disabled={controlsBlocked || mode === "goal"}
               onClick={() => {
                 modelMenu.setOpen(false);
+                setModeOpen(false);
                 setPermissionOpen((open) => !open);
               }}
             >
