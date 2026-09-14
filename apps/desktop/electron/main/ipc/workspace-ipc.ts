@@ -1,4 +1,4 @@
-import { dialog, shell } from "electron";
+import { BrowserWindow, dialog, shell } from "electron";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
@@ -290,9 +290,14 @@ export function registerWorkspaceIpc({
   );
 
   handleWithEvent(IPC.invoke.composerPickFiles, async (event) => {
-    const result = await dialog.showOpenDialog({
-      properties: ["openFile", "multiSelections"],
-    });
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const result = win
+      ? await dialog.showOpenDialog(win, {
+          properties: ["openFile", "multiSelections"],
+        })
+      : await dialog.showOpenDialog({
+          properties: ["openFile", "multiSelections"],
+        });
     if (result.canceled || result.filePaths.length === 0) {
       return { token: null, canceled: true };
     }
@@ -303,12 +308,54 @@ export function registerWorkspaceIpc({
   });
 
   handleWithEvent(IPC.invoke.composerPickPhotos, async (event) => {
-    const result = await dialog.showOpenDialog({
-      properties: ["openFile", "multiSelections"],
-      filters: [
-        { name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "heic", "tif", "tiff"] },
-      ],
-    });
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const result = win
+      ? await dialog.showOpenDialog(win, {
+          title: "Select Images",
+          properties: ["openFile", "multiSelections"],
+          filters: [
+            {
+              name: "Images",
+              extensions: [
+                "png",
+                "jpg",
+                "jpeg",
+                "gif",
+                "webp",
+                "heic",
+                "bmp",
+                "avif",
+                "svg",
+                "tif",
+                "tiff",
+              ],
+            },
+            { name: "All Files", extensions: ["*"] },
+          ],
+        })
+      : await dialog.showOpenDialog({
+          title: "Select Images",
+          properties: ["openFile", "multiSelections"],
+          filters: [
+            {
+              name: "Images",
+              extensions: [
+                "png",
+                "jpg",
+                "jpeg",
+                "gif",
+                "webp",
+                "heic",
+                "bmp",
+                "avif",
+                "svg",
+                "tif",
+                "tiff",
+              ],
+            },
+            { name: "All Files", extensions: ["*"] },
+          ],
+        });
     if (result.canceled || result.filePaths.length === 0) {
       return { token: null, canceled: true };
     }

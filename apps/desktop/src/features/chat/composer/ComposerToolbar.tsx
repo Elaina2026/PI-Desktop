@@ -130,8 +130,8 @@ export function ComposerToolbar({
             <TooltipButton
               type="button"
               className="icon-btn"
-              tooltip={t("chat.addImages", "Add images")}
-              ariaLabel={t("chat.addImages", "Add images")}
+              tooltip={t("chat.addImages", "Đính kèm hình ảnh")}
+              ariaLabel={t("chat.addImages", "Đính kèm hình ảnh")}
               disabled={controlsBlocked || pasting}
               onClick={() => {
                 setPermissionOpen(false);
