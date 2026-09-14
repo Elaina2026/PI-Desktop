@@ -59,14 +59,14 @@ export function UsagesPage() {
     "gemini-3.8-flash";
 
   const inFlightRef = useRef(false);
-  const loadData = async (silent = false) => {
+  const loadData = async (silent = false, force = false) => {
     if (inFlightRef.current) return;
     inFlightRef.current = true;
     if (!silent) setLoading(true);
     setError(false);
     try {
       const [sumRes, histRes] = await Promise.all([
-        api.getModelUsageSummary().catch(() => null),
+        api.getModelUsageSummary({ force }).catch(() => null),
         api.getTokenUsageHistory({ bucket: "day" }).catch(() => null),
       ]);
       if (sumRes) setSummary(sumRes);
@@ -85,13 +85,13 @@ export function UsagesPage() {
   useEffect(() => {
     void loadData();
 
-    // Auto-refresh when sessions / messages update (debounced by 3s)
+    // Auto-refresh when sessions / messages update (debounced by 1s)
     let timer: ReturnType<typeof setTimeout> | null = null;
     const unsub = api.onSessionsChanged(() => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        void loadData(true);
-      }, 3000);
+        void loadData(true, true);
+      }, 1000);
     });
     return () => {
       if (timer) clearTimeout(timer);
@@ -119,13 +119,16 @@ export function UsagesPage() {
     };
   }, [timeframesMap, selectedTimeframe]);
 
-  // Models used in selected timeframe (or allTime)
+  // Models used in selected timeframe
   const currentModels: ModelUsageSummaryItem[] = useMemo(() => {
     if (currentTfData.models && currentTfData.models.length > 0) {
       return currentTfData.models;
     }
-    return summary?.models ?? [];
-  }, [currentTfData, summary]);
+    if (selectedTimeframe === "allTime") {
+      return summary?.models ?? [];
+    }
+    return [];
+  }, [currentTfData, selectedTimeframe, summary]);
 
   // Top 5 models for the right-hand panel
   const topModels = useMemo(() => {
@@ -201,7 +204,7 @@ export function UsagesPage() {
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => void loadData()}
+            onClick={() => void loadData(false, true)}
             disabled={loading}
             aria-label={t("settings.usageRefresh")}
           >

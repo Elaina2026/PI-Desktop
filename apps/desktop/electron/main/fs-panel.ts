@@ -1,4 +1,6 @@
+import { existsSync } from "node:fs";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { FsEntry, FsImageDataUrlResult, FsReadResult } from "@pi-desktop/shared";
 
@@ -78,8 +80,13 @@ export function resolveOpenablePath(
   workspaceRoot: string | null | undefined,
   extraRoots: readonly string[] = [],
 ): string | null {
-  const raw = String(path ?? "").trim();
-  if (!raw || raw.startsWith("~")) return null;
+  let raw = String(path ?? "").trim();
+  if (!raw) return null;
+  if (raw.startsWith("~/") || raw.startsWith("~\\")) {
+    raw = join(homedir(), raw.slice(2));
+  } else if (raw.startsWith("~")) {
+    raw = join(homedir(), raw.slice(1));
+  }
 
   const allowed = [
     ...(workspaceRoot ? [resolve(workspaceRoot)] : []),
@@ -105,10 +112,38 @@ export function resolveOpenablePath(
   } else if (isAbsolute(raw)) {
     candidate = resolve(raw);
   } else {
-    if (!workspaceRoot) return null;
-    const relativePath = resolveWithinRoot(workspaceRoot, raw);
-    if (!relativePath) return null;
-    candidate = relativePath;
+    // Relative path or subagent/skill file
+    const wsCandidate = workspaceRoot ? resolveWithinRoot(workspaceRoot, raw) : null;
+    if (wsCandidate && existsSync(wsCandidate)) {
+      candidate = wsCandidate;
+    } else {
+      let matchedExtra: string | null = null;
+      for (const extraRoot of extraRoots) {
+        if (!extraRoot) continue;
+        const directCandidate = resolveWithinRoot(extraRoot, raw);
+        if (directCandidate && existsSync(directCandidate)) {
+          matchedExtra = directCandidate;
+          break;
+        }
+        const subagentCandidate = resolveWithinRoot(join(extraRoot, "subagents"), raw);
+        if (subagentCandidate && existsSync(subagentCandidate)) {
+          matchedExtra = subagentCandidate;
+          break;
+        }
+        const skillCandidate = resolveWithinRoot(join(extraRoot, "skills"), raw);
+        if (skillCandidate && existsSync(skillCandidate)) {
+          matchedExtra = skillCandidate;
+          break;
+        }
+      }
+      if (matchedExtra) {
+        candidate = matchedExtra;
+      } else if (wsCandidate) {
+        candidate = wsCandidate;
+      } else {
+        return null;
+      }
+    }
   }
 
   return allowed.some((root) => pathIsWithin(root, candidate)) ? candidate : null;

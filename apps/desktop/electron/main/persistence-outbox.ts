@@ -77,6 +77,10 @@ export class PersistenceOutbox {
     return this.entries.length;
   }
 
+  getEntries(): readonly MessageAppend[] {
+    return this.entries;
+  }
+
   private async flushLoop(getHost: () => HostProcess | null): Promise<void> {
     while (this.entries.length > 0) {
       const current = this.entries[0];

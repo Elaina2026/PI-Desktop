@@ -877,9 +877,10 @@ export const api = {
     invoke<{ ok: boolean; count?: number; reason?: string }>(IPC.invoke.memoryRemember, { note, sessionId }),
   forgetMemory: (sessionId?: string, clearAll?: boolean) =>
     invoke<{ ok: boolean }>(IPC.invoke.memoryForget, { sessionId, clearAll }),
-  getModelUsageSummary: () =>
+  getModelUsageSummary: (options?: { force?: boolean }) =>
     invoke<import("@pi-desktop/shared").ModelUsageSummaryResult>(
       IPC.invoke.statsGetModelUsageSummary,
+      options,
     ),
   getTokenUsageHistory: (query?: { startDate?: number; endDate?: number; bucket?: "day" | "week" | "month" }) =>
     invoke<import("@pi-desktop/shared").TokenUsageHistoryResult>(

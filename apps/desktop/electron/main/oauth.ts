@@ -475,8 +475,30 @@ export class VendorOAuth {
       } catch {}
     }
 
+    if (!cred.projectId || cred.projectId === "aicode-consumers") {
+      try {
+        const appData = process.env.APPDATA;
+        if (appData) {
+          const dbPath = path.join(appData, "9router", "db", "data.sqlite");
+          if (fs.existsSync(dbPath)) {
+            const { DatabaseSync } = await import("node:sqlite");
+            const db = new DatabaseSync(dbPath, { readOnly: true });
+            if (cred.email) {
+              const row = db.prepare("SELECT data FROM providerConnections WHERE provider='antigravity' AND email=? LIMIT 1").get(cred.email) as { data?: string } | undefined;
+              if (row?.data) {
+                const parsed = JSON.parse(row.data);
+                if (typeof parsed.projectId === "string" && parsed.projectId.trim()) {
+                  cred.projectId = parsed.projectId.trim();
+                }
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+
     try {
-      const quotaRes = await fetch(
+      let quotaRes = await fetch(
         "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
         {
           method: "POST",
@@ -488,6 +510,25 @@ export class VendorOAuth {
           body: JSON.stringify({ project: cred.projectId || "" }),
         },
       );
+
+      if (quotaRes.status === 401 && cred.refresh_token) {
+        try {
+          const auth = await this.resolveAntigravityAuth(providerId);
+          token = auth.apiKey || token;
+          quotaRes = await fetch(
+            "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+                "User-Agent": "antigravity/ide/2.11.0 darwin/arm64",
+              },
+              body: JSON.stringify({ project: cred.projectId || "" }),
+            },
+          );
+        } catch {}
+      }
 
       if (quotaRes.ok) {
         const data = (await quotaRes.json()) as any;
@@ -503,11 +544,13 @@ export class VendorOAuth {
             const groupPrefix = isGemini ? "Gemini" : "Claude/GPT";
             if (Array.isArray(group.buckets)) {
               for (const b of group.buckets) {
-                const rem = typeof b.remainingPercentage === "number"
+                const isDisabled = !!b.disabled;
+                const rawRem = typeof b.remainingPercentage === "number"
                   ? b.remainingPercentage
                   : typeof b.remainingFraction === "number"
                     ? Math.round(b.remainingFraction * 100)
                     : 100;
+                const rem = isDisabled ? 0 : rawRem;
                 let resetInSeconds: number | undefined;
                 if (b.resetTime) {
                   const diff = new Date(b.resetTime).getTime() - Date.now();
@@ -521,10 +564,11 @@ export class VendorOAuth {
                   remainingPercentage: rem,
                   resetTime: b.resetTime,
                   resetInSeconds,
-                  disabled: !!b.disabled,
+                  disabled: isDisabled,
+                  isLocked: isDisabled,
                 });
 
-                if (!b.disabled && rem < lowestPercentage) {
+                if (rem < lowestPercentage) {
                   lowestPercentage = rem;
                   lowestResetTime = b.resetTime || "";
                   lowestResetInSeconds = resetInSeconds;

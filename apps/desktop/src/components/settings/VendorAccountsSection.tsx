@@ -68,7 +68,7 @@ function providerIsReady(provider: ProviderPublic, excludedId?: string): boolean
 }
 
 export function VendorAccountsSection() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const providers = useAppStore((s) => s.providers);
   const settings = useAppStore((s) => s.settings);
   const refreshProviders = useAppStore((s) => s.refreshProviders);
@@ -135,6 +135,14 @@ export function VendorAccountsSection() {
         void fetchAccountQuota(entry.account.providerId);
       }
     }
+    const interval = setInterval(() => {
+      for (const entry of accounts) {
+        if (entry.account.connected) {
+          void fetchAccountQuota(entry.account.providerId);
+        }
+      }
+    }, 30_000);
+    return () => clearInterval(interval);
   }, [accounts, fetchAccountQuota, quotas]);
 
   const removeAccount = async (entry: AccountEntry) => {
@@ -347,8 +355,10 @@ export function VendorAccountsSection() {
                                   >
                                     <span>
                                       {b.name}:{" "}
-                                      <strong style={{ color: b.disabled ? "var(--color-text-subtle, #888)" : "var(--color-text-normal, #ddd)" }}>
-                                        {b.disabled ? "Inactive" : `${b.remainingPercentage}%`}
+                                      <strong style={{ color: b.disabled ? "var(--color-text-subtle, #888)" : b.remainingPercentage <= 15 ? "#ef4444" : "var(--color-text-normal, #ddd)" }}>
+                                        {b.disabled
+                                          ? (i18n.language === "vi" ? "0% (Đã khóa / Hết hạn mức)" : "0% (Locked / Weekly Exhausted)")
+                                          : (i18n.language === "vi" ? `${b.remainingPercentage}% còn lại` : `${b.remainingPercentage}% remaining`)}
                                       </strong>
                                     </span>
                                     {b.resetInSeconds && !b.disabled ? (
@@ -369,9 +379,9 @@ export function VendorAccountsSection() {
                                     <div
                                       style={{
                                         height: "100%",
-                                        width: `${Math.min(100, Math.max(0, b.remainingPercentage))}%`,
+                                        width: `${b.disabled ? 0 : Math.min(100, Math.max(0, b.remainingPercentage))}%`,
                                         backgroundColor: b.disabled
-                                          ? "rgba(255, 255, 255, 0.2)"
+                                          ? "rgba(255, 255, 255, 0.15)"
                                           : b.remainingPercentage > 40
                                             ? "#22c55e"
                                             : b.remainingPercentage > 15
@@ -399,7 +409,9 @@ export function VendorAccountsSection() {
                                   Quota:{" "}
                                   <strong style={{ color: "var(--color-text-normal, #ddd)" }}>
                                     {quotas[account.providerId].remainingPercentage !== undefined
-                                      ? `${quotas[account.providerId].remainingPercentage}% remaining`
+                                      ? (i18n.language === "vi"
+                                          ? `${quotas[account.providerId].remainingPercentage}% còn lại`
+                                          : `${quotas[account.providerId].remainingPercentage}% remaining`)
                                       : "Active"}
                                   </strong>
                                 </span>

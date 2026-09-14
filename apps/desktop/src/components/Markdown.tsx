@@ -875,6 +875,30 @@ const Block = memo(function MarkdownBlock({
   );
 });
 
+function sanitizeSubagentXmlTags(source: string): string {
+  if (!source) return "";
+
+  // Split by code fences and inline code so we never alter intentional code blocks
+  const parts = source.split(/(```[\s\S]*?```|`[^`\n]+`)/g);
+  return parts
+    .map((part, idx) => {
+      // Odd indexes are code fences or inline code
+      if (idx % 2 === 1) return part;
+
+      // Clean known subagent wrapper tags in regular markdown text
+      return part
+        .replace(/<verdict>([\s\S]*?)<\/verdict>/gi, "\n\n**Verdict:** $1\n\n")
+        .replace(/<\/?(?:verdict|review_report)>/gi, "")
+        .replace(/<vuln\s+id=["']([^"']+)["'][^>]*>/gi, "\n\n**Vulnerability [$1]:**\n")
+        .replace(/<\/?vuln>/gi, "")
+        .replace(/<finding(?:\s+id=["']([^"']+)["'])?[^>]*>/gi, (_m, id) =>
+          id ? `\n\n**Finding [${id}]:**\n` : "\n\n**Finding:**\n",
+        )
+        .replace(/<\/?finding>/gi, "");
+    })
+    .join("");
+}
+
 export const Markdown = memo(function Markdown({
   source,
   renderDiagrams = true,
@@ -886,7 +910,8 @@ export const Markdown = memo(function Markdown({
   baseDir?: string;
 }) {
   const workspaceRoot = useAppStore((s) => s.workspace?.path);
-  const blocks = useBlocks(source);
+  const sanitizedSource = useMemo(() => sanitizeSubagentXmlTags(source), [source]);
+  const blocks = useBlocks(sanitizedSource);
   return (
     <MarkdownBaseDirContext.Provider value={baseDir ?? ""}>
       {blocks.map((raw, i) => (

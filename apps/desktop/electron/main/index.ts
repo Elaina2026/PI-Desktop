@@ -903,6 +903,10 @@ const MEMORY_EXTRACT_EVERY_N_TURNS = 3;
 let cachedModelUsageSummary: any = null;
 let cachedModelUsageSummaryTimestamp = 0;
 const MODEL_USAGE_CACHE_TTL_MS = 20_000;
+function invalidateModelUsageSummaryCache() {
+  cachedModelUsageSummary = null;
+  cachedModelUsageSummaryTimestamp = 0;
+}
 let inFlightModelUsageSummaryPromise: Promise<any> | null = null;
 const emitBrowserState = (state: BrowserState) => {
   sendToRenderer(IPC.event.browserState, state);
@@ -1028,11 +1032,7 @@ async function ensureSessionProject(sessionId: string): Promise<string | null> {
   return fallback ?? null;
 }
 
-function getPlanDirectory(workspacePath?: string | null): string {
-  const ws = workspacePath || currentWorkspacePath();
-  if (ws) {
-    return join(ws, ".pi-desktop", "plans");
-  }
+function getPlanDirectory(_workspacePath?: string | null): string {
   return join(dataDir, "plans");
 }
 
@@ -1040,15 +1040,15 @@ async function savePlanToDisk(
   title: string,
   markdown: string,
   preferredFilename?: string,
-  workspacePath?: string | null,
+  _workspacePath?: string | null,
 ): Promise<{ path: string; filename: string; relativePath: string }> {
-  const dir = getPlanDirectory(workspacePath);
+  const dir = join(dataDir, "plans");
   if (!existsSync(dir)) {
     await mkdir(dir, { recursive: true });
   }
-  const globalDir = join(dataDir, "plans");
-  if (!existsSync(globalDir)) {
-    await mkdir(globalDir, { recursive: true });
+  const globalPiDir = join(homedir(), ".pi", "plan");
+  if (!existsSync(globalPiDir)) {
+    await mkdir(globalPiDir, { recursive: true }).catch(() => undefined);
   }
 
   let filename = preferredFilename?.trim();
@@ -1069,41 +1069,25 @@ async function savePlanToDisk(
   const filePath = join(dir, filename);
   await writeFile(filePath, markdown, "utf8");
 
-  const globalFilePath = join(globalDir, filename);
-  await writeFile(globalFilePath, markdown, "utf8").catch(() => undefined);
-
-  const ws = workspacePath || currentWorkspacePath();
-  if (ws) {
-    const legacyPiPlanDir = join(ws, ".pi", "plan");
-    if (existsSync(legacyPiPlanDir)) {
-      try {
-        const files = await readdir(legacyPiPlanDir);
-        for (const f of files) {
-          if (f.endsWith(".md")) {
-            const src = join(legacyPiPlanDir, f);
-            const dst = join(dir, f);
-            if (!existsSync(dst)) {
-              await copyFile(src, dst).catch(() => undefined);
-            }
-          }
-        }
-      } catch {}
-    }
-  }
+  const piFilePath = join(globalPiDir, filename);
+  await writeFile(piFilePath, markdown, "utf8").catch(() => undefined);
 
   sendToRenderer(IPC.event.sessionsChanged, { reason: "plan" });
   return {
     path: filePath,
     filename,
-    relativePath: `.pi-desktop/plans/${filename}`,
+    relativePath: `~/.pi-desktop/plans/${filename}`,
   };
 }
 
 async function listPlanFilesInDisk(): Promise<import("@pi-desktop/shared").PlanFileInfo[]> {
   const ws = currentWorkspacePath();
   const dirsToScan = [
-    ws ? join(ws, ".pi-desktop", "plans") : null,
     join(dataDir, "plans"),
+    join(homedir(), ".pi", "plan"),
+    join(homedir(), ".pi", "plans"),
+    ws ? join(ws, ".pi-desktop", "plans") : null,
+    ws ? join(ws, ".pi", "plan") : null,
   ].filter(Boolean) as string[];
 
   const seen = new Set<string>();
@@ -1130,9 +1114,7 @@ async function listPlanFilesInDisk(): Promise<import("@pi-desktop/shared").PlanF
           filename,
           title,
           path: fullPath,
-          relativePath: ws && fullPath.startsWith(ws)
-            ? relative(ws, fullPath).replace(/\\/g, "/")
-            : `.pi-desktop/plans/${filename}`,
+          relativePath: `~/.pi-desktop/plans/${filename}`,
           updatedAt: st.mtimeMs,
           size: st.size,
         });
@@ -1146,15 +1128,20 @@ async function listPlanFilesInDisk(): Promise<import("@pi-desktop/shared").PlanF
 
 async function readPlanFromDisk(reqPath: string): Promise<{ ok: boolean; content: string; title: string; path: string }> {
   let fullPath = reqPath;
-  const ws = currentWorkspacePath();
-  if (!isAbsolute(reqPath)) {
-    fullPath = ws ? join(ws, reqPath) : join(dataDir, reqPath);
+  if (reqPath.startsWith("~/") || reqPath.startsWith("~\\")) {
+    fullPath = join(homedir(), reqPath.slice(2));
+  } else if (!isAbsolute(reqPath)) {
+    fullPath = join(dataDir, reqPath);
   }
   if (!existsSync(fullPath)) {
     const fname = basename(reqPath);
+    const ws = currentWorkspacePath();
     const candidates = [
-      ws ? join(ws, ".pi-desktop", "plans", fname) : null,
       join(dataDir, "plans", fname),
+      join(homedir(), ".pi", "plan", fname),
+      join(homedir(), ".pi", "plans", fname),
+      ws ? join(ws, ".pi-desktop", "plans", fname) : null,
+      ws ? join(ws, ".pi", "plan", fname) : null,
     ].filter(Boolean) as string[];
     const found = candidates.find((c) => existsSync(c));
     if (found) fullPath = found;
@@ -5513,6 +5500,7 @@ function finishTurn(
       // until the durable endTurn request has settled above.
       if (turnId && activeTurns.get(sessionId) === turnId) {
         activeTurns.delete(sessionId);
+        invalidateModelUsageSummaryCache();
       }
       if (turnKey) {
         planSubmissionTurnIds.delete(turnKey);
@@ -5984,6 +5972,7 @@ function persistAgentEvent(envelope: AgentEventEnvelope): UiMessage | undefined 
       !(event.message.content || "").trim() &&
       !(event.message.thinking || "").trim();
     if (failed && empty && !event.message.error) return;
+    invalidateModelUsageSummaryCache();
     void persistenceOutbox
       .enqueue(
         {
@@ -7768,15 +7757,16 @@ function registerIpc() {
 
   handle(
     IPC.invoke.statsGetModelUsageSummary,
-    async () => {
+    async (input?: { force?: boolean }) => {
       const nowMs = Date.now();
       if (
+        !input?.force &&
         cachedModelUsageSummary &&
         nowMs - cachedModelUsageSummaryTimestamp < MODEL_USAGE_CACHE_TTL_MS
       ) {
         return cachedModelUsageSummary;
       }
-      if (inFlightModelUsageSummaryPromise) {
+      if (!input?.force && inFlightModelUsageSummaryPromise) {
         return inFlightModelUsageSummaryPromise;
       }
 
@@ -7997,7 +7987,19 @@ function registerIpc() {
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
       }
 
-      function processExtractedItem(modelId: string, u: any, rawCreated: string) {
+      function normalizeModelKey(raw: string): string {
+        if (!raw) return "unknown";
+        let m = raw.trim().toLowerCase();
+        if (m.startsWith("ag/")) m = m.slice(3);
+        else if (m.startsWith("google/")) m = m.slice(7);
+        else if (m.startsWith("anthropic/")) m = m.slice(10);
+        else if (m.startsWith("openai/")) m = m.slice(7);
+        else if (m.includes("/")) m = m.split("/").pop()!;
+        return m;
+      }
+
+      function processExtractedItem(rawModelId: string, u: any, rawCreated: string) {
+        const modelId = normalizeModelKey(rawModelId);
         const ts = rawCreated ? new Date(rawCreated).getTime() : now;
         const dateStr = toLocalDateStr(rawCreated || now);
         const rates = resolveRate(modelId);
@@ -8097,6 +8099,22 @@ function registerIpc() {
           }
         } catch {}
       }
+
+      // Also scan unpersisted assistant messages from the outbox for live accuracy
+      try {
+        const outboxEntries = persistenceOutbox?.getEntries?.() ?? [];
+        for (const entry of outboxEntries) {
+          const msg = entry.message as any;
+          if (msg && (msg.role === "assistant" || msg.type === "message")) {
+            const u = msg.meta?.usage || msg.usage;
+            if (u) {
+              const modelId = msg.meta?.modelId || msg.modelId || "unknown";
+              const rawCreated = msg.createdAt || msg.created_at || "";
+              processExtractedItem(modelId, u, rawCreated);
+            }
+          }
+        }
+      } catch {}
 
       if (hasNewScannedFiles) {
         await saveSessionUsageScanCacheNow();
@@ -8248,6 +8266,13 @@ function registerIpc() {
   const fsExtraRoots = () => [
     join(dataDir, "scratch"),
     join(dataDir, "attachments"),
+    join(dataDir, "plans"),
+    join(homedir(), ".agents"),
+    join(homedir(), ".pi"),
+    ...(currentWorkspacePath() ? [
+      join(currentWorkspacePath()!, ".agents"),
+      join(currentWorkspacePath()!, ".pi-desktop", "plans")
+    ] : []),
   ];
 
   const optionalWorkspaceRoot = async (): Promise<string | null> => {

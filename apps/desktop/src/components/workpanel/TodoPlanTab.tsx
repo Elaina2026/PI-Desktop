@@ -24,6 +24,97 @@ const QUADRANTS = [
   { id: 4, label: "Q4", title: "Normal", color: "text-zinc-400 bg-zinc-500/10 border-zinc-500/20" },
 ];
 
+export function extractTodosFromPlanMarkdown(markdown: string): TodoItem[] {
+  if (!markdown) return [];
+  const lines = markdown.split("\n");
+  const extracted: TodoItem[] = [];
+
+  const checkboxRegex = /^\s*[-*+]\s+\[([ xX*~-])\]\s+(.+)$/;
+  for (let i = 0; i < lines.length; i++) {
+    const cb = checkboxRegex.exec(lines[i]);
+    if (cb) {
+      const mark = cb[1].toLowerCase();
+      const text = cb[2].trim();
+      const done = mark === "x";
+      const status = mark === "x" ? "completed" : mark === "*" ? "in_progress" : "pending";
+      extracted.push({
+        id: `plan-todo-${Date.now()}-${i}`,
+        text,
+        done,
+        q: 2,
+        createdAt: Date.now(),
+        doneAt: done ? Date.now() : 0,
+        due: null,
+        reminded: false,
+        status,
+      } as any);
+    }
+  }
+
+  if (extracted.length > 0) return extracted;
+
+  let inTaskSection = false;
+  let idx = 0;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^#+\s+(?:steps|tasks|phases|implementation|plan|action items|execution)/i.test(trimmed)) {
+      inTaskSection = true;
+      continue;
+    }
+    if (/^#+\s+/.test(trimmed) && inTaskSection) {
+      if (/^#+\s+(?:verification|testing|notes|out of scope|context)/i.test(trimmed)) {
+        inTaskSection = false;
+        continue;
+      }
+    }
+
+    if (inTaskSection) {
+      const m = /^\s*(?:\d+\.|\*|-)\s+(.+)$/.exec(line);
+      if (m) {
+        const text = m[1].trim().replace(/^\*\*(.*?)\*\*:?/, "$1:").trim();
+        if (text.length >= 5 && !text.startsWith("http")) {
+          idx++;
+          extracted.push({
+            id: `plan-todo-${Date.now()}-${idx}`,
+            text,
+            done: false,
+            q: 2,
+            createdAt: Date.now(),
+            doneAt: 0,
+            due: null,
+            reminded: false,
+            status: "pending",
+          } as any);
+        }
+      }
+    }
+  }
+
+  if (extracted.length === 0) {
+    for (let i = 0; i < lines.length; i++) {
+      const numMatch = /^\s*\d+\.\s+(.+)$/.exec(lines[i]);
+      if (numMatch) {
+        const text = numMatch[1].trim().replace(/^\*\*(.*?)\*\*:?/, "$1:").trim();
+        if (text.length >= 5 && !text.startsWith("http")) {
+          extracted.push({
+            id: `plan-todo-${Date.now()}-${i}`,
+            text,
+            done: false,
+            q: 2,
+            createdAt: Date.now(),
+            doneAt: 0,
+            due: null,
+            reminded: false,
+            status: "pending",
+          } as any);
+        }
+      }
+    }
+  }
+
+  return extracted.slice(0, 30);
+}
+
 export function TodoPlanTab() {
   const { t } = useTranslation();
   const [activeSubTab, setActiveSubTab] = useState<"todo" | "plan">("todo");
@@ -189,6 +280,21 @@ export function TodoPlanTab() {
   const activeCount = todos.length - completedCount;
   const completionPercent = todos.length > 0 ? Math.round((completedCount / todos.length) * 100) : 0;
 
+  const syncTodosFromPlan = async (markdown: string) => {
+    if (!markdown) return;
+    const items = extractTodosFromPlanMarkdown(markdown);
+    if (items.length === 0) return;
+
+    const existingTexts = new Set(todos.map((t) => t.text.toLowerCase().trim()));
+    const newItems = items.filter((item) => !existingTexts.has(item.text.toLowerCase().trim()));
+    if (newItems.length === 0) return;
+
+    const next = [...newItems, ...todos];
+    setTodos(next);
+    await api.saveTodos(next).catch(() => undefined);
+    showToast(`Đã tạo ${newItems.length} công việc từ Plan vào Todo list!`, { variant: "success" });
+  };
+
   // Plan approval handler
   const handleResolvePlan = async (action: GlobalPermissionMode | "reject") => {
     if (!planProposal || !activeSessionId) return;
@@ -216,6 +322,9 @@ export function TodoPlanTab() {
           action: "approve",
           targetPermissionMode: action,
         });
+        if (planProposal.markdown || planProposal.plan) {
+          void syncTodosFromPlan(planProposal.markdown || planProposal.plan || "");
+        }
         if (answer) {
           await sendPrompt(answer, undefined, planProposal.sessionId);
           setPlanAnswer("");
@@ -281,7 +390,7 @@ export function TodoPlanTab() {
         markdown: planProposal.markdown || planProposal.plan || "",
         status: planProposal.status,
         question: planProposal.question,
-        filePath: planProposal.artifact?.relativePath || ".pi-desktop/plans/",
+        filePath: planProposal.artifact?.relativePath || "~/.pi-desktop/plans/",
         isPending: planProposal.status === "pending",
         isProposal: true,
       };
@@ -293,7 +402,7 @@ export function TodoPlanTab() {
         markdown: selectedPlanContent,
         status: "saved",
         question: undefined,
-        filePath: found?.relativePath || (found?.filename ? `.pi-desktop/plans/${found.filename}` : ".pi-desktop/plans/"),
+        filePath: found?.relativePath || (found?.filename ? `~/.pi-desktop/plans/${found.filename}` : "~/.pi-desktop/plans/"),
         isPending: false,
         isProposal: false,
       };
@@ -570,7 +679,7 @@ export function TodoPlanTab() {
                       className="plan-selector-select"
                       value={selectedPlanPath || ""}
                       onChange={(e) => handleSelectPlanPath(e.target.value)}
-                      title="Chọn plan từ .pi-desktop/plans/"
+                      title="Chọn plan từ ~/.pi-desktop/plans/"
                     >
                       {savedPlans.map((p) => (
                         <option key={p.path} value={p.path}>
@@ -584,6 +693,19 @@ export function TodoPlanTab() {
                 </div>
 
                 <div className="flex items-center gap-1 flex-shrink-0">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-text-muted hover:text-text-primary px-2"
+                    onClick={() => {
+                      void syncTodosFromPlan(currentPlan.markdown);
+                      setActiveSubTab("todo");
+                    }}
+                    title="Tạo Todo list từ Plan này"
+                  >
+                    <IconListChecks size={12} className="mr-1 inline" />
+                    Todo
+                  </Button>
                   <Button
                     size="sm"
                     variant="ghost"
@@ -712,7 +834,7 @@ export function TodoPlanTab() {
                   </div>
                   <div className="font-semibold text-sm text-text-primary">Tạo Plan Mới (Create Plan)</div>
                   <p className="text-xs text-text-muted">
-                    Lập kế hoạch các bước kỹ thuật chi tiết lưu vào .pi-desktop/plans/ trước khi chỉnh sửa file.
+                    Lập kế hoạch các bước kỹ thuật chi tiết lưu vào ~/.pi-desktop/plans/ trước khi chỉnh sửa file.
                   </p>
                 </div>
 

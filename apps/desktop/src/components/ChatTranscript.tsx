@@ -1941,7 +1941,7 @@ const ActivityGroup = memo(function ActivityGroup({
           key={`thinking-${item.message.id}`}
           message={item.message}
           streaming={isActive && item.message.status === "streaming"}
-          autoOpen={live && itemIndex === activityItems.length - 1}
+          autoOpen={live && itemIndex === items.length - 1}
           onUserInteraction={claimDisclosure}
         />
       );
