@@ -285,3 +285,26 @@ export async function collectWorkspaceDiff(cwd: string): Promise<WorkspaceDiff> 
     truncated: truncated || undefined,
   };
 }
+
+export async function gitStage(cwd: string, paths: string[]): Promise<RunResult> {
+  if (paths.length === 0) return { code: 0, stdout: "", stderr: "" };
+  return runGit(cwd, ["add", "--", ...paths]);
+}
+
+export async function gitUnstage(cwd: string, paths: string[]): Promise<RunResult> {
+  if (paths.length === 0) return { code: 0, stdout: "", stderr: "" };
+  return runGit(cwd, ["restore", "--staged", "--", ...paths]);
+}
+
+export async function gitCommit(cwd: string, message: string): Promise<RunResult> {
+  const trimmed = message.trim();
+  if (!trimmed) throw new Error("Commit message cannot be empty");
+  return runGit(cwd, ["commit", "-m", trimmed]);
+}
+
+export async function gitGetStagedDiff(cwd: string): Promise<string> {
+  const cached = await runGit(cwd, ["diff", "--cached", "--no-color", "--unified=3"]);
+  if (cached.stdout.trim()) return cached.stdout;
+  const head = await runGit(cwd, ["diff", "HEAD", "--no-color", "--unified=3"]);
+  return head.stdout;
+}

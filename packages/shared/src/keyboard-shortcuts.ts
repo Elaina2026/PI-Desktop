@@ -5,6 +5,7 @@ export const KEYBOARD_SHORTCUT_IDS = [
   "openProject",
   "openSettings",
   "openSearch",
+  "openQuickOpen",
   "openCommandPalette",
   "openPluginLauncher",
   "toggleSidebar",
@@ -41,6 +42,7 @@ export const KEYBOARD_SHORTCUTS: readonly KeyboardShortcutDefinition[] = [
   { id: "openProject", group: "navigation", defaultBinding: "Mod+O" },
   { id: "openSettings", group: "navigation", defaultBinding: "Mod+Comma" },
   { id: "openSearch", group: "navigation", defaultBinding: "Mod+K" },
+  { id: "openQuickOpen", group: "navigation", defaultBinding: "Mod+P" },
   {
     id: "openCommandPalette",
     group: "navigation",

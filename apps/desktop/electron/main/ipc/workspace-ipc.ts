@@ -3,15 +3,19 @@ import { dirname } from "node:path";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   ErrorCodes,
   IPC,
+  OAUTH_AUTH_KIND,
   type ComposerCommand,
   type ComposerPasteFile,
 } from "@pi-desktop/shared";
 import {
   loadComposerTemplates,
+  generateCommitMessage,
   type ComposerTemplate,
+  type RuntimeProviderConfig,
 } from "@pi-desktop/agent-runtime";
 import { cloneGitRepository } from "../git-clone";
 import {
@@ -22,7 +26,13 @@ import {
   consumeComposerPickerSelection,
   rememberComposerPickerSelection,
 } from "../composer-picker";
-import { collectWorkspaceDiff } from "../git-diff";
+import {
+  collectWorkspaceDiff,
+  gitStage,
+  gitUnstage,
+  gitCommit,
+  gitGetStagedDiff,
+} from "../git-diff";
 import { parseAllowedExternalUrl } from "../safe-open-external";
 import {
   isAttachmentBlobRef,
@@ -39,6 +49,7 @@ import type { HostProcess } from "../host-process";
 import type { Logger } from "../logger";
 import type { ClipboardHistory } from "../clipboard-history";
 import type { PluginRuntime } from "../plugin-runtime";
+import type { VendorOAuth } from "../oauth";
 import type { IpcRegistrar } from "./types";
 
 type WorkspaceRecord = { path: string; name: string };
@@ -77,6 +88,13 @@ export type WorkspaceIpcDependencies = {
   setCurrentWorkspacePath: (path: string | null) => void;
   withGitBranch: (workspace: WorkspaceRecord | null) => Promise<unknown>;
   stripWinLongPrefix: (path: string) => string;
+  resolveAgentRuntimeLaunch?: (
+    sessionId: string,
+    session: unknown,
+    settings: unknown,
+    overrides?: any,
+  ) => Promise<any>;
+  vendorOAuth?: VendorOAuth;
 };
 
 export function registerWorkspaceIpc({
@@ -94,6 +112,8 @@ export function registerWorkspaceIpc({
   setCurrentWorkspacePath,
   withGitBranch,
   stripWinLongPrefix,
+  resolveAgentRuntimeLaunch,
+  vendorOAuth,
 }: WorkspaceIpcDependencies): void {
   let host: HostProcess | null = null;
   const handle = (channel: string, fn: (...args: any[]) => Promise<any>) => {
@@ -455,6 +475,118 @@ export function registerWorkspaceIpc({
     }
     return collectWorkspaceDiff(cwd);
   });
+
+  handle(IPC.invoke.gitStage, async (input: { files: string[] } = { files: [] }) => {
+    if (!host) throw new Error("host unavailable");
+    const res = (await host.call("workspace.get")) as {
+      workspace: { path: string } | null;
+    };
+    const cwd = res.workspace?.path;
+    if (!cwd) throw new Error("No active workspace");
+    const result = await gitStage(cwd, Array.isArray(input.files) ? input.files : []);
+    if (result.code !== 0) throw new Error(result.stderr || "git stage failed");
+    return collectWorkspaceDiff(cwd);
+  });
+
+  handle(IPC.invoke.gitUnstage, async (input: { files: string[] } = { files: [] }) => {
+    if (!host) throw new Error("host unavailable");
+    const res = (await host.call("workspace.get")) as {
+      workspace: { path: string } | null;
+    };
+    const cwd = res.workspace?.path;
+    if (!cwd) throw new Error("No active workspace");
+    const result = await gitUnstage(cwd, Array.isArray(input.files) ? input.files : []);
+    if (result.code !== 0) throw new Error(result.stderr || "git unstage failed");
+    return collectWorkspaceDiff(cwd);
+  });
+
+  handle(IPC.invoke.gitCommit, async (input: { message: string }) => {
+    if (!host) throw new Error("host unavailable");
+    const res = (await host.call("workspace.get")) as {
+      workspace: { path: string } | null;
+    };
+    const cwd = res.workspace?.path;
+    if (!cwd) throw new Error("No active workspace");
+    const result = await gitCommit(cwd, input.message);
+    if (result.code !== 0) throw new Error(result.stderr || "git commit failed");
+    return collectWorkspaceDiff(cwd);
+  });
+
+  handle(IPC.invoke.gitGenerateCommitMessage, async () => {
+    if (!host) throw new Error("host unavailable");
+    const res = (await host.call("workspace.get")) as {
+      workspace: { path: string } | null;
+    };
+    const cwd = res.workspace?.path;
+    if (!cwd) throw new Error("No active workspace");
+    const diff = await gitGetStagedDiff(cwd);
+    if (!diff.trim()) {
+      throw new Error("No changes staged to commit");
+    }
+    if (!resolveAgentRuntimeLaunch) {
+      throw new Error("Model resolver unavailable");
+    }
+    const settings = await host.call<any>("settings.get");
+    const launchSessionId = `commit-message:${randomUUID()}`;
+    const launch = await resolveAgentRuntimeLaunch(
+      launchSessionId,
+      {},
+      settings,
+      { mode: "agent" },
+    );
+    const runtimeProvider = {
+      ...launch.sidecarParams.provider,
+      ...(launch.sidecarParams.provider.authKind === OAUTH_AUTH_KIND && vendorOAuth
+        ? { resolveAuth: () => vendorOAuth.resolveAuth(launch.providerId) }
+        : {}),
+    } as RuntimeProviderConfig;
+    const message = await generateCommitMessage(
+      runtimeProvider,
+      diff,
+      launch.sidecarParams.thinkingLevel,
+      { sessionId: launchSessionId },
+    );
+    return { message };
+  });
+
+  handle(IPC.invoke.memoryGet, async (input: { projectPath?: string } = {}) => {
+    if (!host) throw new Error("host unavailable");
+    const path = await managedProjectPath(input.projectPath);
+    return host.call("project.memory.get", { path });
+  });
+
+  handle(IPC.invoke.memoryRemember, async (input: { note: string; title?: string; projectPath?: string }) => {
+    if (!host) throw new Error("host unavailable");
+    const path = await managedProjectPath(input.projectPath);
+    const current = await host.call<{ memory?: { entries?: Array<{ id: string; title: string; content: string }> } }>(
+      "project.memory.get",
+      { path },
+    );
+    const entries = current?.memory?.entries ?? [];
+    const newEntry = {
+      id: randomUUID(),
+      title: (input.title ?? input.note.slice(0, 32)).trim(),
+      content: input.note.trim(),
+    };
+    return host.call("project.memory.set", { path, entries: [...entries, newEntry] });
+  });
+
+  handle(IPC.invoke.memoryForget, async (input: { query?: string; clearAll?: boolean; projectPath?: string } = {}) => {
+    if (!host) throw new Error("host unavailable");
+    const path = await managedProjectPath(input.projectPath);
+    if (input.clearAll) {
+      return host.call("project.memory.set", { path, entries: [] });
+    }
+    const current = await host.call<{ memory?: { entries?: Array<{ id: string; title: string; content: string }> } }>(
+      "project.memory.get",
+      { path },
+    );
+    const entries = current?.memory?.entries ?? [];
+    const q = (input.query ?? "").toLowerCase().trim();
+    const kept = entries.filter((e) => !e.title.toLowerCase().includes(q) && !e.content.toLowerCase().includes(q));
+    return host.call("project.memory.set", { path, entries: kept });
+  });
+
   handle(
     IPC.invoke.workspaceReviewRollback,
     async (input: { sessionId: string; snapshotId: string }) => {

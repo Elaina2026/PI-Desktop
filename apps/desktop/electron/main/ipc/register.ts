@@ -273,6 +273,8 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     setCurrentWorkspacePath,
     withGitBranch,
     stripWinLongPrefix,
+    resolveAgentRuntimeLaunch,
+    vendorOAuth,
   });
 
   registerAgentExtensionIpc({

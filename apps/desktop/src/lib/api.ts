@@ -849,6 +849,14 @@ export const api = {
   toggleDevTools: (open?: boolean) =>
     invoke<{ open: boolean }>(IPC.invoke.devtoolsToggle, { open }),
   workspaceDiff: () => invoke<WorkspaceDiff>(IPC.invoke.workspaceDiff),
+  gitStage: (files: string[]) =>
+    invoke<WorkspaceDiff>(IPC.invoke.gitStage, { files }),
+  gitUnstage: (files: string[]) =>
+    invoke<WorkspaceDiff>(IPC.invoke.gitUnstage, { files }),
+  gitCommit: (message: string) =>
+    invoke<WorkspaceDiff>(IPC.invoke.gitCommit, { message }),
+  gitGenerateCommitMessage: () =>
+    invoke<{ message: string }>(IPC.invoke.gitGenerateCommitMessage),
   workspaceReviewRollback: (input: {
     sessionId: string;
     snapshotId: string;

@@ -10,6 +10,7 @@ import { ConversationTopbar } from "../../components/ConversationTopbar";
 import { WorkPanel } from "../../components/workpanel/WorkPanel";
 import { ChatSurface } from "../../components/ChatSurface";
 import { SearchDialog } from "../../components/SearchDialog";
+import { QuickOpenDialog } from "../../components/QuickOpenDialog";
 import { ToastHost } from "../../components/Toast";
 import { ExtensionPromptHost } from "../../components/ExtensionPromptDialog";
 import { ProjectCreateDialog } from "../../components/ProjectCreateDialog";
@@ -52,6 +53,8 @@ export function AppShell() {
     workPanelOpen,
     searchOpen,
     setSearchOpen,
+    quickOpenOpen,
+    setQuickOpenOpen,
     sidebarCollapsed,
     sidebarExiting,
     sidebarWidth,
@@ -90,6 +93,7 @@ export function AppShell() {
             <SettingsPage />
           </Suspense>
           <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
+          <QuickOpenDialog open={quickOpenOpen} onClose={() => setQuickOpenOpen(false)} />
           <ToastHost />
           <ExtensionPromptHost />
           <UpdateBanner />
@@ -288,6 +292,7 @@ export function AppShell() {
           </TooltipButton>
 
           <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
+          <QuickOpenDialog open={quickOpenOpen} onClose={() => setQuickOpenOpen(false)} />
           <ToastHost />
           <ExtensionPromptHost />
         </>

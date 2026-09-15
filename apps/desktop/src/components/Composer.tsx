@@ -422,6 +422,55 @@ export function Composer({
   } = submitController;
 
 
+  // ponytail: in-memory + sessionStorage history; upgrade to SQLite when cross-device sync needed.
+  const promptHistoryRef = useRef<string[]>([]);
+  const historyIndexRef = useRef<number>(-1);
+  const stashDraftRef = useRef<string>("");
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("pi.composer.promptHistory");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) promptHistoryRef.current = parsed.slice(0, 100);
+      }
+    } catch {}
+  }, []);
+
+  const addPromptToHistory = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const history = promptHistoryRef.current.filter((item) => item !== trimmed);
+    history.unshift(trimmed);
+    if (history.length > 100) history.length = 100;
+    promptHistoryRef.current = history;
+    historyIndexRef.current = -1;
+    stashDraftRef.current = "";
+    try {
+      sessionStorage.setItem("pi.composer.promptHistory", JSON.stringify(history));
+    } catch {}
+  };
+
+  const handleHistoryPrevious = () => {
+    const history = promptHistoryRef.current;
+    if (history.length === 0) return;
+    if (historyIndexRef.current === -1) {
+      stashDraftRef.current = value;
+    }
+    const nextIndex = Math.min(history.length - 1, historyIndexRef.current + 1);
+    historyIndexRef.current = nextIndex;
+    const target = history[nextIndex] ?? "";
+    applyEditorDraft(target, [], target.length);
+  };
+
+  const handleHistoryNext = () => {
+    if (historyIndexRef.current === -1) return;
+    const nextIndex = historyIndexRef.current - 1;
+    historyIndexRef.current = nextIndex;
+    const target = nextIndex === -1 ? stashDraftRef.current : (promptHistoryRef.current[nextIndex] ?? "");
+    applyEditorDraft(target, [], target.length);
+  };
+
   const composerAc = useComposerAutocomplete({
     value,
     cursor,
@@ -540,7 +589,12 @@ export function Composer({
             composerAc={composerAc}
             onPaste={pasteClipboardFiles}
             onAcceptCompletion={acceptCompletion}
-            onSubmit={(steering) => void submit(steering)}
+            onSubmit={(steering) => {
+              addPromptToHistory(value);
+              void submit(steering);
+            }}
+            onHistoryPrevious={handleHistoryPrevious}
+            onHistoryNext={handleHistoryNext}
             onInsertNewline={insertNewlineInEditor}
             onInput={handleInput}
             onCompositionStart={() => setComposing(true)}

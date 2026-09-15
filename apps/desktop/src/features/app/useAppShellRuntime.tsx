@@ -66,6 +66,7 @@ export function useAppShellRuntime() {
   const workPanelVisible = workPanelOpen || subagentPanelOpen;
 
   const [searchOpen, setSearchOpen] = useState(false);
+  const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth] = useState(() => loadSidebarWidth());
   const [sidebarExiting, setSidebarExiting] = useState(false);
@@ -377,6 +378,9 @@ export function useAppShellRuntime() {
             break;
           case "openSearch":
             setSearchOpen(true);
+            break;
+          case "openQuickOpen":
+            setQuickOpenOpen(true);
             break;
           case "openCommandPalette":
             setSearchOpen(true);
@@ -697,6 +701,9 @@ export function useAppShellRuntime() {
           case "openSearch":
             setSearchOpen(true);
             break;
+          case "openQuickOpen":
+            setQuickOpenOpen(true);
+            break;
           case "openCommandPalette":
             setSearchOpen(true);
             break;
@@ -840,6 +847,8 @@ export function useAppShellRuntime() {
     workPanelOpen,
     searchOpen,
     setSearchOpen,
+    quickOpenOpen,
+    setQuickOpenOpen,
     sidebarCollapsed,
     setSidebarCollapsed,
     sidebarExiting,

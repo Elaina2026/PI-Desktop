@@ -180,12 +180,13 @@ export function ProviderSetupDialog({
   const baseUrlError =
     baseUrlTouched && baseUrlIssue ? t("settings.baseUrlInvalid") : undefined;
   const requestBaseUrl = normalizeBaseUrlInput(resolvedBaseUrl, resolvedApiStyle);
+  const isKeyless = namedPreset?.authKind === "none" || provider?.authKind === "none";
   // Named add-path waits for a key so picking a vendor does not 401-probe.
-  // Editing reuses the stored secret. Custom still probes a valid URL alone.
+  // Editing reuses the stored secret. Custom and keyless local AI probe a valid URL alone.
   const discoveryActive =
     Boolean(service) &&
     !baseUrlIssue &&
-    (custom || Boolean(apiKey.trim()) || Boolean(provider));
+    (custom || isKeyless || Boolean(apiKey.trim()) || Boolean(provider));
   const headers = pairsToRecord(headerPairs);
   const discovery = useProviderModels(
     discoveryActive,
@@ -306,7 +307,7 @@ export function ProviderSetupDialog({
           type: "openai_compatible",
           protocol: "openai_compatible",
           baseUrl: providerBaseUrl,
-          authKind: "api_key_and_base_url",
+          authKind: namedPreset?.authKind ?? (isKeyless ? "none" : "api_key_and_base_url"),
           defaultModelId: persisted[0]?.id,
           models: persisted,
           secretValue: apiKey || undefined,
@@ -417,16 +418,16 @@ export function ProviderSetupDialog({
                 {named ? (
                   <Field
                     label={t("settings.apiKey")}
-                    hint={editing ? t("settings.apiKeyKeepHint") : undefined}
+                    hint={isKeyless ? t("settings.apiKeyLocalOptional", "Optional for local endpoints") : editing ? t("settings.apiKeyKeepHint") : undefined}
                   >
                     <Input
                       ref={apiKeyRef}
                       type="password"
                       value={apiKey}
-                      placeholder="sk-…"
+                      placeholder={isKeyless ? t("settings.apiKeyNoneRequired", "None required (local endpoint)") : "sk-…"}
                       className="font-mono text-sm-plus"
                       autoComplete="off"
-                      autoFocus
+                      autoFocus={!isKeyless}
                       onChange={(event) => setApiKey(event.target.value)}
                     />
                   </Field>

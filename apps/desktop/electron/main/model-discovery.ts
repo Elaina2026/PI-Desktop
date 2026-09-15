@@ -92,6 +92,21 @@ export function normalizeModelList(
       }),
     );
   }
+  // Ollama native /api/tags returns { models: [{ name: "llama3:latest", ... }] }
+  if (Array.isArray(record?.models)) {
+    const rawList = record.models;
+    const isNamedList = rawList.some((entry) => typeof asRecord(entry)?.name === "string" && !asRecord(entry)?.id);
+    if (isNamedList) {
+      return dedupeSort(
+        rawList.flatMap((entry) => {
+          const item = asRecord(entry);
+          const modelId = typeof item?.name === "string" ? item.name : "";
+          if (!modelId) return [];
+          return [{ modelId, displayName: modelId }];
+        }),
+      );
+    }
+  }
   // OpenAI-style and Anthropic both use { data: [...] }; some gateways return
   // the bare array.
   const data = Array.isArray(record?.data)
@@ -148,6 +163,12 @@ export function modelListRequest(opts: {
       headers: withHeaders(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
     };
   }
+  if (base.includes(":11434") && !base.includes("/v1") && !base.includes("/api")) {
+    return {
+      url: `${base}/v1/models`,
+      headers: withHeaders(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+    };
+  }
   return {
     url: `${base}/models`,
     headers: withHeaders(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
@@ -165,7 +186,14 @@ export async function discoverProviderModels(opts: {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DISCOVERY_TIMEOUT_MS);
   try {
-    const res = await fetch(url, { headers, signal: controller.signal });
+    let res = await fetch(url, { headers, signal: controller.signal });
+    if (!res.ok && res.status === 404 && opts.baseUrl.includes(":11434")) {
+      const fallbackUrl = `${opts.baseUrl.trim().replace(/\/+$/, "")}/api/tags`;
+      try {
+        const fallbackRes = await fetch(fallbackUrl, { signal: controller.signal });
+        if (fallbackRes.ok) res = fallbackRes;
+      } catch {}
+    }
     if (!res.ok) {
       throw Object.assign(new Error(`model list request failed (${res.status})`), {
         status: res.status,

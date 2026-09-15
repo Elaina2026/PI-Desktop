@@ -18,6 +18,7 @@ export type NamedEndpointPreset = {
   aliases?: readonly string[];
   /** Completions thinking/tool-stream flags for Zhipu / Z.AI hosts. */
   zhipuCompat?: boolean;
+  authKind?: "none" | "api_key_and_base_url" | "oauth";
 };
 
 export const NAMED_ENDPOINT_PRESETS: readonly NamedEndpointPreset[] = [
@@ -247,6 +248,26 @@ export const NAMED_ENDPOINT_PRESETS: readonly NamedEndpointPreset[] = [
     apiStyle: "chat_completions",
     labelKey: "settings.presetOpenCodeFree",
     aliases: ["opencode-free-tier"],
+  },
+  {
+    id: "ollama",
+    vendorKey: "ollama",
+    name: "Ollama (Local)",
+    baseUrl: "http://localhost:11434/v1",
+    apiStyle: "chat_completions",
+    labelKey: "settings.presetOllama",
+    aliases: ["ollama", "ollama-local"],
+    authKind: "none",
+  },
+  {
+    id: "lmstudio",
+    vendorKey: "lmstudio",
+    name: "LM Studio (Local)",
+    baseUrl: "http://localhost:1234/v1",
+    apiStyle: "chat_completions",
+    labelKey: "settings.presetLmStudio",
+    aliases: ["lmstudio", "lm-studio"],
+    authKind: "none",
   },
 ];
 

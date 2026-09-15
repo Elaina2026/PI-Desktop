@@ -30,6 +30,8 @@ export type ComposerInputProps = {
   onCompositionEnd: (event: FormEvent<HTMLDivElement>) => void;
   onFocus: () => void;
   onBlur: () => void;
+  onHistoryPrevious?: () => void;
+  onHistoryNext?: () => void;
 };
 
 /** Rich contenteditable input; draft state and async operations stay outside. */
@@ -52,6 +54,8 @@ export function ComposerInput({
   onCompositionEnd,
   onFocus,
   onBlur,
+  onHistoryPrevious,
+  onHistoryNext,
 }: ComposerInputProps) {
   return (
     <div className="composer-input-wrap">
@@ -123,6 +127,22 @@ export function ComposerInput({
                 event.preventDefault();
                 onAcceptCompletion(composerAc.highlight);
                 return;
+              }
+            } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+              const sel = editorSelectionRange(event.currentTarget);
+              const atStart = sel.start === 0 && !value.slice(0, sel.start).includes("\n");
+              if (event.key === "ArrowUp" && (value.length === 0 || atStart) && onHistoryPrevious) {
+                event.preventDefault();
+                onHistoryPrevious();
+                return;
+              }
+              if (event.key === "ArrowDown" && onHistoryNext) {
+                const atEnd = sel.end === value.length;
+                if (value.length === 0 || atEnd) {
+                  event.preventDefault();
+                  onHistoryNext();
+                  return;
+                }
               }
             }
             if (

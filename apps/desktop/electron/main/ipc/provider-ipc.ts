@@ -126,13 +126,24 @@ export function registerProviderIpc({
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
-      const res = await fetch(`${baseUrl.replace(/\/+$/, "")}/models`, {
+      const isKeyless = detail.provider?.authKind === "none";
+      const cleanBase = baseUrl.replace(/\/+$/, "");
+      const probeUrl = cleanBase.includes(":11434") && !cleanBase.includes("/v1") && !cleanBase.includes("/api")
+        ? `${cleanBase}/v1/models`
+        : `${cleanBase}/models`;
+      let res = await fetch(probeUrl, {
         headers: mergeProviderHeaders(
-          secret.value ? { Authorization: `Bearer ${secret.value}` } : {},
+          secret.value && !isKeyless ? { Authorization: `Bearer ${secret.value}` } : {},
           detail.provider?.headers,
         ),
         signal: controller.signal,
       });
+      if (!res.ok && res.status === 404 && cleanBase.includes(":11434")) {
+        try {
+          const fallbackRes = await fetch(`${cleanBase}/api/tags`, { signal: controller.signal });
+          if (fallbackRes.ok) res = fallbackRes;
+        } catch {}
+      }
       if (res.status === 401 || res.status === 403) {
         return {
           ok: false,

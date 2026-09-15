@@ -148,6 +148,7 @@ import { visionFromModelConfig } from "./model-capabilities.js";
 import type { ProjectInstructions } from "./project-instructions.js";
 import { projectInstructionsPrompt } from "./project-instructions-prompt.js";
 import { projectMemoryPrompt } from "./project-memory-prompt.js";
+import { executeWebSearch, executeWebFetch } from "./web-tools.js";
 import {
   pluginSkillsPrompt,
   SKILL_TOOL_NAME,
@@ -3016,9 +3017,155 @@ Delegation rules:
     // Trusted extension tools are non-core: the per-mode allowlist and
     // ToolSearch deferral treat them like plugin tools (spec 16 §7).
     const extensionTools = this.extensionRunner?.getAgentTools() ?? [];
+
+    const webSearchTool: AgentTool = {
+      name: "WebSearch",
+      label: "Web search",
+      description: "Search the web for up-to-date documentation, articles, news, and technical solutions. Returns a markdown list of search results with titles, URLs, and snippets.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Search query" }),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 10, description: "Maximum results to return (default 5, max 10)" })),
+      }),
+      executionMode: "sequential",
+      execute: async (_toolCallId, params) => {
+        const { query, limit } = (params ?? {}) as { query?: string; limit?: number };
+        try {
+          const result = await executeWebSearch(query ?? "", limit);
+          return { content: [{ type: "text", text: result }], details: { query, limit } };
+        } catch (error) {
+          return {
+            content: [{ type: "text", text: `WebSearch failed: ${error instanceof Error ? error.message : String(error)}` }],
+            details: { error: String(error) },
+            isError: true,
+          };
+        }
+      },
+    };
+
+    const webFetchTool: AgentTool = {
+      name: "WebFetch",
+      label: "Web fetch",
+      description: "Fetch and read the plain text/markdown content of a web page URL. Strips HTML markup, scripts, and styles.",
+      parameters: Type.Object({
+        url: Type.String({ description: "HTTP or HTTPS URL to fetch" }),
+        maxChars: Type.Optional(Type.Integer({ minimum: 1000, maximum: 100000, description: "Maximum characters to return (default 20,000)" })),
+      }),
+      executionMode: "sequential",
+      execute: async (_toolCallId, params) => {
+        const { url, maxChars } = (params ?? {}) as { url?: string; maxChars?: number };
+        try {
+          const text = await executeWebFetch(url ?? "", maxChars);
+          return { content: [{ type: "text", text }], details: { url, length: text.length } };
+        } catch (error) {
+          return {
+            content: [{ type: "text", text: `WebFetch failed: ${error instanceof Error ? error.message : String(error)}` }],
+            details: { error: String(error) },
+            isError: true,
+          };
+        }
+      },
+    };
+
+    const rememberTool: AgentTool = {
+      name: "remember",
+      label: "Remember project fact",
+      description: "Store a durable project guideline, architectural rule, or fact into project memory. Injected into system prompt of future sessions for this project.",
+      parameters: Type.Object({
+        note: Type.String({ description: "Specific fact or guideline to remember" }),
+        title: Type.Optional(Type.String({ description: "Short title or topic tag" })),
+      }),
+      executionMode: "sequential",
+      execute: async (_toolCallId, params) => {
+        if (!this.projectPath) {
+          return { content: [{ type: "text", text: "No project open. Cannot store project memory." }], details: {}, isError: true };
+        }
+        const { note, title } = (params ?? {}) as { note?: string; title?: string };
+        if (!note || !note.trim()) {
+          return { content: [{ type: "text", text: "Note text cannot be empty." }], details: {}, isError: true };
+        }
+        try {
+          const current = await this.host.call<{ memory?: { entries?: Array<{ id: string; title: string; content: string }> } }>(
+            "project.memory.get",
+            { path: this.projectPath },
+          );
+          const entries = current?.memory?.entries ?? [];
+          const newEntry = {
+            id: randomUUID(),
+            title: (title ?? note.slice(0, 32)).trim(),
+            content: note.trim(),
+          };
+          const updated = await this.host.call<{ memory?: { content?: string } }>(
+            "project.memory.set",
+            { path: this.projectPath, entries: [...entries, newEntry] },
+          );
+          if (updated?.memory?.content !== undefined) {
+            this.projectMemory = updated.memory.content;
+            this.agent.state.systemPrompt = this.composeSystemPrompt();
+          }
+          return { content: [{ type: "text", text: `Stored in project memory: "${newEntry.title}" - ${newEntry.content}` }], details: { entry: newEntry } };
+        } catch (error) {
+          return {
+            content: [{ type: "text", text: `Failed to save memory: ${error instanceof Error ? error.message : String(error)}` }],
+            details: { error: String(error) },
+            isError: true,
+          };
+        }
+      },
+    };
+
+    const forgetTool: AgentTool = {
+      name: "forget",
+      label: "Forget project fact",
+      description: "Remove an outdated guideline or fact from project memory matching query.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Keyword or substring match on title or content of memory note to delete" }),
+      }),
+      executionMode: "sequential",
+      execute: async (_toolCallId, params) => {
+        if (!this.projectPath) {
+          return { content: [{ type: "text", text: "No project open." }], details: {}, isError: true };
+        }
+        const { query } = (params ?? {}) as { query?: string };
+        if (!query || !query.trim()) {
+          return { content: [{ type: "text", text: "Query cannot be empty." }], details: {}, isError: true };
+        }
+        try {
+          const q = query.trim().toLowerCase();
+          const current = await this.host.call<{ memory?: { entries?: Array<{ id: string; title: string; content: string }> } }>(
+            "project.memory.get",
+            { path: this.projectPath },
+          );
+          const entries = current?.memory?.entries ?? [];
+          const kept = entries.filter((e) => !e.title.toLowerCase().includes(q) && !e.content.toLowerCase().includes(q));
+          if (kept.length === entries.length) {
+            return { content: [{ type: "text", text: `No memory found matching "${query}".` }], details: { removed: 0 } };
+          }
+          const updated = await this.host.call<{ memory?: { content?: string } }>(
+            "project.memory.set",
+            { path: this.projectPath, entries: kept },
+          );
+          if (updated?.memory?.content !== undefined) {
+            this.projectMemory = updated.memory.content;
+            this.agent.state.systemPrompt = this.composeSystemPrompt();
+          }
+          return { content: [{ type: "text", text: `Removed ${entries.length - kept.length} memory item(s) matching "${query}".` }], details: { removed: entries.length - kept.length } };
+        } catch (error) {
+          return {
+            content: [{ type: "text", text: `Failed to remove memory: ${error instanceof Error ? error.message : String(error)}` }],
+            details: { error: String(error) },
+            isError: true,
+          };
+        }
+      },
+    };
+
     return [
       ...builtins,
       askTool,
+      webSearchTool,
+      webFetchTool,
+      rememberTool,
+      forgetTool,
       ...pluginTools,
       ...skillTools,
       ...modeTools,
@@ -3087,6 +3234,8 @@ Delegation rules:
       "Grep",
       "BrowserPreview",
       "Bash",
+      "WebSearch",
+      "WebFetch",
       ASK_TOOL_NAME,
       CONTEXT_COMPACTION_TOOL_NAME,
       SUBMIT_TOOL_NAMES[kind],

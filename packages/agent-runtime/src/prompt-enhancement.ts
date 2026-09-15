@@ -64,3 +64,37 @@ export async function enhancePromptDraft(
   );
   return result.text;
 }
+
+export const COMMIT_MESSAGE_SYSTEM_PROMPT =
+  "You are an expert Git commit message generator. Analyze the provided git diff and write a concise, conventional git commit message adhering to Conventional Commits specification (e.g. feat(auth): add login endpoint, fix(parser): handle empty strings). Return ONLY the commit subject and optional body, with no markdown code blocks, preamble, or conversational commentary.";
+
+export async function generateCommitMessage(
+  provider: RuntimeProviderConfig,
+  diff: string,
+  thinkingLevel: ThinkingLevel = "off",
+  options: PromptEnhancementOptions = {},
+): Promise<string> {
+  const context: Context = {
+    systemPrompt: COMMIT_MESSAGE_SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content: `Git Diff:\n${diff.slice(0, 30_000)}`,
+        timestamp: Date.now(),
+      },
+    ],
+  };
+  const result = await completeOneShot(
+    provider,
+    context,
+    thinkingLevel,
+    {
+      signal: options.signal,
+      stream: options.stream,
+      sessionId: options.sessionId,
+      emptyErrorCode: "COMMIT_MESSAGE_EMPTY",
+      emptyErrorMessage: "The model returned an empty commit message.",
+    },
+  );
+  return result.text.trim();
+}
