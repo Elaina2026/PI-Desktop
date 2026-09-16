@@ -115,7 +115,6 @@
   padding: 2px 0 3px 20px;
   gap: 4px;
   overflow-x: auto;
-  scrollbar-width: none;
 }
 
 .kilo-task-row-histogram::-webkit-scrollbar {
