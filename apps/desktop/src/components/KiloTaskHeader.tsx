@@ -224,8 +224,8 @@ export const KiloTaskHeader = memo(function KiloTaskHeader({
           type="button"
           className="kilo-task-close"
           onClick={handleCloseTask}
-          aria-label={t("chat.closeTask") || "Close Task"}
-          title={t("chat.closeTask") || "Close Task"}
+          aria-label={t("nav.newTask")}
+          title={t("nav.newTask")}
         >
           <IconX size={12} />
         </button>
