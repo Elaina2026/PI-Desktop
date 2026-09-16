@@ -1337,6 +1337,32 @@
   font-family: var(--font-mono);
 }
 
+.ct-token-compact-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-xs);
+  width: 100%;
+  padding: var(--spacing-2xs) var(--spacing-xs);
+  margin-top: var(--spacing-2xs);
+  border: 1px solid var(--ds-border-default);
+  background: var(--ds-tile);
+  color: var(--ds-text-secondary);
+  border-radius: var(--radius-xs);
+  font-size: var(--text-2xs);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--leading-none);
+  cursor: pointer;
+  transition: all var(--motion-duration-fast) var(--motion-ease-out);
+}
+
+.ct-token-compact-btn:hover {
+  background: var(--ds-tile-hover);
+  color: var(--ds-text-primary);
+  border-color: var(--ds-border-strong);
+}
+
+
 
 .window-chrome-row button {
   pointer-events: auto;

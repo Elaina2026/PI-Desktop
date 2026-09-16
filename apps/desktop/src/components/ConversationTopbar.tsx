@@ -240,6 +240,30 @@ function SessionTokenBar({
                   : `$${stats.cost.toFixed(4)} USD`}
               </span>
             </div>
+
+            <button
+              type="button"
+              className="ct-token-compact-btn"
+              onClick={() => {
+                void useAppStore.getState().compactContext();
+                setDetailsOpen(false);
+              }}
+              title="Compact Context (/compact)"
+            >
+              <svg
+                width="11"
+                height="11"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M5 2v3H2M11 2v3h3M5 14v-3H2M11 14v-3h3" />
+              </svg>
+              Compact Context (/compact)
+            </button>
           </div>
         </div>
       )}
