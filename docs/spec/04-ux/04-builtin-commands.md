@@ -27,6 +27,9 @@ builtin command contracts.
 | `builtin.mode.agent` | Switch to Agent | mode, agent | Session | low | set the idle session mode to Agent |
 | `builtin.mode.plan` | Switch to Plan | mode, plan, planning | Session | low | set the idle session mode to Plan |
 | `builtin.mode.goal` | Switch to Goal | mode, goal, objective, autonomous | Session | low | set the idle session mode to Goal |
+| `builtin.workflow` | Run Multi-Agent Workflow | workflow, orchestrate, pipeline, subagents | Session | low | orchestrate deterministic multi-agent workflow |
+| `builtin.simplify` | Review Diff For Quality | simplify, clean, refactor, reuse, efficiency, altitude | Code Quality | low | review diff for reuse, simplification, efficiency, and altitude |
+| `builtin.loop` | Run Recurring Loop with Dynamic Pacing | loop, recur, poll, interval, dynamic | Session | low | run recurring loop with dynamic cache-aware pacing |
 
 ## 4. Visibility and execution rules
 
@@ -84,6 +87,9 @@ in the same registry that feeds palette search
 | `/agent-mode` | `builtin.mode.agent` |
 | `/plan-mode` | `builtin.mode.plan` |
 | `/goal-mode` | `builtin.mode.goal` |
+| `/workflow` | `builtin.workflow` |
+| `/simplify` | `builtin.simplify` |
+| `/loop` | `builtin.loop` |
 
 Aliases share one namespace with template and plugin command names; builtin
 aliases win collisions, then project templates, then user templates, then

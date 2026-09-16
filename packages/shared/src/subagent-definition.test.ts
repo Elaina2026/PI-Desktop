@@ -126,6 +126,30 @@ Explain it.`);
     expect(inherited.definition.permission).toBeUndefined();
   });
 
+  it("parses worktree isolation and warns on invalid values", () => {
+    const valid = parse(`---
+description: Parallel fixer
+tools: [Read, Edit, Write]
+isolation: worktree
+---
+Fix it.`);
+    expect(valid.ok).toBe(true);
+    if (!valid.ok) return;
+    expect(valid.definition.isolation).toBe("worktree");
+    expect(valid.warnings).toEqual([]);
+
+    const invalid = parse(`---
+description: Parallel fixer
+tools: [Read, Edit, Write]
+isolation: container
+---
+Fix it.`);
+    expect(invalid.ok).toBe(true);
+    if (!invalid.ok) return;
+    expect(invalid.definition.isolation).toBeUndefined();
+    expect(invalid.warnings).toContain('ignoring unknown isolation "container" (use worktree)');
+  });
+
   it("accepts a permission scope declared by a global user document", () => {
     for (const declared of ["auto", "accept-edits", "ask"]) {
       const result = parse(`---

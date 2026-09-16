@@ -17,9 +17,12 @@ const coreIds = [
   "builtin.mode.agent",
   "builtin.mode.plan",
   "builtin.mode.goal",
+  "builtin.workflow",
+  "builtin.simplify",
+  "builtin.loop",
 ];
 
-const coreAliases = ["new", "compact", "agent-mode", "plan-mode", "goal-mode"];
+const coreAliases = ["new", "compact", "agent-mode", "plan-mode", "goal-mode", "workflow", "simplify", "loop"];
 
 const removedIds = [
   "builtin.session.delete",

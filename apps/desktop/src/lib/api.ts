@@ -849,6 +849,7 @@ export const api = {
   toggleDevTools: (open?: boolean) =>
     invoke<{ open: boolean }>(IPC.invoke.devtoolsToggle, { open }),
   workspaceDiff: () => invoke<WorkspaceDiff>(IPC.invoke.workspaceDiff),
+  gitWorkingTree: () => invoke<WorkspaceDiff>(IPC.invoke.workspaceDiff),
   gitStage: (files: string[]) =>
     invoke<WorkspaceDiff>(IPC.invoke.gitStage, { files }),
   gitUnstage: (files: string[]) =>

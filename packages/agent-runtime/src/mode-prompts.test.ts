@@ -3,6 +3,7 @@ import {
   composeModeSystemPrompt,
   GOAL_MODE_SYSTEM_PROMPT,
   PLAN_MODE_SYSTEM_PROMPT,
+  SIMPLIFY_DIRECTIVE_PROMPT,
 } from "./mode-prompts.js";
 
 describe("mode-specific system prompts", () => {
@@ -50,6 +51,11 @@ describe("mode-specific system prompts", () => {
     const prompt = composeModeSystemPrompt("agent", "base instructions");
 
     expect(prompt).toContain("operating in Agent mode");
+    expect(prompt).toContain(SIMPLIFY_DIRECTIVE_PROMPT);
+    expect(prompt).toContain("Reuse");
+    expect(prompt).toContain("Simplification");
+    expect(prompt).toContain("Efficiency");
+    expect(prompt).toContain("Altitude");
     expect(prompt).not.toContain("Do not use Write, Edit");
     expect(prompt).not.toContain("SubmitGoal");
   });

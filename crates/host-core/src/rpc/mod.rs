@@ -3983,7 +3983,9 @@ async fn handle_request(
             let providers = providers::list_providers(&st.db, &st.secrets, true)
                 .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
             let has_provider = !providers.is_empty();
-            let has_secret = providers.iter().any(|p| p.has_secret || p.auth_kind == "none");
+            let has_secret = providers
+                .iter()
+                .any(|p| p.has_secret || p.auth_kind == "none");
             let has_project = st.workspace.get().is_some();
             let session_count = sessions::session_count(&st.db)
                 .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;

@@ -72,6 +72,11 @@ export type SubagentDefinition = {
   maxTokens?: number;
   /** Idle watchdog in seconds; parser materializes the default for documents. */
   idleTimeoutSeconds?: number;
+  /**
+   * Isolation mode for the delegate. "worktree" creates an isolated git
+   * worktree for execution so mutations do not dirty the main tree.
+   */
+  isolation?: "worktree";
   /** Total runtime watchdog in seconds; parser materializes the default. */
   maxDurationSeconds?: number;
   /** Markdown body used as the delegate's system prompt. */
@@ -434,6 +439,18 @@ export function parseSubagentDefinition(
     }
   }
 
+  const declaredIsolation = asScalar(frontmatter.get("isolation"))
+    ?.trim()
+    .toLowerCase();
+  let isolation: "worktree" | undefined;
+  if (declaredIsolation) {
+    if (declaredIsolation === "worktree") {
+      isolation = "worktree";
+    } else {
+      warnings.push(`ignoring unknown isolation "${declaredIsolation}" (use worktree)`);
+    }
+  }
+
   const maxTurns = parseMaxTurns(asScalar(frontmatter.get("maxturns")), warnings);
   const maxTokens = parseMaxTokens(
     asScalar(frontmatter.get("maxtokens")),
@@ -472,6 +489,7 @@ export function parseSubagentDefinition(
       ...(model ? { model } : {}),
       ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(permission ? { permission } : {}),
+      ...(isolation ? { isolation } : {}),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       idleTimeoutSeconds,

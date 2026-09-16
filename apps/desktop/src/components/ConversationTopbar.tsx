@@ -98,196 +98,126 @@ function SessionTokenBar({
   const outputPct = Math.round((stats.output / stats.total) * 100) || 0;
 
   return (
-    <div
-      ref={containerRef}
-      className="session-token-insights-topbar"
-      style={{
-        position: "relative",
-        display: "inline-flex",
-        alignItems: "center",
-      }}
-    >
+    <div ref={containerRef} className="session-token-insights-topbar">
       <button
         type="button"
         className={`ct-token-pill ${detailsOpen ? "active" : ""}`}
         onClick={() => setDetailsOpen((v) => !v)}
         title={t("settings.sessionTokensTitle")}
         aria-expanded={detailsOpen}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: "8px",
-          padding: "4px 10px",
-          borderRadius: "9999px",
-          backgroundColor: "var(--ds-tile)",
-          border: "1px solid var(--ds-border-subtle)",
-          fontSize: "11px",
-          color: "var(--ds-text-secondary)",
-          cursor: "pointer",
-          userSelect: "none",
-          height: "26px",
-          transition: "border-color 0.15s ease, background-color 0.15s ease",
-        }}
       >
-        {/* Visual Progress Dot Cluster */}
-        <div style={{ display: "flex", gap: "2px", alignItems: "center" }}>
+        <div className="ct-token-pill-dots">
           <span
-            style={{
-              width: "6px",
-              height: "6px",
-              borderRadius: "50%",
-              backgroundColor: "#38bdf8",
-            }}
+            className="ct-token-dot ct-token-dot-cache"
             title={`Cache: ${formatTokenCount(stats.cache)}`}
           />
           <span
-            style={{
-              width: "6px",
-              height: "6px",
-              borderRadius: "50%",
-              backgroundColor: "#818cf8",
-            }}
+            className="ct-token-dot ct-token-dot-input"
             title={`In: ${formatTokenCount(stats.input)}`}
           />
           <span
-            style={{
-              width: "6px",
-              height: "6px",
-              borderRadius: "50%",
-              backgroundColor: "#34d399",
-            }}
+            className="ct-token-dot ct-token-dot-output"
             title={`Out: ${formatTokenCount(stats.output)}`}
           />
         </div>
 
-        {/* Total Tokens Formatted */}
-        <span style={{ fontWeight: 600, color: "var(--ds-text-primary)" }}>
+        <span className="ct-token-pill-count">
           {formatTokenCount(stats.total)}
         </span>
 
-        {/* Cost Badge */}
-        <span
-          style={{
-            fontSize: "10.5px",
-            fontWeight: 500,
-            color: "var(--ds-accent)",
-            backgroundColor: "rgba(56, 189, 248, 0.08)",
-            padding: "1px 5px",
-            borderRadius: "4px",
-          }}
-        >
-          ${stats.cost < 0.0001 && stats.cost > 0 ? "<$0.001" : stats.cost.toFixed(3)}
+        <span className="ct-token-pill-cost">
+          {stats.cost === 0
+            ? "Free"
+            : stats.cost < 0.0001
+              ? "<$0.001"
+              : `$${stats.cost.toFixed(3)}`}
         </span>
       </button>
 
-      {/* Modern Popover Breakdown Dialog */}
       {detailsOpen && (
         <div
           className="ct-token-popover"
-          style={{
-            position: "absolute",
-            top: "34px",
-            right: "0",
-            zIndex: 1000,
-            backgroundColor: "var(--ds-bg-elevated)",
-            border: "1px solid var(--ds-border-strong)",
-            borderRadius: "var(--radius-md)",
-            padding: "14px",
-            boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
-            width: "260px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "12px",
-          }}
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Header with Title & Active Model */}
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              borderBottom: "1px solid var(--ds-border-subtle)",
-              paddingBottom: "8px",
-            }}
-          >
-            <div style={{ fontWeight: 600, fontSize: "12px", color: "var(--ds-text-primary)" }}>
+          {/* Header */}
+          <div className="ct-token-popover-header">
+            <div className="ct-token-popover-title">
               {t("settings.sessionTokensTitle")}
             </div>
             {modelId && (
-              <span
-                style={{
-                  fontSize: "10px",
-                  fontFamily: "var(--font-mono)",
-                  padding: "2px 6px",
-                  borderRadius: "4px",
-                  backgroundColor: "var(--ds-tile)",
-                  color: "var(--ds-text-muted)",
-                }}
-              >
+              <span className="ct-token-popover-model" title={modelId}>
                 {modelId.split("/").pop()}
               </span>
             )}
           </div>
 
-          {/* Breakdown Bars */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {/* Cache Read */}
-            <div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", marginBottom: "3px" }}>
-                <span style={{ color: "#38bdf8", display: "flex", alignItems: "center", gap: "4px" }}>
-                  <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#38bdf8" }} />
-                  {t("settings.sessionTokensCache")}
-                </span>
-                <span style={{ fontFamily: "var(--font-mono)", color: "var(--ds-text-secondary)" }}>
-                  {stats.cache.toLocaleString()} ({cachePct}%)
-                </span>
-              </div>
-              <div style={{ height: "4px", width: "100%", backgroundColor: "var(--ds-tile)", borderRadius: "2px", overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${cachePct}%`, backgroundColor: "#38bdf8" }} />
-              </div>
+          {/* Kilo Code style Unified Segmented Progress Bar */}
+          <div className="ct-token-multi-bar">
+            {cachePct > 0 && (
+              <div
+                className="ct-token-multi-bar-cache"
+                style={{ width: `${cachePct}%` }}
+                title={`Cache: ${cachePct}%`}
+              />
+            )}
+            {inputPct > 0 && (
+              <div
+                className="ct-token-multi-bar-input"
+                style={{ width: `${inputPct}%` }}
+                title={`Input: ${inputPct}%`}
+              />
+            )}
+            {outputPct > 0 && (
+              <div
+                className="ct-token-multi-bar-output"
+                style={{ width: `${outputPct}%` }}
+                title={`Output: ${outputPct}%`}
+              />
+            )}
+          </div>
+
+          {/* Breakdown Rows */}
+          <div className="ct-token-breakdown-list">
+            <div className="ct-token-breakdown-row">
+              <span className="ct-token-breakdown-label">
+                <span className="ct-token-dot ct-token-dot-cache" />
+                {t("settings.sessionTokensCache")}
+              </span>
+              <span className="ct-token-breakdown-val">
+                {stats.cache.toLocaleString()}
+                <span className="ct-token-breakdown-pct">({cachePct}%)</span>
+              </span>
             </div>
 
-            {/* Input Tokens */}
-            <div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", marginBottom: "3px" }}>
-                <span style={{ color: "#818cf8", display: "flex", alignItems: "center", gap: "4px" }}>
-                  <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#818cf8" }} />
-                  {t("settings.sessionTokensInput")}
-                </span>
-                <span style={{ fontFamily: "var(--font-mono)", color: "var(--ds-text-secondary)" }}>
-                  {stats.input.toLocaleString()} ({inputPct}%)
-                </span>
-              </div>
-              <div style={{ height: "4px", width: "100%", backgroundColor: "var(--ds-tile)", borderRadius: "2px", overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${inputPct}%`, backgroundColor: "#818cf8" }} />
-              </div>
+            <div className="ct-token-breakdown-row">
+              <span className="ct-token-breakdown-label">
+                <span className="ct-token-dot ct-token-dot-input" />
+                {t("settings.sessionTokensInput")}
+              </span>
+              <span className="ct-token-breakdown-val">
+                {stats.input.toLocaleString()}
+                <span className="ct-token-breakdown-pct">({inputPct}%)</span>
+              </span>
             </div>
 
-            {/* Output Tokens */}
-            <div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", marginBottom: "3px" }}>
-                <span style={{ color: "#34d399", display: "flex", alignItems: "center", gap: "4px" }}>
-                  <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#34d399" }} />
-                  {t("settings.sessionTokensOutput")}
-                </span>
-                <span style={{ fontFamily: "var(--font-mono)", color: "var(--ds-text-secondary)" }}>
-                  {stats.output.toLocaleString()} ({outputPct}%)
-                </span>
-              </div>
-              <div style={{ height: "4px", width: "100%", backgroundColor: "var(--ds-tile)", borderRadius: "2px", overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${outputPct}%`, backgroundColor: "#34d399" }} />
-              </div>
+            <div className="ct-token-breakdown-row">
+              <span className="ct-token-breakdown-label">
+                <span className="ct-token-dot ct-token-dot-output" />
+                {t("settings.sessionTokensOutput")}
+              </span>
+              <span className="ct-token-breakdown-val">
+                {stats.output.toLocaleString()}
+                <span className="ct-token-breakdown-pct">({outputPct}%)</span>
+              </span>
             </div>
 
-            {/* Reasoning Tokens if present */}
             {stats.reasoning > 0 && (
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "#f59e0b" }}>
-                <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+              <div className="ct-token-breakdown-row">
+                <span className="ct-token-breakdown-label">
                   <IconSparkles size={11} />
                   {t("settings.sessionTokensReasoning")}
                 </span>
-                <span style={{ fontFamily: "var(--font-mono)" }}>
+                <span className="ct-token-breakdown-val">
                   {stats.reasoning.toLocaleString()}
                 </span>
               </div>
@@ -295,25 +225,19 @@ function SessionTokenBar({
           </div>
 
           {/* Footer with Total and Cost */}
-          <div
-            style={{
-              borderTop: "1px solid var(--ds-border-subtle)",
-              paddingTop: "10px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "4px",
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11.5px" }}>
-              <span style={{ color: "var(--ds-text-muted)" }}>{t("settings.sessionTokensTotal")}</span>
-              <span style={{ fontWeight: 600, color: "var(--ds-text-primary)" }}>
+          <div className="ct-token-popover-footer">
+            <div className="ct-token-footer-row">
+              <span className="ct-token-footer-label">{t("settings.sessionTokensTotal")}</span>
+              <span className="ct-token-footer-value">
                 {stats.total.toLocaleString()} tokens
               </span>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11.5px" }}>
-              <span style={{ color: "var(--ds-text-muted)" }}>{t("settings.sessionTokensCost")}</span>
-              <span style={{ fontWeight: 600, color: "var(--ds-accent)" }}>
-                ${stats.cost.toFixed(4)} USD
+            <div className="ct-token-footer-row">
+              <span className="ct-token-footer-label">{t("settings.sessionTokensCost")}</span>
+              <span className="ct-token-footer-cost">
+                {stats.cost === 0
+                  ? "Free (local / zero-rate)"
+                  : `$${stats.cost.toFixed(4)} USD`}
               </span>
             </div>
           </div>

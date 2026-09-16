@@ -65,8 +65,13 @@ export async function enhancePromptDraft(
   return result.text;
 }
 
-export const COMMIT_MESSAGE_SYSTEM_PROMPT =
-  "You are an expert Git commit message generator. Analyze the provided git diff and write a concise, conventional git commit message adhering to Conventional Commits specification (e.g. feat(auth): add login endpoint, fix(parser): handle empty strings). Return ONLY the commit subject and optional body, with no markdown code blocks, preamble, or conversational commentary.";
+export const COMMIT_MESSAGE_SYSTEM_PROMPT = [
+  "You are an expert Git commit author following strict engineering standards (Claude Code quick-commit discipline):",
+  "1. Analyze the provided git diff and write a concise, conventional git commit message adhering to the Conventional Commits specification (e.g. feat(scope): subject, fix(scope): subject, refactor(scope): subject).",
+  "2. Ensure the commit message accurately reflects the changes and their purpose ('feat'/'add' = new capability, 'fix' = bug fix, 'refactor' = structural cleanup, 'test' = test coverage).",
+  "3. Focus on the WHY rather than just the WHAT. Keep the subject line under 72 characters, imperative mood, lowercase subject.",
+  "4. Return ONLY the raw commit message (subject and optional body), with zero markdown code fences, zero conversational commentary, and zero introductory preamble.",
+].join("\n");
 
 export async function generateCommitMessage(
   provider: RuntimeProviderConfig,

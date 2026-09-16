@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../../lib/api";
 import { reviewChangesFromMessages, summarizeReviewChanges } from "../../lib/workspace-review";
 import { useAppStore } from "../../stores/app-store";
-import type { DiffFile, WorkspaceDiff } from "@pi-desktop/shared";
+import type { DiffFile, WorkspaceDiff as GitWorkingTreeDiff } from "@pi-desktop/shared";
 import {
   IconCheck,
   IconChevronDown,
@@ -38,7 +38,7 @@ export function ReviewTab() {
   const sessionSummary = useMemo(() => summarizeReviewChanges(sessionEntries), [sessionEntries]);
 
   const [viewMode, setViewMode] = useState<ReviewViewMode>("session");
-  const [gitDiff, setGitDiff] = useState<WorkspaceDiff | null>(null);
+  const [gitDiff, setGitDiff] = useState<GitWorkingTreeDiff | null>(null);
   const [loadingGit, setLoadingGit] = useState(false);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const [commitMessage, setCommitMessage] = useState("");
@@ -53,7 +53,7 @@ export function ReviewTab() {
     }
     setLoadingGit(true);
     try {
-      const res = await api.workspaceDiff();
+      const res = await api.gitWorkingTree();
       setGitDiff(res);
     } catch {
       setGitDiff(null);

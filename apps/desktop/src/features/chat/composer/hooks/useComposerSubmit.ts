@@ -215,6 +215,106 @@ export function useComposerSubmit({
           command.id === "builtin.mode.agent" ||
           command.id === "builtin.mode.plan" ||
           command.id === "builtin.mode.goal";
+        const isWorkflowCommand = command.id === "builtin.workflow";
+        if (isWorkflowCommand) {
+          try {
+            const visibleDraft = text.trim();
+            const visibleCommandEnd = visibleDraft.search(/\s/);
+            const visibleCommandBody =
+              visibleCommandEnd === -1
+                ? ""
+                : visibleDraft.slice(visibleCommandEnd).trim();
+            const promptBody = visibleCommandBody || commandBody;
+            const workflowPrompt = promptBody
+              ? `[Workflow Orchestration Directive]\nExecute the following task using deterministic multi-agent workflow orchestration (Phase 1: Scout & Plan -> Phase 2: Fan-out Subagents via Task tool -> Phase 3: Adversarial Verification & Synthesis):\n\n${promptBody}`
+              : `[Workflow Directive]\nList available multi-agent workflow patterns (review-changes, parallel-audit, feature-pipeline) and explain how to orchestrate them with subagents.`;
+            const accepted = await sendPrompt(
+              serializeInlineComposerFileReferences(
+                workflowPrompt,
+                activeFileReferences,
+              ),
+              draft.draftSnapshot(workflowPrompt),
+            );
+            if (accepted) draft.clearDraftForKey(submittedDraftKey);
+          } catch (error) {
+            showToast(error instanceof Error ? error.message : String(error), {
+              variant: "error",
+            });
+          }
+          return;
+        }
+        const isSimplifyCommand =
+          name === "simplify" ||
+          command.name === "simplify" ||
+          command.id === "builtin.simplify";
+        if (isSimplifyCommand) {
+          try {
+            const visibleDraft = text.trim();
+            const visibleCommandEnd = visibleDraft.search(/\s/);
+            const visibleCommandBody =
+              visibleCommandEnd === -1
+                ? ""
+                : visibleDraft.slice(visibleCommandEnd).trim();
+            const promptBody = visibleCommandBody || commandBody;
+            const simplifyPrompt = [
+              "[4-Lens Code Simplification Review Directive]",
+              "Review the current git diff and changed code across 4 distinct lenses, then apply cleanups:",
+              "1. Reuse: Find existing helpers, hooks, design tokens, and components in the codebase to replace new code.",
+              "2. Simplification: Remove unrequested abstractions, unnecessary indirection, and premature generalizations.",
+              "3. Efficiency: Optimize algorithmic complexity, loops, memory allocations, and redundant re-renders.",
+              "4. Altitude: Verify code is placed at the correct architectural layer with clear separation of concerns.",
+              ...(promptBody ? ["", `Focus / instructions: ${promptBody}`] : []),
+            ].join("\n");
+            const accepted = await sendPrompt(
+              serializeInlineComposerFileReferences(
+                simplifyPrompt,
+                activeFileReferences,
+              ),
+              draft.draftSnapshot(simplifyPrompt),
+            );
+            if (accepted) draft.clearDraftForKey(submittedDraftKey);
+          } catch (error) {
+            showToast(error instanceof Error ? error.message : String(error), {
+              variant: "error",
+            });
+          }
+          return;
+        }
+        const isLoopCommand =
+          name === "loop" || command?.name === "loop" || command?.id === "builtin.loop";
+        if (isLoopCommand) {
+          try {
+            const visibleDraft = text.trim();
+            const visibleCommandEnd = visibleDraft.search(/\s/);
+            const visibleCommandBody =
+              visibleCommandEnd === -1
+                ? ""
+                : visibleDraft.slice(visibleCommandEnd).trim();
+            const promptBody = visibleCommandBody || commandBody;
+            let interval: string | undefined;
+            let taskBody = promptBody;
+            const intervalMatch = promptBody.match(/^(\d+(?:[smh]|ms)?)\s*(.*)$/is);
+            if (intervalMatch && intervalMatch[1]) {
+              interval = intervalMatch[1];
+              taskBody = intervalMatch[2].trim();
+            }
+
+            const loopPrompt = `[Loop Dynamic Pacing Directive]\nRun recurring task loop with dynamic prompt-cache aware pacing (TTL ~5 min / 300s):\n- Configured Interval: ${interval ?? "dynamic (self-paced)"}\n- Pacing Rules:\n  * Intervals under 5 minutes (< 270s): Active polling (CI runs, deploys) to keep prompt cache warm (Anthropic/OpenAI 5-minute TTL).\n  * Intervals over 5 minutes (>= 1200s): Amortize cache misses for long-running idle checks.\n  * Consecutive ticks with no state changes: Emit { "noop": true } and collapse consecutive noop: true ticks as a streak.\n\nTask:\n${taskBody || "Run scheduled background maintenance and verify state."}`;
+            const accepted = await sendPrompt(
+              serializeInlineComposerFileReferences(
+                loopPrompt,
+                activeFileReferences,
+              ),
+              draft.draftSnapshot(loopPrompt),
+            );
+            if (accepted) draft.clearDraftForKey(submittedDraftKey);
+          } catch (error) {
+            showToast(error instanceof Error ? error.message : String(error), {
+              variant: "error",
+            });
+          }
+          return;
+        }
         if (isModeCommand && commandBody) {
           try {
             await runPaletteCommand(command.id);

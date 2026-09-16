@@ -19,7 +19,11 @@
  *   already stopped calling tools. Only user Stop or `TaskStop` aborts it.
  */
 
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { promises as fsp } from "node:fs";
+import path from "node:path";
+import { promisify } from "node:util";
 import {
   Agent,
   convertToLlm,
@@ -101,6 +105,10 @@ export type SubagentRunResult = {
   toolCalls: number;
   usage?: MessageUsage;
   error?: { code: string; message: string };
+  /** Worktree path kept if modifications were committed or made. */
+  worktreePath?: string;
+  /** Git branch created for the worktree if kept. */
+  worktreeBranch?: string;
 };
 
 export type SubagentToolOutcome = {
@@ -136,7 +144,92 @@ export type SubagentRunOptions = {
     context: AfterToolCallContext,
   ) => SubagentToolOutcome | undefined;
   signal?: AbortSignal;
+  /** Isolation mode for subagent execution. */
+  isolation?: "worktree";
+  /** Root directory of the session workspace. */
+  workspaceRoot?: string;
+  /** Optional custom subagent ID used for worktree folder and branch naming. */
+  subagentId?: string;
 };
+
+const execFileAsync = promisify(execFile);
+
+export async function runGit(
+  args: string[],
+  cwd: string,
+): Promise<{ stdout: string; stderr: string }> {
+  return await execFileAsync("git", args, { cwd, timeout: 20_000 });
+}
+
+export async function isGitRepository(dir: string): Promise<boolean> {
+  try {
+    const { stdout } = await runGit(["rev-parse", "--is-inside-work-tree"], dir);
+    return stdout.trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function remapPathToWorktree(
+  targetPath: string,
+  worktreePath: string,
+  originalWorkspace: string,
+): string {
+  if (!path.isAbsolute(targetPath)) {
+    return path.resolve(worktreePath, targetPath);
+  }
+  const rel = path.relative(originalWorkspace, targetPath);
+  if (!rel.startsWith("..") && !path.isAbsolute(rel)) {
+    return path.resolve(worktreePath, rel);
+  }
+  return targetPath;
+}
+
+export function wrapToolsForWorktree(
+  tools: AgentTool[],
+  getWorktreePath: () => string | undefined,
+  originalWorkspaceRoot: string,
+): AgentTool[] {
+  return tools.map((tool) => ({
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const worktreePath = getWorktreePath();
+      if (!worktreePath) {
+        return tool.execute(toolCallId, args, signal, onUpdate);
+      }
+      let remappedArgs: Record<string, unknown> =
+        typeof args === "object" && args !== null
+          ? { ...(args as Record<string, unknown>) }
+          : {};
+      if (typeof remappedArgs.path === "string") {
+        remappedArgs.path = remapPathToWorktree(
+          remappedArgs.path,
+          worktreePath,
+          originalWorkspaceRoot,
+        );
+      }
+      if (typeof remappedArgs.file_path === "string") {
+        remappedArgs.file_path = remapPathToWorktree(
+          remappedArgs.file_path,
+          worktreePath,
+          originalWorkspaceRoot,
+        );
+      }
+      if (
+        (tool.name === "Glob" || tool.name === "Grep") &&
+        (!remappedArgs.path || remappedArgs.path === originalWorkspaceRoot)
+      ) {
+        remappedArgs.path = worktreePath;
+      }
+      if (tool.name === "Bash" && typeof remappedArgs.command === "string") {
+        const normalizedWorktree = worktreePath.replace(/\\/g, "/");
+        remappedArgs.command = `cd "${normalizedWorktree}" && ( ${remappedArgs.command} )`;
+      }
+      remappedArgs.cwd = worktreePath;
+      return tool.execute(toolCallId, remappedArgs, signal, onUpdate);
+    },
+  }));
+}
 
 /**
  * Compose the delegate's system prompt.
@@ -204,9 +297,18 @@ export class SubagentRun {
   private providerRetryHeaders?: Record<string, string>;
   private providerResponseStatus?: number;
   private readonly runAbortController = new AbortController();
+  private activeWorktreePath?: string;
+  private keptWorktreePath?: string;
+  private keptWorktreeBranch?: string;
 
   constructor(opts: SubagentRunOptions) {
     this.opts = opts;
+    const workspaceRoot = opts.workspaceRoot ?? process.cwd();
+    const wrappedTools = wrapToolsForWorktree(
+      opts.tools,
+      () => this.activeWorktreePath,
+      workspaceRoot,
+    );
     // A definition may cap the delegate's own output (issue #171). The
     // catalog's published limit keeps applying otherwise, so this is an
     // override on the built model, never a substituted default. The adapters
@@ -287,7 +389,7 @@ export class SubagentRun {
       initialState: {
         systemPrompt: opts.systemPrompt,
         model,
-        tools: opts.tools,
+        tools: wrappedTools,
         thinkingLevel: agentThinkingLevel,
         messages: [],
       },
@@ -303,6 +405,40 @@ export class SubagentRun {
     if (signal?.aborted) {
       return this.result("aborted", "The delegated task was aborted before it started.");
     }
+
+    const isolation = this.opts.isolation ?? this.opts.definition.isolation;
+    const workspaceRoot = this.opts.workspaceRoot ?? process.cwd();
+    let worktreeCreated = false;
+    let worktreePath: string | undefined;
+    let worktreeBranch: string | undefined;
+    let baseCommit: string | undefined;
+
+    if (isolation === "worktree") {
+      try {
+        const isRepo = await isGitRepository(workspaceRoot);
+        if (isRepo) {
+          const id = this.opts.subagentId ?? randomUUID().slice(0, 8);
+          worktreeBranch = `pi-subagent-${id}`;
+          worktreePath = path.resolve(workspaceRoot, ".pi", "worktrees", id);
+          await fsp.mkdir(path.dirname(worktreePath), { recursive: true });
+          try {
+            const revParse = await runGit(["rev-parse", "HEAD"], workspaceRoot);
+            baseCommit = revParse.stdout.trim();
+          } catch {
+            // empty or unborn repository
+          }
+          await runGit(["worktree", "add", "-b", worktreeBranch, worktreePath], workspaceRoot);
+          worktreeCreated = true;
+          this.activeWorktreePath = worktreePath;
+        }
+      } catch {
+        worktreeCreated = false;
+        worktreePath = undefined;
+        worktreeBranch = undefined;
+        this.activeWorktreePath = undefined;
+      }
+    }
+
     const onAbort = () => {
       this.runAbortController.abort();
       this.agent.abort();
@@ -320,6 +456,37 @@ export class SubagentRun {
     } finally {
       signal?.removeEventListener("abort", onAbort);
       this.finalizeCurrentAssistant();
+    }
+
+    if (worktreeCreated && worktreePath && worktreeBranch) {
+      try {
+        const statusResult = await runGit(["status", "--porcelain"], worktreePath);
+        const hasUncommittedChanges = statusResult.stdout.trim().length > 0;
+        let hasCommittedChanges = false;
+        if (baseCommit) {
+          try {
+            const currentHead = await runGit(["rev-parse", "HEAD"], worktreePath);
+            hasCommittedChanges = currentHead.stdout.trim() !== baseCommit;
+          } catch {
+            // ignore
+          }
+        }
+
+        if (!hasUncommittedChanges && !hasCommittedChanges) {
+          try {
+            await runGit(["worktree", "remove", "--force", worktreePath], workspaceRoot);
+          } catch {
+            await fsp.rm(worktreePath, { recursive: true, force: true }).catch(() => {});
+          }
+          await runGit(["branch", "-D", worktreeBranch], workspaceRoot).catch(() => {});
+        } else {
+          this.keptWorktreePath = worktreePath;
+          this.keptWorktreeBranch = worktreeBranch;
+        }
+      } catch {
+        this.keptWorktreePath = worktreePath;
+        this.keptWorktreeBranch = worktreeBranch;
+      }
     }
 
     if (signal?.aborted) {
@@ -433,6 +600,8 @@ export class SubagentRun {
       toolCalls: this.toolCalls,
       ...(this.usage ? { usage: this.usage } : {}),
       ...(error ? { error } : {}),
+      ...(this.keptWorktreePath ? { worktreePath: this.keptWorktreePath } : {}),
+      ...(this.keptWorktreeBranch ? { worktreeBranch: this.keptWorktreeBranch } : {}),
     };
   }
 

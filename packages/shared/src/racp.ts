@@ -330,7 +330,15 @@ export const RacpInputRequestSchema = Type.Object({
     Type.Object({
       id: Type.String({ minLength: 1 }),
       question: Type.String(),
-      options: Type.Array(Type.String()),
+      options: Type.Array(
+        Type.Union([
+          Type.String(),
+          Type.Object({
+            label: Type.String(),
+            preview: Type.Optional(Type.String()),
+          }),
+        ]),
+      ),
       multiSelect: Type.Boolean(),
     }),
     { minItems: 1 },

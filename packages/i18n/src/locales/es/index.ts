@@ -10,6 +10,12 @@ export const es = {
     "uiCrashed": "Algo salió mal con la interfaz"
   },
   "common": {
+    "refresh": "Actualizar",
+    "generating": "Generando…",
+    "committing": "Haciendo commit…",
+    "copy": "Copiar",
+    "copied": "Copiado",
+
     "close": "Cerrar",
     "cancel": "Cancelar",
     "save": "Guardar",
@@ -119,6 +125,8 @@ export const es = {
     "devDisabled": "Las actualizaciones están deshabilitadas en las compilaciones de desarrollo."
   },
   "nav": {
+    "quickOpen": "Apertura rápida",
+
     "home": "Inicio",
     "newTask": "Nueva tarea",
     "newProject": "Nuevo proyecto",
@@ -227,6 +235,9 @@ export const es = {
     sessionMissing: "Esa sesión ya no existe",
   },
   "chat": {
+    "addFilesOption": "Archivos",
+    "addMediaOption": "Fotos y medios",
+
     "emptyTitle": "¿Qué puedo ayudarte a construir?",
     "emptyTitleInProject": "¿Qué podemos construir en {{project}}?",
     "emptyTitleTemporary": "¿Qué te gustaría explorar temporalmente?",
@@ -503,6 +514,8 @@ export const es = {
     "renameSaving": "Guardando…"
   },
   "plan": {
+    "openWorkspaceRequired": "Se requiere carpeta de espacio de trabajo para ejecutar el plan.",
+
     "planning": "Planificación",
     "approvalRegion": "Aprobación del plan",
     "readyAnnouncement": "Plan listo. El plan está abierto en el Panel de Trabajo.",
@@ -1036,6 +1049,21 @@ sklm: {
     "presetKimiCoding": "Kimi para codificación",
     "presetXiaomi": "Xiaomi",
     "presetAntigravity": "Antigravity",
+    "presetKiro": "Kiro AI",
+    "presetOpenCodeFree": "OpenCode Free",
+    "presetOllama": "Ollama (Local)",
+    "presetLmStudio": "LM Studio (Local)",
+    "apiKeyLocalOptional": "Opcional para puntos finales locales",
+    "apiKeyNoneRequired": "No requerido (punto final local)",
+    "usageRefreshed": "Datos de uso actualizados",
+    "usageRefreshFailed": "Error al actualizar los datos de uso",
+    "quotaRefreshed": "Cuota actualizada",
+    "permissionAskHint": "Preguntar siempre antes de herramientas/ediciones",
+    "permissionAcceptEditsHint": "Aceptar ediciones automáticamente, preguntar para comandos",
+    "permissionAutoHint": "Omitir avisos y ejecutar de forma autónoma",
+    "modeAgentDesc": "Agente de codificación autónomo con capacidad completa",
+    "modePlanDesc": "Formular planes de implementación para revisión",
+    "modeGoalDesc": "Ejecución orientada a objetivos con aprobaciones automáticas",
     "apiStyleResponses": "Respuestas de OpenAI",
     "apiStyleAnthropic": "Mensajes antrópicos",
     "apiStyleGoogle": "IA generativa de Google",
@@ -1473,6 +1501,9 @@ sklm: {
       "body": "Elija una herramienta o abra un recurso."
     },
     "review": {
+      "sessionMode": "Sesión",
+      "workingTreeMode": "Árbol de trabajo",
+
       "noWorkspace": "Abrir un proyecto para ver los cambios",
       "clean": "No hay cambios no confirmados en este proyecto",
       "noRepo": "Este proyecto no es un repositorio Git",
@@ -1529,6 +1560,9 @@ sklm: {
     "uncategorized": "Otro"
   },
   "search": {
+    "quickOpenPlaceholder": "Escriba un nombre de archivo para abrir…",
+    "noFilesFound": "No se encontraron archivos coincidentes.",
+
     "placeholder": "Buscar chats…",
     "empty": "No hay chats coincidentes",
     "pages": "Páginas",
@@ -2113,7 +2147,47 @@ sklm: {
       "continue": "Continuar",
       "dismiss": "Descartar"
     }
-  }
+  },
+  "git": {
+    "messageGenerated": "¡Mensaje de commit generado!",
+    "commitSuccess": "¡Commit realizado con éxito!",
+    "notRepo": "No es un repositorio Git",
+    "notRepoHint": "La carpeta actual no está rastreada por Git.",
+    "cleanTitle": "Árbol de trabajo limpio",
+    "cleanHint": "No hay cambios sin preparar o sin rastrear.",
+    "changedFiles": "{{count}} archivo(s) modificado(s)",
+    "stageAll": "Preparar todo",
+    "stage": "Preparar",
+    "untrackedEmpty": "Nuevo archivo sin rastrear",
+    "noHunks": "Cambios binarios o vacíos",
+    "commitMessageLabel": "Mensaje de commit:",
+    "commitPlaceholder": "type(scope): asunto del mensaje…",
+    "generateAiCommit": "Commit con IA",
+    "commit": "Hacer commit",
+  },
+  "workpanel": {
+    "openFolderPrompt": "Por favor, abra una carpeta de proyecto",
+    "todosCreatedFromPlan": "¡Se crearon {{count}} tarea(s) del plan en la lista de tareas!",
+    "openFolderToExecutePlan": "Por favor, abra una carpeta de proyecto para aprobar y ejecutar el plan.",
+    "openFolderToCreatePlan": "Por favor, abra una carpeta de proyecto antes de crear un plan.",
+    "openFolderToCreatePlanRequired": "Por favor, abra una carpeta de proyecto para crear un plan.",
+    "selectPlanTooltip": "Seleccionar plan de ~/.pi-desktop/plans/",
+    "syncTodosFromPlanTooltip": "Sincronizar lista de tareas desde este plan",
+    "createPlanTooltip": "Crear nuevo plan",
+    "createPlan": "Crear plan",
+    "planAnswerInstructions": "Respuesta / Instrucciones:",
+    "planAnswerPlaceholder": "Introduzca respuestas o instrucciones adicionales antes de aprobar el plan…",
+    "autoAcceptEditsTooltip": "Aceptar ediciones automáticamente al ejecutar el plan",
+    "noApprovalTooltip": "Ejecutar de forma totalmente automática sin aprobación (Sin aprobación)",
+    "askEachStepTooltip": "Preguntar antes de cada paso",
+    "createNewPlanTitle": "Crear nuevo plan",
+    "createNewPlanDesc": "Planifique pasos técnicos en ~/.pi-desktop/plans/ antes de editar archivos.",
+    "planRequirementsLabel": "Requisitos / Respuestas para el plan:",
+    "planRequirementsPlaceholder": "Introduzca los requisitos, ej. \"Refactorizar autenticación\"",
+    "createPlanAutoAcceptTooltip": "Crear plan con modo Auto Aceptar-Ediciones",
+    "createPlanNoApproveTooltip": "Crear plan con modo Sin Aprobación",
+    "viewSavedPlans": "Ver planes guardados",
+  },
 } satisfies EnglishCatalog;
 
 export default es;

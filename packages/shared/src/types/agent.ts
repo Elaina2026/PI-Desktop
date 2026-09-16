@@ -170,10 +170,17 @@ export type ToolPermissionResolution = {
   decision: PermissionDecision;
 };
 
+export type AskToolOption =
+  | string
+  | {
+      label: string;
+      preview?: string;
+    };
+
 /** A model-created question shown in the inline asktool card. */
 export type AskToolQuestion = {
   question: string;
-  options: string[];
+  options: AskToolOption[];
   multiSelect?: boolean;
 };
 

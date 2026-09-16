@@ -1,9 +1,15 @@
+import { promises as fsp } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEventEnvelope, SubagentDefinition } from "@pi-desktop/shared";
 import {
   composeSubagentSystemPrompt,
   MAX_SUBAGENT_REPORT_CHARS,
+  remapPathToWorktree,
+  runGit,
   SubagentRun,
+  wrapToolsForWorktree,
   type SubagentRunOptions,
 } from "./subagent.js";
 import type { RuntimeProviderConfig } from "./provider-binding.js";
@@ -490,5 +496,198 @@ describe("SubagentRun watchdogs", () => {
 
     await expect(run.afterToolCall({ toolCall: { id: "child-1" } })).resolves.toBeUndefined();
     expect(run.cappedTurns).toBe(false);
+  });
+});
+
+describe("SubagentRun worktree isolation", () => {
+  it("remaps relative and workspace paths into worktree path", () => {
+    const workspace = path.resolve("/workspace");
+    const worktree = path.resolve("/workspace/.pi/worktrees/123");
+
+    expect(remapPathToWorktree("src/index.ts", worktree, workspace)).toBe(
+      path.resolve(worktree, "src/index.ts"),
+    );
+    expect(
+      remapPathToWorktree(path.resolve(workspace, "src/index.ts"), worktree, workspace),
+    ).toBe(path.resolve(worktree, "src/index.ts"));
+
+    const external = path.resolve("/tmp/other.txt");
+    expect(remapPathToWorktree(external, worktree, workspace)).toBe(external);
+  });
+
+  it("wraps tools to direct file operations and bash commands into worktree", async () => {
+    const workspace = path.resolve("/workspace");
+    const worktree = path.resolve("/workspace/.pi/worktrees/sub-1");
+    let activeWorktree: string | undefined = worktree;
+
+    const readExec = vi.fn(async (_id: string, args: Record<string, unknown>) => args);
+    const globExec = vi.fn(async (_id: string, args: Record<string, unknown>) => args);
+    const bashExec = vi.fn(async (_id: string, args: Record<string, unknown>) => args);
+
+    const tools = wrapToolsForWorktree(
+      [
+        { name: "Read", label: "Read", description: "", parameters: {}, execute: readExec as any },
+        { name: "Glob", label: "Glob", description: "", parameters: {}, execute: globExec as any },
+        { name: "Bash", label: "Bash", description: "", parameters: {}, execute: bashExec as any },
+      ],
+      () => activeWorktree,
+      workspace,
+    );
+
+    await tools[0].execute("call-1", { path: "src/app.ts" });
+    expect(readExec).toHaveBeenCalledWith(
+      "call-1",
+      expect.objectContaining({
+        path: path.resolve(worktree, "src/app.ts"),
+        cwd: worktree,
+      }),
+      undefined,
+      undefined,
+    );
+
+    await tools[1].execute("call-2", {});
+    expect(globExec).toHaveBeenCalledWith(
+      "call-2",
+      expect.objectContaining({
+        path: worktree,
+        cwd: worktree,
+      }),
+      undefined,
+      undefined,
+    );
+
+    await tools[2].execute("call-3", { command: "git status" });
+    const normalized = worktree.replace(/\\/g, "/");
+    expect(bashExec).toHaveBeenCalledWith(
+      "call-3",
+      expect.objectContaining({
+        command: `cd "${normalized}" && ( git status )`,
+        cwd: worktree,
+      }),
+      undefined,
+      undefined,
+    );
+  });
+
+  it("creates worktree and automatically cleans up when no mutations occur", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "pi-subagent-worktree-clean-"));
+    try {
+      await runGit(["init"], tempDir);
+      await runGit(["config", "user.email", "test@example.com"], tempDir);
+      await runGit(["config", "user.name", "Test Runner"], tempDir);
+      const testFile = path.join(tempDir, "initial.txt");
+      await fsp.writeFile(testFile, "hello", "utf8");
+      await runGit(["add", "."], tempDir);
+      await runGit(["commit", "-m", "initial commit"], tempDir);
+
+      const { run } = createRun({
+        isolation: "worktree",
+        workspaceRoot: tempDir,
+        subagentId: "test-clean",
+      });
+
+      run.agent = {
+        prompt: vi.fn().mockImplementation(async () => {
+          run.lastReportText = "Investigation complete. No changes made.";
+        }),
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn(),
+      };
+
+      const result = await (run as unknown as SubagentRun).run();
+
+      expect(result.status).toBe("completed");
+      expect(result.report).toBe("Investigation complete. No changes made.");
+      expect(result.worktreePath).toBeUndefined();
+      expect(result.worktreeBranch).toBeUndefined();
+
+      // Ensure worktree directory was removed
+      const worktreeDir = path.join(tempDir, ".pi", "worktrees", "test-clean");
+      let exists = true;
+      try {
+        await fsp.access(worktreeDir);
+      } catch {
+        exists = false;
+      }
+      expect(exists).toBe(false);
+
+      // Ensure branch was deleted
+      const { stdout: branches } = await runGit(["branch"], tempDir);
+      expect(branches).not.toContain("pi-subagent-test-clean");
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("keeps worktree and reports details when changes were modified or committed", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "pi-subagent-worktree-dirty-"));
+    try {
+      await runGit(["init"], tempDir);
+      await runGit(["config", "user.email", "test@example.com"], tempDir);
+      await runGit(["config", "user.name", "Test Runner"], tempDir);
+      const testFile = path.join(tempDir, "initial.txt");
+      await fsp.writeFile(testFile, "initial", "utf8");
+      await runGit(["add", "."], tempDir);
+      await runGit(["commit", "-m", "initial commit"], tempDir);
+
+      const { run } = createRun({
+        isolation: "worktree",
+        workspaceRoot: tempDir,
+        subagentId: "test-dirty",
+      });
+
+      const worktreeDir = path.join(tempDir, ".pi", "worktrees", "test-dirty");
+
+      run.agent = {
+        prompt: vi.fn().mockImplementation(async () => {
+          // Mutate a file inside worktree
+          await fsp.writeFile(path.join(worktreeDir, "new-file.txt"), "modified", "utf8");
+          run.lastReportText = "Implemented new feature.";
+        }),
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn(),
+      };
+
+      const result = await (run as unknown as SubagentRun).run();
+
+      expect(result.status).toBe("completed");
+      expect(result.worktreePath).toBe(worktreeDir);
+      expect(result.worktreeBranch).toBe("pi-subagent-test-dirty");
+
+      // Verify worktree is kept on disk
+      const newFileContent = await fsp.readFile(path.join(worktreeDir, "new-file.txt"), "utf8");
+      expect(newFileContent).toBe("modified");
+
+      // Cleanup worktree for test teardown
+      await runGit(["worktree", "remove", "--force", worktreeDir], tempDir).catch(() => {});
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("falls back gracefully when workspace is not a git repo", async () => {
+    const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "pi-subagent-not-git-"));
+    try {
+      const { run } = createRun({
+        isolation: "worktree",
+        workspaceRoot: tempDir,
+      });
+
+      run.agent = {
+        prompt: vi.fn().mockImplementation(async () => {
+          run.lastReportText = "Ran without git worktree.";
+        }),
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn(),
+      };
+
+      const result = await (run as unknown as SubagentRun).run();
+
+      expect(result.status).toBe("completed");
+      expect(result.report).toBe("Ran without git worktree.");
+      expect(result.worktreePath).toBeUndefined();
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
   });
 });

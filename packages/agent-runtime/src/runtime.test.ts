@@ -1593,6 +1593,55 @@ describe("DesktopAgentRuntime deferred tool catalog", () => {
     await runtime.dispose();
   });
 
+  it("supports options with preview in asktool", async () => {
+    const onEvent = vi.fn();
+    const runtime = createRuntime({ onEvent });
+    const askTool = (runtime as any).agent.state.tools.find(
+      (tool: any) => tool.name === "asktool",
+    );
+    const pending = askTool.execute("ask-call-preview", {
+      questions: [
+        {
+          question: "Which component pattern?",
+          options: [
+            { label: "Card", preview: "```tsx\n<Card title=\"Test\" />\n```" },
+            { label: "Modal", preview: "```tsx\n<Modal open />\n```" },
+          ],
+        },
+      ],
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const request = onEvent.mock.calls
+      .map(([envelope]) => envelope as any)
+      .map((envelope) => envelope.event)
+      .find((event) => event.type === "asktool_request")?.request;
+    expect(request).toMatchObject({
+      sessionId: "session-1",
+      toolCallId: "ask-call-preview",
+      questions: [
+        {
+          question: "Which component pattern?",
+          options: [
+            { label: "Card", preview: "```tsx\n<Card title=\"Test\" />\n```" },
+            { label: "Modal", preview: "```tsx\n<Modal open />\n```" },
+          ],
+        },
+      ],
+    });
+    expect(
+      runtime.resolveAskTool({
+        requestId: request.requestId,
+        sessionId: "session-1",
+        answers: [["Card"]],
+      }),
+    ).toEqual({ ok: true });
+    await expect(pending).resolves.toMatchObject({
+      content: [{ text: "Which component pattern?：Card" }],
+      details: { answers: [["Card"]] },
+    });
+    await runtime.dispose();
+  });
+
   it("normalizes legacy chat onto the Plan core", async () => {
     const runtime = createRuntime({
       mode: "chat",

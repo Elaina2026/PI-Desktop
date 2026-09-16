@@ -904,7 +904,7 @@ export class AgentHost {
       questions: request.questions.map((question, index) => ({
         id: `${request.requestId}:${index}`,
         question: question.question,
-        options: question.options,
+        options: question.options.map((opt) => (typeof opt === "string" ? opt : opt.label)),
         multiSelect: question.multiSelect ?? false,
       })),
     };

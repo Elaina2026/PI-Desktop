@@ -1222,7 +1222,25 @@
                   "options": {
                     "type": "array",
                     "items": {
-                      "type": "string"
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "required": [
+                            "label"
+                          ],
+                          "properties": {
+                            "label": {
+                              "type": "string"
+                            },
+                            "preview": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
                     }
                   },
                   "multiSelect": {
@@ -1622,7 +1640,25 @@
             "options": {
               "type": "array",
               "items": {
-                "type": "string"
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "label"
+                    ],
+                    "properties": {
+                      "label": {
+                        "type": "string"
+                      },
+                      "preview": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
               }
             },
             "multiSelect": {

@@ -18,4 +18,19 @@ describe("asktool output", () => {
       "Preferred color?：\n---\nWhich platforms?：Desktop",
     );
   });
+
+  it("formats output when options include preview metadata", () => {
+    const questionsWithPreview: AskToolQuestion[] = [
+      {
+        question: "Select approach",
+        options: [
+          { label: "Option A", preview: "Preview for A" },
+          { label: "Option B", preview: "Preview for B" },
+        ],
+      },
+    ];
+    expect(formatAskToolOutput(questionsWithPreview, [["Option A"]])).toBe(
+      "Select approach：Option A",
+    );
+  });
 });

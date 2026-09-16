@@ -186,7 +186,7 @@ export function ProviderSetupDialog({
   const discoveryActive =
     Boolean(service) &&
     !baseUrlIssue &&
-    (custom || isKeyless || Boolean(apiKey.trim()) || Boolean(provider));
+    (custom || Boolean(apiKey.trim()) || Boolean(provider) || isKeyless);
   const headers = pairsToRecord(headerPairs);
   const discovery = useProviderModels(
     discoveryActive,

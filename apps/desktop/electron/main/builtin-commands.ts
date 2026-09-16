@@ -15,6 +15,9 @@ export const BUILTIN_COMMANDS: BuiltinCommandDef[] = [
   { id: "builtin.mode.agent", title: "Switch to Agent mode", category: "Session", keywords: ["mode", "agent"], source: "builtin", slash: "agent-mode" },
   { id: "builtin.mode.plan", title: "Switch to Plan mode", category: "Session", keywords: ["mode", "plan", "planning"], source: "builtin", slash: "plan-mode" },
   { id: "builtin.mode.goal", title: "Switch to Goal mode", category: "Session", keywords: ["mode", "goal", "objective", "autonomous"], source: "builtin", slash: "goal-mode" },
+  { id: "builtin.workflow", title: "Run multi-agent workflow", category: "Workflow", keywords: ["workflow", "orchestrate", "pipeline", "subagents", "multi-agent"], source: "builtin", slash: "workflow" },
+  { id: "builtin.simplify", title: "Review diff for reuse, simplification, efficiency, and altitude", category: "Code Quality", keywords: ["simplify", "clean", "refactor", "reuse", "efficiency", "altitude"], source: "builtin", slash: "simplify" },
+  { id: "builtin.loop", title: "Run recurring loop with dynamic cache-aware pacing", category: "Session", keywords: ["loop", "recur", "poll", "interval", "dynamic"], source: "builtin", slash: "loop" },
 ];
 
 /** Palette-shaped items (no slash field leaks into the palette contract). */

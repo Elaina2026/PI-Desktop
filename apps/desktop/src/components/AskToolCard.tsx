@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { AskToolQuestion } from "@pi-desktop/shared";
+import type { AskToolOption, AskToolQuestion } from "@pi-desktop/shared";
 import type { PendingAsk } from "../lib/pending-asks";
 import { useAppStore } from "../stores/app-store";
+import { Markdown } from "./Markdown";
 import { Button } from "./ui";
 
 type DraftAnswer = {
@@ -13,6 +14,14 @@ type DraftAnswer = {
 };
 
 const CUSTOM_OPTION = "__asktool_custom__";
+
+function getOptionLabel(option: AskToolOption): string {
+  return typeof option === "string" ? option : option.label;
+}
+
+function getOptionPreview(option: AskToolOption): string | undefined {
+  return typeof option === "string" ? undefined : option.preview;
+}
 
 function emptyDrafts(questions: AskToolQuestion[]): DraftAnswer[] {
   return questions.map(() => ({
@@ -30,8 +39,36 @@ export function AskToolCard({ request, queued = 0 }: { request: PendingAsk; queu
   const [index, setIndex] = useState(0);
   const [drafts, setDrafts] = useState(() => emptyDrafts(request.questions));
   const [resolving, setResolving] = useState(false);
+  const [hoveredOption, setHoveredOption] = useState<string | null>(null);
+
   const current = request.questions[index];
   const currentDraft = drafts[index];
+
+  useEffect(() => {
+    setHoveredOption(null);
+  }, [index]);
+
+  const hasAnyPreview = useMemo(
+    () => current.options.some((opt) => Boolean(getOptionPreview(opt))),
+    [current.options],
+  );
+
+  const activePreviewOption = useMemo(() => {
+    if (!hasAnyPreview) return null;
+    if (hoveredOption) {
+      const found = current.options.find(
+        (opt) => getOptionLabel(opt) === hoveredOption && Boolean(getOptionPreview(opt)),
+      );
+      if (found) return found;
+    }
+    const selected = current.options.find(
+      (opt) =>
+        currentDraft.values.includes(getOptionLabel(opt)) &&
+        Boolean(getOptionPreview(opt)),
+    );
+    if (selected) return selected;
+    return current.options.find((opt) => Boolean(getOptionPreview(opt))) ?? null;
+  }, [hasAnyPreview, hoveredOption, current.options, currentDraft.values]);
 
   const currentValues = (draft: DraftAnswer): string[] => [
     ...draft.values,
@@ -44,7 +81,7 @@ export function AskToolCard({ request, queued = 0 }: { request: PendingAsk; queu
     () =>
       drafts.map((draft) => {
         if (draft.skipped) return "skipped" as const;
-        return currentValues(draft).length > 0 ? "answered" as const : "unanswered" as const;
+        return currentValues(draft).length > 0 ? ("answered" as const) : ("unanswered" as const);
       }),
     [drafts],
   );
@@ -122,6 +159,50 @@ export function AskToolCard({ request, queued = 0 }: { request: PendingAsk; queu
     else setIndex((value) => value + 1);
   };
 
+  const optionsElement = (
+    <div className="asktool-options" role={current.multiSelect ? "group" : "radiogroup"}>
+      {current.options.map((option) => {
+        const label = getOptionLabel(option);
+        const preview = getOptionPreview(option);
+        const selected = currentDraft.values.includes(label);
+        return (
+          <button
+            key={label}
+            type="button"
+            className={`asktool-option ${selected ? "selected" : ""}`}
+            aria-pressed={current.multiSelect ? selected : undefined}
+            aria-checked={!current.multiSelect ? selected : undefined}
+            role={current.multiSelect ? "checkbox" : "radio"}
+            onClick={() => selectOption(label)}
+            onMouseEnter={() => setHoveredOption(label)}
+            onMouseLeave={() => setHoveredOption((prev) => (prev === label ? null : prev))}
+            onFocus={() => setHoveredOption(label)}
+            onBlur={() => setHoveredOption((prev) => (prev === label ? null : prev))}
+          >
+            <span className="asktool-option-mark" aria-hidden>{selected ? "✓" : ""}</span>
+            <span className="asktool-option-label">{label}</span>
+            {preview ? (
+              <span className="asktool-option-preview-tag" aria-hidden>Preview</span>
+            ) : null}
+          </button>
+        );
+      })}
+      <button
+        type="button"
+        className={`asktool-option asktool-custom-option ${currentDraft.customSelected ? "selected" : ""}`}
+        aria-pressed={current.multiSelect ? currentDraft.customSelected : undefined}
+        aria-checked={!current.multiSelect ? currentDraft.customSelected : undefined}
+        role={current.multiSelect ? "checkbox" : "radio"}
+        onClick={() => selectOption(CUSTOM_OPTION)}
+        onMouseEnter={() => setHoveredOption(CUSTOM_OPTION)}
+        onMouseLeave={() => setHoveredOption((prev) => (prev === CUSTOM_OPTION ? null : prev))}
+      >
+        <span className="asktool-option-mark" aria-hidden>{currentDraft.customSelected ? "✓" : ""}</span>
+        <span>{t("askTool.customOption")}</span>
+      </button>
+    </div>
+  );
+
   return (
     <section className="asktool-card" role="region" aria-label={t("askTool.title")}>
       <div className="asktool-card-header">
@@ -161,36 +242,34 @@ export function AskToolCard({ request, queued = 0 }: { request: PendingAsk; queu
         {t("askTool.questionNumber", { number: index + 1 })}
       </div>
       <h3 className="asktool-question">{current.question}</h3>
-      <div className="asktool-options" role={current.multiSelect ? "group" : "radiogroup"}>
-        {current.options.map((option) => {
-          const selected = currentDraft.values.includes(option);
-          return (
-            <button
-              key={option}
-              type="button"
-              className={`asktool-option ${selected ? "selected" : ""}`}
-              aria-pressed={current.multiSelect ? selected : undefined}
-              aria-checked={!current.multiSelect ? selected : undefined}
-              role={current.multiSelect ? "checkbox" : "radio"}
-              onClick={() => selectOption(option)}
-            >
-              <span className="asktool-option-mark" aria-hidden>{selected ? "✓" : ""}</span>
-              <span>{option}</span>
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          className={`asktool-option asktool-custom-option ${currentDraft.customSelected ? "selected" : ""}`}
-          aria-pressed={current.multiSelect ? currentDraft.customSelected : undefined}
-          aria-checked={!current.multiSelect ? currentDraft.customSelected : undefined}
-          role={current.multiSelect ? "checkbox" : "radio"}
-          onClick={() => selectOption(CUSTOM_OPTION)}
-        >
-          <span className="asktool-option-mark" aria-hidden>{currentDraft.customSelected ? "✓" : ""}</span>
-          <span>{t("askTool.customOption")}</span>
-        </button>
-      </div>
+
+      {hasAnyPreview ? (
+        <div className="asktool-preview-layout">
+          {optionsElement}
+          <aside className="ask-option-preview" aria-label="Option preview">
+            {activePreviewOption && getOptionPreview(activePreviewOption) ? (
+              <div className="ask-option-preview-card">
+                <div className="ask-option-preview-header">
+                  <span className="ask-option-preview-title">
+                    {getOptionLabel(activePreviewOption)}
+                  </span>
+                  <span className="ask-option-preview-badge">Preview</span>
+                </div>
+                <div className="ask-option-preview-body">
+                  <Markdown source={getOptionPreview(activePreviewOption)!} />
+                </div>
+              </div>
+            ) : (
+              <div className="ask-option-preview-empty">
+                <span>Select or hover an option to preview</span>
+              </div>
+            )}
+          </aside>
+        </div>
+      ) : (
+        optionsElement
+      )}
+
       {currentDraft.customSelected ? (
         <input
           className="asktool-custom-input"

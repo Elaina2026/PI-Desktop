@@ -10,6 +10,12 @@ export const de = {
     "uiCrashed": "Mit der Schnittstelle ist ein Fehler aufgetreten"
   },
   "common": {
+    "refresh": "Aktualisieren",
+    "generating": "Wird generiert…",
+    "committing": "Wird committet…",
+    "copy": "Kopieren",
+    "copied": "Kopiert",
+
     "close": "Schließen",
     "cancel": "Abbrechen",
     "save": "Speichern",
@@ -119,6 +125,8 @@ export const de = {
     "devDisabled": "Updates sind in Entwicklungs-Builds deaktiviert."
   },
   "nav": {
+    "quickOpen": "Schnell öffnen",
+
     "home": "Startseite",
     "newTask": "Neue Aufgabe",
     "newProject": "Neues Projekt",
@@ -227,6 +235,9 @@ export const de = {
     sessionMissing: "Diese Sitzung existiert nicht mehr",
   },
   "chat": {
+    "addFilesOption": "Dateien",
+    "addMediaOption": "Fotos & Medien",
+
     "emptyTitle": "Was kann ich Ihnen beim Aufbau helfen?",
     "emptyTitleInProject": "Was können wir in {{project}} bauen?",
     "emptyTitleTemporary": "Was würden Sie gerne vorübergehend erkunden?",
@@ -503,6 +514,8 @@ export const de = {
     "renameSaving": "Speichern…"
   },
   "plan": {
+    "openWorkspaceRequired": "Arbeitsbereichsordner erforderlich, um den Plan auszuführen.",
+
     "planning": "Planung",
     "approvalRegion": "Plangenehmigung",
     "readyAnnouncement": "Plan bereit. Der Plan ist im Arbeitsfenster geöffnet.",
@@ -1036,6 +1049,21 @@ sklm: {
     "presetKimiCoding": "Kimi für Codierung",
     "presetXiaomi": "Xiaomi",
     "presetAntigravity": "Antigravity",
+    "presetKiro": "Kiro AI",
+    "presetOpenCodeFree": "OpenCode Free",
+    "presetOllama": "Ollama (Lokal)",
+    "presetLmStudio": "LM Studio (Lokal)",
+    "apiKeyLocalOptional": "Optional für lokale Endpunkte",
+    "apiKeyNoneRequired": "Nicht erforderlich (lokaler Endpunkt)",
+    "usageRefreshed": "Nutzungsdaten aktualisiert",
+    "usageRefreshFailed": "Nutzungsdaten konnten nicht aktualisiert werden",
+    "quotaRefreshed": "Kontingent aktualisiert",
+    "permissionAskHint": "Vor Werkzeugen/Bearbeitungen immer um Bestätigung bitten",
+    "permissionAcceptEditsHint": "Dateiänderungen automatisch akzeptieren, bei Befehlen fragen",
+    "permissionAutoHint": "Aufforderungen überspringen und autonom ausführen",
+    "modeAgentDesc": "Autonomer Codierungsagent mit vollem Funktionsumfang",
+    "modePlanDesc": "Umsetzungspläne zur Überprüfung erstellen",
+    "modeGoalDesc": "Zielgerichtete Ausführung mit automatischen Genehmigungen",
     "apiStyleResponses": "OpenAI-Antworten",
     "apiStyleAnthropic": "Anthropic Messages",
     "apiStyleGoogle": "Google Generative AI",
@@ -1473,6 +1501,9 @@ sklm: {
       "body": "Wählen Sie ein Werkzeug oder öffnen Sie eine Ressource."
     },
     "review": {
+      "sessionMode": "Sitzung",
+      "workingTreeMode": "Arbeitsverzeichnis",
+
       "noWorkspace": "Öffnen Sie ein Projekt, um Änderungen anzuzeigen",
       "clean": "Keine nicht festgeschriebenen Änderungen in diesem Projekt",
       "noRepo": "Dieses Projekt ist kein Git-Repository",
@@ -1529,6 +1560,9 @@ sklm: {
     "uncategorized": "Andere"
   },
   "search": {
+    "quickOpenPlaceholder": "Dateinamen zum Öffnen eingeben…",
+    "noFilesFound": "Keine passenden Dateien gefunden.",
+
     "placeholder": "Chats durchsuchen…",
     "empty": "Keine passenden Chats",
     "pages": "Seiten",
@@ -2113,7 +2147,47 @@ sklm: {
       "continue": "Weiter",
       "dismiss": "Verwerfen"
     }
-  }
+  },
+  "git": {
+    "messageGenerated": "Commit-Nachricht generiert!",
+    "commitSuccess": "Erfolgreich committet!",
+    "notRepo": "Kein Git-Repository",
+    "notRepoHint": "Der aktuelle Arbeitsbereichsordner wird nicht von Git verfolgt.",
+    "cleanTitle": "Arbeitsbereich sauber",
+    "cleanHint": "Keine ungestageten oder unverfolgten Änderungen im Arbeitsbereich.",
+    "changedFiles": "{{count}} Datei(en) geändert",
+    "stageAll": "Alle stagen",
+    "stage": "Stagen",
+    "untrackedEmpty": "Neue unverfolgte Datei",
+    "noHunks": "Binäre oder leere Änderungen",
+    "commitMessageLabel": "Commit-Nachricht:",
+    "commitPlaceholder": "type(scope): Betreff der Nachricht…",
+    "generateAiCommit": "KI-Commit",
+    "commit": "Commit",
+  },
+  "workpanel": {
+    "openFolderPrompt": "Bitte öffnen Sie einen Projektordner",
+    "todosCreatedFromPlan": "{{count}} Aufgabe(n) aus Plan in Aufgabenliste erstellt!",
+    "openFolderToExecutePlan": "Bitte öffnen Sie einen Projektordner, um den Plan zu genehmigen und auszuführen.",
+    "openFolderToCreatePlan": "Bitte öffnen Sie vor dem Erstellen eines Plans einen Projektordner.",
+    "openFolderToCreatePlanRequired": "Bitte öffnen Sie einen Projektordner, um einen Plan zu erstellen.",
+    "selectPlanTooltip": "Plan aus ~/.pi-desktop/plans/ auswählen",
+    "syncTodosFromPlanTooltip": "Aufgabenliste mit diesem Plan synchronisieren",
+    "createPlanTooltip": "Neuen Plan erstellen",
+    "createPlan": "Plan erstellen",
+    "planAnswerInstructions": "Antwort / Anweisungen:",
+    "planAnswerPlaceholder": "Geben Sie vor der Genehmigung des Plans Antworten oder zusätzliche Anweisungen ein…",
+    "autoAcceptEditsTooltip": "Änderungen bei der Planausführung automatisch akzeptieren",
+    "noApprovalTooltip": "Vollautomatisch ohne Genehmigung ausführen (Keine Genehmigung)",
+    "askEachStepTooltip": "Vor jedem Schritt fragen",
+    "createNewPlanTitle": "Neuen Plan erstellen",
+    "createNewPlanDesc": "Planen Sie technische Schritte in ~/.pi-desktop/plans/, bevor Sie Dateien bearbeiten.",
+    "planRequirementsLabel": "Anforderungen / Antworten für den Plan:",
+    "planRequirementsPlaceholder": "Anforderungen eingeben, z.B. \"Authentifizierung refaktorisieren\"",
+    "createPlanAutoAcceptTooltip": "Plan mit automatischem Akzeptieren erstellen",
+    "createPlanNoApproveTooltip": "Plan im Modus ohne Genehmigung erstellen",
+    "viewSavedPlans": "Gespeicherte Pläne anzeigen",
+  },
 } satisfies EnglishCatalog;
 
 export default de;

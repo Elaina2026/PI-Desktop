@@ -2726,12 +2726,12 @@
   margin-bottom: 0.3em;
   color: var(--ds-text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--tracking-wider);
 }
 
 .plan-markdown-container p {
   margin: 0.6em 0;
-  line-height: 1.6;
+  line-height: var(--leading-prose);
 }
 
 .plan-markdown-container ul,
@@ -2742,7 +2742,7 @@
 
 .plan-markdown-container li {
   margin: 0.25em 0;
-  line-height: 1.5;
+  line-height: var(--leading-relaxed);
 }
 
 .plan-markdown-container blockquote {
@@ -2779,7 +2779,7 @@
   background: transparent;
   color: inherit;
   font-size: var(--text-3xs);
-  line-height: 1.45;
+  line-height: var(--leading-body);
   white-space: pre;
 }
 

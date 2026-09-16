@@ -278,6 +278,7 @@
   --font-weight-medium-plus: 520;
   --font-weight-strong: 560;
   --font-weight-semibold: 600;
+  --font-weight-bold: 700;
 
   --leading-none: 1;
   --leading-heading: 1.15;
@@ -296,4 +297,5 @@
   --tracking-tight: -0.02em;
   --tracking-normal: 0em;
   --tracking-wide: 0.02em;
+  --tracking-wider: 0.05em;
 }

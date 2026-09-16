@@ -147,7 +147,10 @@ import { clampThinkingLevel } from "./thinking-level.js";
 import { visionFromModelConfig } from "./model-capabilities.js";
 import type { ProjectInstructions } from "./project-instructions.js";
 import { projectInstructionsPrompt } from "./project-instructions-prompt.js";
-import { projectMemoryPrompt } from "./project-memory-prompt.js";
+import {
+  consolidateDreamMemory,
+  projectMemoryPrompt,
+} from "./project-memory-prompt.js";
 import { executeWebSearch, executeWebFetch } from "./web-tools.js";
 import {
   pluginSkillsPrompt,
@@ -1834,9 +1837,14 @@ Delegation rules:
     return this.mode;
   }
 
-  private composeSystemPrompt(): string {
+  consolidateDreamMemory(messages?: AgentMessage[]): string {
+    const targetMessages = messages ?? (this.agent.state.messages as AgentMessage[]);
+    return consolidateDreamMemory(targetMessages);
+  }
+
+  private composeSystemPrompt(promptQuery?: string): string {
     const projectPrompt = projectInstructionsPrompt(this.projectInstructions);
-    const memoryPrompt = projectMemoryPrompt(this.projectMemory);
+    const memoryPrompt = projectMemoryPrompt(this.projectMemory, promptQuery);
     const optionalToolsPrompt = this.optionalToolsPrompt();
     const compressionPrompt = buildOutputCompressionPrompt(this.tokenSaverSettings);
     const modelDisplayName = this.provider.modelConfig?.name || this.provider.modelId;
@@ -2886,7 +2894,19 @@ Delegation rules:
         questions: Type.Array(
           Type.Object({
             question: Type.String(),
-            options: Type.Array(Type.String()),
+            options: Type.Array(
+              Type.Union([
+                Type.String(),
+                Type.Object({
+                  label: Type.String({ description: "Display text for the option" }),
+                  preview: Type.Optional(
+                    Type.String({
+                      description: "Markdown, ASCII mockup, or code snippet preview",
+                    }),
+                  ),
+                }),
+              ]),
+            ),
             multiSelect: Type.Optional(Type.Boolean()),
           }),
         ),
@@ -3159,6 +3179,70 @@ Delegation rules:
       },
     };
 
+    const dreamTool: AgentTool = {
+      name: "dream",
+      label: "Consolidate dream memory",
+      description:
+        "Analyze conversation history to extract durable lessons into structured markdown records and store them in project memory.",
+      parameters: Type.Object({
+        persist: Type.Optional(
+          Type.Boolean({
+            description: "Whether to persist extracted lessons directly to project memory (default true)",
+          }),
+        ),
+      }),
+      executionMode: "sequential",
+      execute: async (_toolCallId, params) => {
+        const { persist = true } = (params ?? {}) as { persist?: boolean };
+        const messages = this.agent.state.messages as AgentMessage[];
+        const consolidated = consolidateDreamMemory(messages);
+        if (!consolidated.trim()) {
+          return {
+            content: [{ type: "text", text: "No durable lessons found in conversation to consolidate." }],
+            details: { count: 0 },
+          };
+        }
+        if (persist && this.projectPath) {
+          try {
+            const current = await this.host.call<{ memory?: { content?: string } }>(
+              "project.memory.get",
+              { path: this.projectPath },
+            );
+            const currentContent = current?.memory?.content?.trim() ?? "";
+            const newContent = currentContent ? `${currentContent}\n\n${consolidated}` : consolidated;
+            const updated = await this.host.call<{ memory?: { content?: string } }>(
+              "project.memory.set",
+              { path: this.projectPath, content: newContent },
+            );
+            if (updated?.memory?.content !== undefined) {
+              this.projectMemory = updated.memory.content;
+              this.agent.state.systemPrompt = this.composeSystemPrompt();
+            }
+          } catch (error) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Consolidated lessons extracted, but failed to persist: ${error instanceof Error ? error.message : String(error)}\n\n${consolidated}`,
+                },
+              ],
+              details: { error: String(error), consolidated },
+              isError: true,
+            };
+          }
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Dream consolidation complete:\n\n${consolidated}`,
+            },
+          ],
+          details: { consolidated },
+        };
+      },
+    };
+
     return [
       ...builtins,
       askTool,
@@ -3166,6 +3250,7 @@ Delegation rules:
       webFetchTool,
       rememberTool,
       forgetTool,
+      dreamTool,
       ...pluginTools,
       ...skillTools,
       ...modeTools,
@@ -3675,6 +3760,12 @@ Delegation rules:
               "Override the delegate's model for this run, e.g. 'anthropic/claude-sonnet-4-20250514'. Omit to use the subagent's default. Repeating the definition's own Default model key is the same as omitting this parameter. Only choose a different override from the available delegation model catalog.",
           }),
         ),
+        isolation: Type.Optional(
+          Type.String({
+            description:
+              "Execution isolation. Pass 'worktree' to run in an isolated git worktree branch.",
+          }),
+        ),
       }),
       // Set in `rebuildToolCatalog`, which owns every execution mode; repeated
       // here so the intent survives a tool built outside that path.
@@ -3810,6 +3901,12 @@ Delegation rules:
         };
         this.delegations.set(delegationId, record);
         const scopedTools = this.scopeDelegateTools(tools, definition);
+        const isolationOverride =
+          isRecord(params) && params.isolation === "worktree"
+            ? ("worktree" as const)
+            : undefined;
+        const isolation = isolationOverride ?? definition.isolation;
+
         new SubagentRun({
           definition,
           sessionId: this.sessionId,
@@ -3818,6 +3915,8 @@ Delegation rules:
           task,
           provider,
           thinkingLevel,
+          isolation,
+          workspaceRoot: this.projectPath,
           systemPrompt: composeSubagentSystemPrompt({
             definition,
             guidance: this.subagentGuidance(definition),
@@ -4281,6 +4380,8 @@ Delegation rules:
           startedAt: record.startedAt,
           ...(record.completedAt ? { completedAt: record.completedAt } : {}),
           ...(record.result?.error ? { error: record.result.error } : {}),
+          ...(record.result?.worktreePath ? { worktreePath: record.result.worktreePath } : {}),
+          ...(record.result?.worktreeBranch ? { worktreeBranch: record.result.worktreeBranch } : {}),
           report:
             record.status === "running"
               ? formatDelegationHeartbeat(record)
@@ -4641,17 +4742,39 @@ Delegation rules:
     for (const raw of params.questions) {
       if (!isRecord(raw)) return undefined;
       const question = typeof raw.question === "string" ? raw.question.trim() : "";
-      const options = Array.isArray(raw.options)
-        ? raw.options
-            .filter((option): option is string => typeof option === "string")
-            .map((option) => option.trim())
-            .filter(Boolean)
-        : [];
+      const rawOptions = Array.isArray(raw.options) ? raw.options : [];
+      const options: AskToolQuestion["options"] = [];
+      const seenLabels = new Set<string>();
+      for (const item of rawOptions) {
+        if (typeof item === "string") {
+          const trimmed = item.trim();
+          if (trimmed && !seenLabels.has(trimmed)) {
+            seenLabels.add(trimmed);
+            options.push(trimmed);
+          }
+        } else if (isRecord(item)) {
+          const label =
+            typeof item.label === "string"
+              ? item.label.trim()
+              : typeof item.option === "string"
+                ? item.option.trim()
+                : typeof item.text === "string"
+                  ? item.text.trim()
+                  : "";
+          const preview =
+            typeof item.preview === "string" && item.preview.trim()
+              ? item.preview
+              : undefined;
+          if (label && !seenLabels.has(label)) {
+            seenLabels.add(label);
+            options.push(preview !== undefined ? { label, preview } : label);
+          }
+        }
+      }
       if (!question || options.length === 0) return undefined;
-      const uniqueOptions = [...new Set(options)];
       questions.push({
         question,
-        options: uniqueOptions,
+        options,
         ...(raw.multiSelect === true ? { multiSelect: true } : {}),
       });
     }
@@ -6823,6 +6946,8 @@ Delegation rules:
           return { turnId: this.turnId };
         }
       }
+      const queryText = typeof modelInput === "string" ? modelInput : modelInput.text;
+      this.agent.state.systemPrompt = this.composeSystemPrompt(queryText);
       await this.extensionBeforeAgentStart(modelInput);
       if (typeof modelInput === "string") {
         await this.agent.prompt(modelInput);
@@ -6873,12 +6998,13 @@ Delegation rules:
       this.extensionProviderHeaders = headers;
     }
     if (!runner.hasHandlers("before_agent_start")) return;
-    const base = this.composeSystemPrompt();
+    const promptText = typeof input === "string" ? input : input.text;
+    const base = this.composeSystemPrompt(promptText);
     const result = await runner.emit<{ systemPrompt?: string }>(
       "before_agent_start",
       {
         type: "before_agent_start",
-        prompt: typeof input === "string" ? input : input.text,
+        prompt: promptText,
         systemPrompt: base,
         systemPromptOptions: {},
       },
