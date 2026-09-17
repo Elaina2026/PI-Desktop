@@ -534,6 +534,8 @@ const AGENT_CORE_TOOL_NAMES = new Set([
   "Write",
   "Edit",
   "Bash",
+  "WebSearch",
+  "WebFetch",
   ASK_TOOL_NAME,
   // The slash menu answers a user-invoked `/skill-id` with an instruction to
   // call `Skill { id }` on the first turn (ADR 0219), and a capability the
@@ -3347,6 +3349,8 @@ Delegation rules:
               "Grep",
               "Bash",
               "BrowserPreview",
+              "WebSearch",
+              "WebFetch",
               ASK_TOOL_NAME,
             ]).has(name) || this.isPlanSafePluginTool(name)
           : CHAT_CORE_TOOL_NAMES.has(name))

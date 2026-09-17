@@ -1531,6 +1531,8 @@ describe("DesktopAgentRuntime deferred tool catalog", () => {
       "Edit",
       "Write",
       "asktool",
+      "WebSearch",
+      "WebFetch",
       "Skill",
       "EnterPlanMode",
       "EnterGoalMode",
