@@ -393,9 +393,11 @@ export function createEventsSlice({
         case "compaction_end":
           if (event.reason === "manual") set({ isRunning: false });
           if (event.ok) {
-            get().showToast(i18n.t("contextCompaction.longThreadWarning"), {
-              variant: "warning",
-            });
+            if (event.reason !== "manual") {
+              get().showToast(i18n.t("contextCompaction.longThreadWarning"), {
+                variant: "warning",
+              });
+            }
             if (event.fallback) {
               get().showToast(i18n.t("contextCompaction.recovered"), {
                 variant: "warning",

@@ -2,6 +2,7 @@ import { BrowserWindow, dialog, shell } from "electron";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
+import { mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -282,12 +283,85 @@ export function registerWorkspaceIpc({
     return host.call("workspace.clear");
   });
 
+  const mirrorProjectMemoryToDisk = async (
+    projectPath: string,
+    entries?: Array<{ id: string; title: string; content: string; category?: string; tags?: string[] }>,
+    rawContent?: string,
+  ) => {
+    if (!projectPath || !existsSync(projectPath)) return;
+    try {
+      const memoryDir = join(projectPath, ".pi", "memory");
+      await mkdir(memoryDir, { recursive: true });
+
+      const indexLines: string[] = [
+        "# Project Memory",
+        "",
+        `*Durable project context and rules. Mirrored automatically from PI-Desktop.*`,
+        "",
+      ];
+
+      if (Array.isArray(entries) && entries.length > 0) {
+        for (const entry of entries) {
+          const slug =
+            entry.title
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/^-+|-+$/g, "")
+              .slice(0, 40) || (entry.id ? entry.id.slice(0, 8) : "memory");
+          const filename = `${slug}.md`;
+          const filePath = join(memoryDir, filename);
+          const category = entry.category || "general";
+          const fileContent = [
+            "---",
+            `id: ${entry.id}`,
+            `title: ${JSON.stringify(entry.title)}`,
+            `category: ${category}`,
+            ...(entry.tags?.length ? [`tags: [${entry.tags.map((t) => JSON.stringify(t)).join(", ")}]`] : []),
+            "---",
+            "",
+            `# ${entry.title}`,
+            "",
+            entry.content,
+            "",
+          ].join("\n");
+          await writeFile(filePath, fileContent, "utf8");
+          indexLines.push(`- [${entry.title}](${filename}) — *${category}*`);
+        }
+      } else if (rawContent) {
+        indexLines.push(rawContent);
+      }
+
+      await writeFile(join(memoryDir, "MEMORY.md"), indexLines.join("\n") + "\n", "utf8");
+    } catch {}
+  };
+
   handle(
     IPC.invoke.projectMemoryGet,
     async (input: { projectPath?: unknown } = {}) => {
       const projectPath = await managedProjectPath(input.projectPath);
       if (!host) throw new Error("host unavailable");
-      return host.call("project.memory.get", { path: projectPath });
+      const res = (await host.call("project.memory.get", { path: projectPath })) as {
+        memory?: { content?: string; entries?: any[] };
+      };
+      // If host memory is empty but .pi/memory/MEMORY.md exists, read and import it
+      if (
+        (!res?.memory?.entries?.length && !res?.memory?.content?.trim()) &&
+        existsSync(join(projectPath, ".pi", "memory", "MEMORY.md"))
+      ) {
+        try {
+          const memoryContent = await readFile(
+            join(projectPath, ".pi", "memory", "MEMORY.md"),
+            "utf8",
+          );
+          if (memoryContent.trim()) {
+            return host.call("project.memory.set", {
+              path: projectPath,
+              content: memoryContent,
+            });
+          }
+        } catch {}
+      }
+      return res;
     },
   );
 
@@ -300,14 +374,19 @@ export function registerWorkspaceIpc({
     } = {}) => {
       const projectPath = await managedProjectPath(input.projectPath);
       if (!host) throw new Error("host unavailable");
+      let res;
       if (Array.isArray(input.entries)) {
-        return host.call("project.memory.set", {
+        res = await host.call("project.memory.set", {
           path: projectPath,
           entries: input.entries,
         });
+        void mirrorProjectMemoryToDisk(projectPath, input.entries as any);
+      } else {
+        const content = typeof input.content === "string" ? input.content : "";
+        res = await host.call("project.memory.set", { path: projectPath, content });
+        void mirrorProjectMemoryToDisk(projectPath, undefined, content);
       }
-      const content = typeof input.content === "string" ? input.content : "";
-      return host.call("project.memory.set", { path: projectPath, content });
+      return res;
     },
   );
 

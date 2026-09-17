@@ -23,6 +23,7 @@ import { useReferencedImageDataUrl } from "../../../lib/use-referenced-image-dat
 import { isHtmlFilePath, splitChatText } from "../../../lib/chat-links";
 import { getToolAction, type ToolAction } from "../../../lib/tool-display";
 import { calculateTokenRate } from "../../../lib/context-usage";
+import { computeTokenCost, resolveModelRate } from "../../../lib/model-pricing";
 import { useAppStore } from "../../../stores/app-store";
 import { Markdown, useCopy } from "../../../components/Markdown";
 import {
@@ -116,7 +117,18 @@ export function MessageMeta({
     responseDurationMs,
   );
   const showThroughput = !usage && throughput !== undefined;
-  if (!modelId && !showThroughput) {
+  const cost = useMemo(() => {
+    if (!usage || !modelId) return undefined;
+    const rates = resolveModelRate(modelId);
+    const amount = computeTokenCost(usage, rates);
+    return amount > 0
+      ? amount < 0.0001
+        ? "<$0.0001"
+        : `$${amount.toFixed(4)}`
+      : undefined;
+  }, [usage, modelId]);
+
+  if (!modelId && !showThroughput && !cost) {
     return null;
   }
   return (
@@ -124,6 +136,11 @@ export function MessageMeta({
       {modelId ? (
         <span className="message-meta-chip model" title={modelId}>
           {modelId}
+        </span>
+      ) : null}
+      {cost ? (
+        <span className="message-meta-chip cost" title={`Turn cost: ${cost}`}>
+          {cost}
         </span>
       ) : null}
       {showThroughput ? (
@@ -416,7 +433,7 @@ export function MessageAttachmentImage({
       role="listitem"
       title={`${attachment.name} — ${attachment.ref}`}
       onClick={() =>
-        useAppStore.getState().openFileInWorkPanel(attachment.ref, attachment.mimeType)
+        useAppStore.getState().openLightbox(dataUrl, attachment.name)
       }
     >
       <img src={dataUrl} alt={attachment.name} />

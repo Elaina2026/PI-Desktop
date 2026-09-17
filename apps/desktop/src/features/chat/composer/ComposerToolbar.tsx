@@ -1,4 +1,4 @@
-import { useState, type Dispatch, type SetStateAction } from "react";
+import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import type { TFunction } from "i18next";
 import {
   keybindingDisplayParts,
@@ -7,7 +7,8 @@ import {
   type ShortcutPlatform,
   type ThinkingLevel,
 } from "@pi-desktop/shared";
-import type { AppState } from "../../../stores/app-store";
+import { useAppStore, type AppState } from "../../../stores/app-store";
+import { computeTokenCost, resolveModelRate } from "../../../lib/model-pricing";
 import { AnchoredMenu } from "../../../components/settings/AnchoredMenu";
 import { ContextUsageInspector } from "../../../components/ContextUsageInspector";
 import { TooltipButton } from "../../../components/ui";
@@ -108,6 +109,17 @@ export function ComposerToolbar({
 }: ComposerToolbarProps) {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [modeOpen, setModeOpen] = useState(false);
+  const messages = useAppStore((s) => s.messages);
+  const sessionCost = useMemo(() => {
+    let total = 0;
+    for (const m of messages) {
+      if (m.role === "assistant" && m.usage && m.modelId) {
+        const rates = resolveModelRate(m.modelId);
+        total += computeTokenCost(m.usage, rates);
+      }
+    }
+    return total;
+  }, [messages]);
   const platform = (window.piDesktop?.platform ?? "darwin") as ShortcutPlatform;
   const steeringShortcut = keybindingDisplayParts("Alt+Enter", platform).join("+");
   return (
@@ -352,6 +364,14 @@ export function ComposerToolbar({
             setAddMenuOpen(false);
           }}
         />
+        {sessionCost > 0 ? (
+          <span
+            className="composer-cost-badge"
+            title={`Total session cost: $${sessionCost.toFixed(4)}`}
+          >
+            ${sessionCost < 0.01 ? sessionCost.toFixed(4) : sessionCost.toFixed(3)}
+          </span>
+        ) : null}
         <TooltipButton
           type="button"
           className={`icon-btn composer-enhance-btn${enhancingPrompt ? " is-loading" : ""}`}

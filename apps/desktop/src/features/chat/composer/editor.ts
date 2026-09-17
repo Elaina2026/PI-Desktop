@@ -2,6 +2,7 @@ import {
   fileReferenceLabel,
   formatFileInsert,
 } from "@pi-desktop/shared";
+import { api } from "../../../lib/api";
 import { useAppStore } from "../../../stores/app-store";
 import type { ComposerFileReference } from "./model";
 
@@ -296,6 +297,18 @@ function buildChipElement(
     chip.style.cursor = "pointer";
     chip.addEventListener("click", (event) => {
       if ((event.target as HTMLElement).closest(".composer-chip-remove")) return;
+      if (isImage) {
+        void api.fsReadImageDataUrl(reference.path, reference.mimeType).then((res) => {
+          if (res.kind === "image" && res.dataUrl) {
+            useAppStore.getState().openLightbox(res.dataUrl, reference.name);
+          } else {
+            useAppStore.getState().openFileInWorkPanel(reference.path, reference.mimeType);
+          }
+        }).catch(() => {
+          useAppStore.getState().openFileInWorkPanel(reference.path, reference.mimeType);
+        });
+        return;
+      }
       useAppStore.getState().openFileInWorkPanel(reference.path, reference.mimeType);
     });
     chip.addEventListener("keydown", (event) => {

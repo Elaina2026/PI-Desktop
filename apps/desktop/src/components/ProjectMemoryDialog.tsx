@@ -1,22 +1,30 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import type { ProjectMemory, ProjectMemoryEntry } from "@pi-desktop/shared";
+import type { MemoryCategory, ProjectMemory, ProjectMemoryEntry } from "@pi-desktop/shared";
 import { api } from "../lib/api";
-import { Button, Input, Textarea, TooltipButton } from "./ui";
+import { Badge, Button, Input, Textarea, TooltipButton } from "./ui";
 import { IconClose, IconPlus, IconSparkles, IconTrash } from "./icons";
+
+const MEMORY_CATEGORIES: Array<{ id: MemoryCategory; label: string; color: string }> = [
+  { id: "general", label: "General", color: "var(--ds-text-subtle)" },
+  { id: "tech-stack", label: "Tech Stack", color: "#3b82f6" },
+  { id: "conventions", label: "Conventions", color: "#10b981" },
+  { id: "architecture", label: "Architecture", color: "#f59e0b" },
+  { id: "do-not-touch", label: "Do Not Touch", color: "#ef4444" },
+];
 
 function newEntry(): ProjectMemoryEntry {
   const id =
     globalThis.crypto?.randomUUID?.() ??
     "memory-" + Date.now() + "-" + Math.random().toString(36).slice(2);
-  return { id, title: "", content: "" };
+  return { id, title: "", content: "", category: "general" };
 }
 
 function entriesFromMemory(memory: ProjectMemory): ProjectMemoryEntry[] {
   if (memory.entries) return memory.entries;
   return memory.content.trim()
-    ? [{ id: "legacy-project-memory", title: "", content: memory.content.trim() }]
+    ? [{ id: "legacy-project-memory", title: "", content: memory.content.trim(), category: "general" }]
     : [];
 }
 
@@ -26,6 +34,8 @@ function normalizeEntries(entries: ProjectMemoryEntry[]): ProjectMemoryEntry[] {
       id: entry.id.trim(),
       title: entry.title.trim(),
       content: entry.content.trim(),
+      category: entry.category ?? "general",
+      tags: entry.tags ?? [],
     }))
     .filter((entry) => entry.content.length > 0);
 }
@@ -176,6 +186,34 @@ export function ProjectMemoryDialog({
                   >
                     <IconTrash size={15} />
                   </TooltipButton>
+                </div>
+                <div
+                  className="project-memory-card-category-row"
+                  style={{ display: "flex", gap: "6px", flexWrap: "wrap", margin: "2px 0" }}
+                >
+                  {MEMORY_CATEGORIES.map((cat) => {
+                    const isSelected = (entry.category ?? "general") === cat.id;
+                    return (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        disabled={memory === null || saving}
+                        onClick={() => updateEntry(entry.id, { category: cat.id })}
+                        style={{
+                          fontSize: "11px",
+                          padding: "2px 8px",
+                          borderRadius: "9999px",
+                          border: `1px solid ${isSelected ? cat.color : "var(--ds-border-subtle, #444)"}`,
+                          background: isSelected ? `color-mix(in oklab, ${cat.color} 18%, transparent)` : "transparent",
+                          color: isSelected ? cat.color : "var(--ds-text-muted, #888)",
+                          cursor: "pointer",
+                          fontWeight: isSelected ? "600" : "normal",
+                        }}
+                      >
+                        {cat.label}
+                      </button>
+                    );
+                  })}
                 </div>
                 <Textarea
                   className="project-memory-entry-content"

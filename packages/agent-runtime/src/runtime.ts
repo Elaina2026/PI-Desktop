@@ -3146,26 +3146,50 @@ Delegation rules:
       parameters: Type.Object({
         note: Type.String({ description: "Specific fact or guideline to remember" }),
         title: Type.Optional(Type.String({ description: "Short title or topic tag" })),
+        category: Type.Optional(
+          Type.String({
+            description:
+              "Category: 'tech-stack' | 'conventions' | 'architecture' | 'do-not-touch' | 'general'",
+          }),
+        ),
       }),
       executionMode: "sequential",
       execute: async (_toolCallId, params) => {
         if (!this.projectPath) {
           return { content: [{ type: "text", text: "No project open. Cannot store project memory." }], details: {}, isError: true };
         }
-        const { note, title } = (params ?? {}) as { note?: string; title?: string };
+        const { note, title, category } = (params ?? {}) as {
+          note?: string;
+          title?: string;
+          category?: string;
+        };
         if (!note || !note.trim()) {
           return { content: [{ type: "text", text: "Note text cannot be empty." }], details: {}, isError: true };
         }
         try {
-          const current = await this.host.call<{ memory?: { entries?: Array<{ id: string; title: string; content: string }> } }>(
+          const current = await this.host.call<{ memory?: { entries?: Array<{ id: string; title: string; content: string; category?: string }> } }>(
             "project.memory.get",
             { path: this.projectPath },
           );
           const entries = current?.memory?.entries ?? [];
+          const validCategory =
+            category && ["tech-stack", "conventions", "architecture", "do-not-touch", "general"].includes(category)
+              ? category
+              : /cấm|không được|do not touch|never|must not/i.test(note)
+                ? "do-not-touch"
+                : /arch|kiến trúc|pattern|monorepo/i.test(note)
+                  ? "architecture"
+                  : /stack|framework|lib|pnpm|npm|cargo|pip/i.test(note)
+                    ? "tech-stack"
+                    : /quy ước|convention|style|lint/i.test(note)
+                      ? "conventions"
+                      : "general";
+
           const newEntry = {
             id: randomUUID(),
             title: (title ?? note.slice(0, 32)).trim(),
             content: note.trim(),
+            category: validCategory,
           };
           const updated = await this.host.call<{ memory?: { content?: string } }>(
             "project.memory.set",
@@ -3175,7 +3199,7 @@ Delegation rules:
             this.projectMemory = updated.memory.content;
             this.agent.state.systemPrompt = this.composeSystemPrompt();
           }
-          return { content: [{ type: "text", text: `Stored in project memory: "${newEntry.title}" - ${newEntry.content}` }], details: { entry: newEntry } };
+          return { content: [{ type: "text", text: `Stored in project memory [${validCategory}]: "${newEntry.title}" - ${newEntry.content}` }], details: { entry: newEntry } };
         } catch (error) {
           return {
             content: [{ type: "text", text: `Failed to save memory: ${error instanceof Error ? error.message : String(error)}` }],

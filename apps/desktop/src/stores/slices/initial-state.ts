@@ -79,6 +79,7 @@ export function createInitialState(): AppStateData {
     toasts: [],
     notifications: [],
     unreadNotificationCount: 0,
+    lightboxImage: null,
     composerPrefill: null,
     error: null,
     errorCode: null,

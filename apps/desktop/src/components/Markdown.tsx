@@ -666,6 +666,7 @@ function MarkdownImage({
   const baseDir = useContext(MarkdownBaseDirContext);
   const openFile = useAppStore((s) => s.openFileInWorkPanel);
   const openUrl = useAppStore((s) => s.openUrlInWorkPanel);
+  const openLightbox = useAppStore((s) => s.openLightbox);
   const fileTitle = usePreviewTitle("file");
   const urlTitle = usePreviewTitle("url");
   const source = typeof src === "string" ? src : "";
@@ -688,7 +689,7 @@ function MarkdownImage({
         alt={alt ?? ""}
         className="chat-image-remote"
         title={urlTitle}
-        onClick={() => openUrl(source)}
+        onClick={() => openLightbox(source, alt ?? undefined)}
       />
     );
   }
@@ -700,7 +701,7 @@ function MarkdownImage({
         alt={alt ?? ""}
         className="chat-image-local"
         title={rel ? fileTitle : source}
-        onClick={localRef ? () => openFile(localRef) : undefined}
+        onClick={() => openLightbox(dataUrl, alt ?? undefined)}
       />
     );
   }

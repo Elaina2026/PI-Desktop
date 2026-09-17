@@ -46,6 +46,8 @@ export function createInteractionSlice({
   | "resolvePlan"
   | "showToast"
   | "dismissToast"
+  | "openLightbox"
+  | "closeLightbox"
 > {
   return {
     setPage: (page, opts) => {
@@ -215,5 +217,8 @@ export function createInteractionSlice({
       set((state) => ({
         toasts: state.toasts.filter((item) => item.id !== id),
       })),
+
+    openLightbox: (src: string, alt?: string) => set({ lightboxImage: { src, alt } }),
+    closeLightbox: () => set({ lightboxImage: null }),
   };
 }

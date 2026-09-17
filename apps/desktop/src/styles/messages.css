@@ -1174,6 +1174,12 @@
   text-overflow: ellipsis;
 }
 
+.message-meta-chip.cost {
+  color: var(--ds-text-subtle);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 .context-inspector {
   position: relative;
   display: inline-flex;

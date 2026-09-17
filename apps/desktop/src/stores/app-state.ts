@@ -308,6 +308,9 @@ export type AppState = {
   resolvePlan: (resolution: PlanResolveRequest) => Promise<PlanResolutionResult>;
   showToast: (message: string, options?: ToastOptions) => void;
   dismissToast: (id: number) => void;
+  lightboxImage: { src: string; alt?: string } | null;
+  openLightbox: (src: string, alt?: string) => void;
+  closeLightbox: () => void;
   composerPrefill: ComposerPrefill | null;
   clearComposerPrefill: () => void;
   /** Renderer-only subagent details selected from the transcript. */

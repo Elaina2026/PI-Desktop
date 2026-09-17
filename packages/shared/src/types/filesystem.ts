@@ -35,10 +35,20 @@ export type ProjectMemory = {
   updatedAt?: number;
 };
 
+export type MemoryCategory =
+  | "tech-stack"
+  | "conventions"
+  | "architecture"
+  | "do-not-touch"
+  | "general";
+
 export type ProjectMemoryEntry = {
   id: string;
   title: string;
   content: string;
+  category?: MemoryCategory;
+  tags?: string[];
+  updatedAt?: number;
 };
 
 /** Workspace-relative entry of the `fs/index` snapshot for the "@" menu (D124). */
