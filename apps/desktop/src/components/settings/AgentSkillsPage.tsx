@@ -462,28 +462,27 @@ export function AgentSkillsPage() {
       ? t("settings.capabilityCreateInProject")
       : t("settings.capabilityCreateInGlobal");
   const importButton = (level: AgentCapabilityLevel) => (
-    <CapabilityButton
-      busy={busyId === "import"}
-      title={
-        level === "project"
-          ? t("settings.capabilityImportToProject")
-          : t("settings.capabilityImportToGlobal")
-      }
-      onClick={() => void importSkill(level)}
-    >
-      <IconDownload size={14} />
-      {t("settings.importSkill")}
-    </CapabilityButton>
-  );
-
-  const urlImportButton = (level: AgentCapabilityLevel) => (
-    <CapabilityButton
-      title={t("settings.importSkillUrl")}
-      onClick={() => void importSkillFromUrl(level)}
-    >
-      <IconLink size={14} />
-      {t("settings.importSkillUrl")}
-    </CapabilityButton>
+    <div className="flex items-center gap-1">
+      <CapabilityButton
+        busy={busyId === "import"}
+        title={
+          level === "project"
+            ? t("settings.capabilityImportToProject")
+            : t("settings.capabilityImportToGlobal")
+        }
+        onClick={() => void importSkill(level)}
+      >
+        <IconDownload size={14} />
+        {t("settings.importSkill")}
+      </CapabilityButton>
+      <CapabilityButton
+        title={t("settings.importSkillUrl")}
+        onClick={() => void importSkillFromUrl(level)}
+      >
+        <IconLink size={14} />
+        {t("settings.importSkillUrl")}
+      </CapabilityButton>
+    </div>
   );
 
   const marketButton = (
@@ -563,12 +562,7 @@ export function AgentSkillsPage() {
                   label={t("settings.globalLevel")}
                   path={GLOBAL_SKILLS_PATH}
                   count={visible.global.length}
-                  action={
-                    <div className="flex items-center gap-1">
-                      {importButton("global")}
-                      {urlImportButton("global")}
-                    </div>
-                  }
+                  action={importButton("global")}
                 />
                 {visible.global.length === 0 ? (
                   <CapabilityEmpty
@@ -592,14 +586,7 @@ export function AgentSkillsPage() {
                   label={t("settings.projectLevel")}
                   path={projectSkillsPath(selectedProjectPath)}
                   count={visible.project.length}
-                  action={
-                    selectedProjectPath ? (
-                      <div className="flex items-center gap-1">
-                        {importButton("project")}
-                        {urlImportButton("project")}
-                      </div>
-                    ) : undefined
-                  }
+                  action={selectedProjectPath ? importButton("project") : undefined}
                 />
                 {!selectedProjectPath ? (
                   <CapabilityEmpty message={t("settings.selectProjectFirst")} />
