@@ -10,6 +10,7 @@ import { splitChatText } from "../../../lib/chat-links";
 import { useAppStore } from "../../../stores/app-store";
 import { Markdown } from "../../../components/Markdown";
 import {
+  IconBranch,
   IconChevronLeft,
   IconChevronRight,
   IconPencil,
@@ -35,6 +36,7 @@ export const MessageRow = memo(function MessageRow({
   const editUserMessage = useAppStore((s) => s.editUserMessage);
   const activateMessageRevision = useAppStore((s) => s.activateMessageRevision);
   const deleteMessage = useAppStore((s) => s.deleteMessage);
+  const forkAssistantMessage = useAppStore((s) => s.forkAssistantMessage);
   const isUser = message.role === "user";
   const isSessionMessage = Boolean(message.sessionMessage);
   const editableUserMessage = isUser && !isSessionMessage;
@@ -224,6 +226,15 @@ export const MessageRow = memo(function MessageRow({
               </div>
             ) : null}
             {hasAnswer ? <CopyButton text={message.content} label={copyLabel} /> : null}
+            <TooltipButton
+              className="copy-btn icon"
+              tooltip={t("chat.forkResponse")}
+              ariaLabel={t("chat.forkResponse")}
+              disabled={isRunning}
+              onClick={() => void forkAssistantMessage(message.id)}
+            >
+              <IconBranch size={13} />
+            </TooltipButton>
             {editableUserMessage ? (
               <TooltipButton
                 className="copy-btn icon"

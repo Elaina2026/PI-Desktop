@@ -852,6 +852,10 @@ export const api = {
   gitWorkingTree: () => invoke<WorkspaceDiff>(IPC.invoke.workspaceDiff),
   gitStage: (files: string[]) =>
     invoke<WorkspaceDiff>(IPC.invoke.gitStage, { files }),
+  gitStageHunk: (file: string, header: string, lines: any[]) =>
+    invoke<WorkspaceDiff>(IPC.invoke.gitStageHunk, { file, header, lines }),
+  gitDiscardHunk: (file: string, header: string, lines: any[]) =>
+    invoke<WorkspaceDiff>(IPC.invoke.gitDiscardHunk, { file, header, lines }),
   gitUnstage: (files: string[]) =>
     invoke<WorkspaceDiff>(IPC.invoke.gitUnstage, { files }),
   gitCommit: (message: string) =>

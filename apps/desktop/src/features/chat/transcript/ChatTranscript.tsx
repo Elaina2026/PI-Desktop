@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import type { PlanningState, UiMessage } from "@pi-desktop/shared";
 import { proposalKindForMode } from "@pi-desktop/shared";
 import { ConversationMinimap } from "../../../components/ConversationMinimap";
-import { KiloTaskHeader } from "../../../components/KiloTaskHeader";
 import { PermissionCard } from "../../../components/PermissionCard";
 import { TooltipButton } from "../../../components/ui";
 import { TurnOutcomeCard } from "../../../components/TurnOutcomeCard";
@@ -174,7 +173,6 @@ export const ChatTranscript = memo(function ChatTranscript({
         aria-live="polite"
       >
         <div className="thread-content" ref={contentRef}>
-          <KiloTaskHeader sessionId={sessionId} messages={messages} />
           <div
             ref={historyBoundaryRef}
             className="transcript-history-loading"

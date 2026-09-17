@@ -34,9 +34,11 @@ import {
 } from "./SkillEditorSheet";
 import {
   IconBookOpen,
+  IconCopy,
   IconDownload,
   IconFileText,
   IconFolderOpen,
+  IconLink,
   IconPencil,
   IconPlus,
   IconTrash,
@@ -262,6 +264,73 @@ export function AgentSkillsPage() {
     }
   };
 
+  const exportSkill = async (skill: UserSkillRecord, level: AgentCapabilityLevel) => {
+    try {
+      const res = await api.readUserSkill(skill.id, levelQuery(level));
+      const content = res.body || `# ${skill.name}\n\n${skill.description || ""}`;
+      const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${skill.id}.md`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast(t("settings.exportSkill"), { variant: "success" });
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), { variant: "error" });
+    }
+  };
+
+  const copySkillMarkdown = async (skill: UserSkillRecord, level: AgentCapabilityLevel) => {
+    try {
+      const res = await api.readUserSkill(skill.id, levelQuery(level));
+      const content = res.body || `# ${skill.name}\n\n${skill.description || ""}`;
+      await navigator.clipboard.writeText(content);
+      showToast(t("common.copied"), { variant: "success" });
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), { variant: "error" });
+    }
+  };
+
+  const importSkillFromUrl = async (level: AgentCapabilityLevel = targetLevel) => {
+    if (level === "project" && !selectedProjectPath) {
+      showToast(t("settings.selectProjectFirst"), { variant: "error" });
+      return;
+    }
+    const rawUrl = window.prompt("Enter GitHub raw or Markdown URL:");
+    if (!rawUrl || !rawUrl.trim()) return;
+    try {
+      let targetUrl = rawUrl.trim();
+      if (targetUrl.includes("github.com/") && !targetUrl.includes("raw.githubusercontent.com")) {
+        targetUrl = targetUrl
+          .replace("github.com/", "raw.githubusercontent.com/")
+          .replace("/blob/", "/");
+      }
+      const resp = await fetch(targetUrl);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+      const text = await resp.text();
+      const filename = targetUrl.split("/").pop()?.replace(/\.md$/i, "") || "skill";
+      const lines = text.split("\n");
+      const titleLine = lines.find((l) => l.startsWith("# "))?.replace(/^#\s*/, "").trim();
+      const name = titleLine || filename;
+      const descLine = lines.find((l) => l.trim() && !l.startsWith("#"))?.trim() || "";
+      const projectPath = level === "project" ? selectedProjectPath ?? undefined : undefined;
+      await api.createUserSkill({
+        name,
+        description: descLine.slice(0, 200),
+        body: text,
+        level,
+        ...(projectPath ? { projectPath } : {}),
+      });
+      await load();
+      showToast(t("settings.skillCreated", { name }), { variant: "success" });
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), { variant: "error" });
+    }
+  };
+
   const visible = useMemo(() => {
     const match = (skill: UserSkillRecord) =>
       matchesCapabilitySearch(search, skill.name, skill.id, skill.description);
@@ -297,6 +366,24 @@ export function AgentSkillsPage() {
         onSelect: () => {
           setMenuFor(null);
           void reveal(skill, level);
+        },
+      },
+      {
+        key: "export",
+        label: t("settings.exportSkill"),
+        icon: <IconDownload size={14} />,
+        onSelect: () => {
+          setMenuFor(null);
+          void exportSkill(skill, level);
+        },
+      },
+      {
+        key: "copy",
+        label: t("settings.copySkillMarkdown"),
+        icon: <IconCopy size={14} />,
+        onSelect: () => {
+          setMenuFor(null);
+          void copySkillMarkdown(skill, level);
         },
       },
       {
@@ -389,6 +476,16 @@ export function AgentSkillsPage() {
     </CapabilityButton>
   );
 
+  const urlImportButton = (level: AgentCapabilityLevel) => (
+    <CapabilityButton
+      title={t("settings.importSkillUrl")}
+      onClick={() => void importSkillFromUrl(level)}
+    >
+      <IconLink size={14} />
+      {t("settings.importSkillUrl")}
+    </CapabilityButton>
+  );
+
   const marketButton = (
     <CapabilityButton
       title={t("settings.sklm.subtitle")}
@@ -466,7 +563,12 @@ export function AgentSkillsPage() {
                   label={t("settings.globalLevel")}
                   path={GLOBAL_SKILLS_PATH}
                   count={visible.global.length}
-                  action={importButton("global")}
+                  action={
+                    <div className="flex items-center gap-1">
+                      {importButton("global")}
+                      {urlImportButton("global")}
+                    </div>
+                  }
                 />
                 {visible.global.length === 0 ? (
                   <CapabilityEmpty
@@ -490,7 +592,14 @@ export function AgentSkillsPage() {
                   label={t("settings.projectLevel")}
                   path={projectSkillsPath(selectedProjectPath)}
                   count={visible.project.length}
-                  action={selectedProjectPath ? importButton("project") : undefined}
+                  action={
+                    selectedProjectPath ? (
+                      <div className="flex items-center gap-1">
+                        {importButton("project")}
+                        {urlImportButton("project")}
+                      </div>
+                    ) : undefined
+                  }
                 />
                 {!selectedProjectPath ? (
                   <CapabilityEmpty message={t("settings.selectProjectFirst")} />

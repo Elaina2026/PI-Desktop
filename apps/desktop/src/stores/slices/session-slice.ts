@@ -554,7 +554,7 @@ export function createSessionSlice({
       if (!sessionId || state.runningSessions[sessionId]) return;
       const message = state.messages.find((candidate) => candidate.id === messageId);
       const source = state.sessions.find((session) => session.id === sessionId);
-      if (!message || message.role !== "assistant" || !source) return;
+      if (!message || !source) return;
 
       try {
         const sourceTitle = source.title.trim() || i18n.t("chat.untitledTask");

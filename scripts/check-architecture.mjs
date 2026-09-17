@@ -61,6 +61,7 @@ function trackedSourceFiles() {
   return git(["ls-files", "-co", "--exclude-standard"])
     .split("\n")
     .filter(Boolean)
+    .filter((file) => existsSync(resolve(root, file)))
     .filter(isSourcePath);
 }
 

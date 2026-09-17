@@ -45,6 +45,7 @@ export function ReviewTab() {
   const [generatingMessage, setGeneratingMessage] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [stagingPath, setStagingPath] = useState<string | null>(null);
+  const [stagingHunkKey, setStagingHunkKey] = useState<string | null>(null);
 
   const fetchGitDiff = useCallback(async () => {
     if (!workspace?.path) {
@@ -100,6 +101,46 @@ export function ReviewTab() {
       showToast(err instanceof Error ? err.message : String(err), { variant: "error" });
     } finally {
       setStagingPath(null);
+    }
+  };
+
+  const handleStageHunk = async (
+    filePath: string,
+    hunkHeader: string,
+    lines: any[],
+    event: React.MouseEvent,
+  ) => {
+    event.stopPropagation();
+    const key = `${filePath}:${hunkHeader}`;
+    setStagingHunkKey(key);
+    try {
+      const updated = await api.gitStageHunk(filePath, hunkHeader, lines);
+      setGitDiff(updated);
+      showToast(t("git.stageHunk"), { variant: "success" });
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), { variant: "error" });
+    } finally {
+      setStagingHunkKey(null);
+    }
+  };
+
+  const handleDiscardHunk = async (
+    filePath: string,
+    hunkHeader: string,
+    lines: any[],
+    event: React.MouseEvent,
+  ) => {
+    event.stopPropagation();
+    const key = `${filePath}:${hunkHeader}`;
+    setStagingHunkKey(key);
+    try {
+      const updated = await api.gitDiscardHunk(filePath, hunkHeader, lines);
+      setGitDiff(updated);
+      showToast(t("git.discardHunk"), { variant: "success" });
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), { variant: "error" });
+    } finally {
+      setStagingHunkKey(null);
     }
   };
 
@@ -324,30 +365,68 @@ export function ReviewTab() {
                                 : t("git.noHunks", "Binary or empty changes")}
                             </div>
                           ) : (
-                            file.hunks.map((hunk, hIdx) => (
-                              <div className="diff-hunk mb-2" key={hIdx}>
-                                <div className="diff-line hunk text-text-muted bg-ds-tile/40 px-1 py-0.5 rounded text-3xs">
-                                  {hunk.header}
-                                </div>
-                                {hunk.lines.map((line, lIdx) => (
-                                  <div
-                                    key={lIdx}
-                                    className={`diff-line px-1 flex ${
-                                      line.type === "add"
-                                        ? "bg-emerald-500/10 text-emerald-300"
-                                        : line.type === "del"
-                                          ? "bg-rose-500/10 text-rose-300"
-                                          : "text-text-secondary"
-                                    }`}
-                                  >
-                                    <span className="w-4 select-none shrink-0" aria-hidden>
-                                      {line.type === "add" ? "+" : line.type === "del" ? "−" : " "}
-                                    </span>
-                                    <span className="diff-line-text whitespace-pre">{line.text}</span>
+                            file.hunks.map((hunk, hIdx) => {
+                              const hunkKey = `${file.path}:${hunk.header}`;
+                              const isHunkBusy = stagingHunkKey === hunkKey;
+                              return (
+                                <div className="diff-hunk mb-2" key={hIdx}>
+                                  <div className="diff-line hunk text-text-muted bg-ds-tile/40 px-1 py-0.5 rounded text-3xs flex items-center justify-between">
+                                    <span>{hunk.header}</span>
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        className="px-1.5 py-0.5 text-3xs rounded hover:bg-emerald-500/20 text-emerald-400 disabled:opacity-50"
+                                        disabled={isHunkBusy}
+                                        onClick={(e) =>
+                                          void handleStageHunk(
+                                            file.path,
+                                            hunk.header,
+                                            hunk.lines,
+                                            e,
+                                          )
+                                        }
+                                        title={t("git.stageHunk")}
+                                      >
+                                        + {t("git.stageHunk")}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="px-1.5 py-0.5 text-3xs rounded hover:bg-rose-500/20 text-rose-400 disabled:opacity-50"
+                                        disabled={isHunkBusy}
+                                        onClick={(e) =>
+                                          void handleDiscardHunk(
+                                            file.path,
+                                            hunk.header,
+                                            hunk.lines,
+                                            e,
+                                          )
+                                        }
+                                        title={t("git.discardHunk")}
+                                      >
+                                        ✕ {t("git.discardHunk")}
+                                      </button>
+                                    </div>
                                   </div>
-                                ))}
-                              </div>
-                            ))
+                                  {hunk.lines.map((line, lIdx) => (
+                                    <div
+                                      key={lIdx}
+                                      className={`diff-line px-1 flex ${
+                                        line.type === "add"
+                                          ? "bg-emerald-500/10 text-emerald-300"
+                                          : line.type === "del"
+                                            ? "bg-rose-500/10 text-rose-300"
+                                            : "text-text-secondary"
+                                      }`}
+                                    >
+                                      <span className="w-4 select-none shrink-0" aria-hidden>
+                                        {line.type === "add" ? "+" : line.type === "del" ? "−" : " "}
+                                      </span>
+                                      <span className="diff-line-text whitespace-pre">{line.text}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              );
+                            })
                           )}
                         </div>
                       )}

@@ -59,13 +59,98 @@ function memoryPath(cwd: string): string {
 
 // ─── load / save ──────────────────────────────────────────────────────────────
 
+function slugify(text: string): string {
+  return (
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, "")
+      .trim()
+      .replace(/\s+/g, "-")
+      .slice(0, 40) || "fact"
+  );
+}
+
+export async function syncWorkspaceMemory(memory: ProjectMemory): Promise<void> {
+  if (!memory.cwd) return;
+  try {
+    const memoryDir = join(memory.cwd, ".pi", "memory");
+    await mkdir(memoryDir, { recursive: true });
+    const indexLines: string[] = ["# Project Memory Index\n"];
+
+    const allFacts = [
+      ...memory.stableFacts.map((fact) => ({ fact, type: "project" })),
+      ...memory.rawNotes.map((fact) => ({ fact, type: "feedback" })),
+    ];
+
+    for (let i = 0; i < allFacts.length; i++) {
+      const item = allFacts[i];
+      const slug = `${slugify(item.fact)}-${i + 1}`;
+      const fileName = `${slug}.md`;
+      const fileContent = [
+        "---",
+        `name: ${slug}`,
+        `description: ${item.fact.slice(0, 60).replace(/\n/g, " ")}`,
+        "metadata:",
+        `  type: ${item.type}`,
+        "---",
+        "",
+        item.fact,
+        "",
+        "**Why:** Learned during development session",
+        "**How to apply:** Apply when modifying relevant code or architecture",
+      ].join("\n");
+
+      await writeFile(join(memoryDir, fileName), fileContent, "utf8");
+      indexLines.push(`- [${item.fact.slice(0, 40)}](${fileName}) — ${item.type}`);
+    }
+
+    await writeFile(join(memoryDir, "MEMORY.md"), indexLines.join("\n") + "\n", "utf8");
+  } catch {
+    // Non-fatal if workspace directory is not writable
+  }
+}
+
+export async function loadWorkspaceMemory(cwd: string): Promise<string[]> {
+  try {
+    const memoryDir = join(cwd, ".pi", "memory");
+    const indexPath = join(memoryDir, "MEMORY.md");
+    const indexContent = await readFile(indexPath, "utf8");
+    const matches = Array.from(indexContent.matchAll(/\[(.*?)\]\((.*?\.md)\)/g));
+    const facts: string[] = [];
+    for (const match of matches) {
+      try {
+        const fileContent = await readFile(join(memoryDir, match[2]), "utf8");
+        const body = fileContent
+          .replace(/^---[\s\S]*?---\s*/, "")
+          .replace(/\*\*Why:\*\*[\s\S]*/, "")
+          .trim();
+        if (body) facts.push(body);
+      } catch {}
+    }
+    return facts;
+  } catch {
+    return [];
+  }
+}
+
 export async function loadMemory(cwd: string): Promise<ProjectMemory | null> {
   try {
     const raw = await readFile(memoryPath(cwd), "utf8");
     const parsed = JSON.parse(raw) as ProjectMemory;
     if (parsed.version !== 1) return null;
+    const workspaceFacts = await loadWorkspaceMemory(cwd);
+    if (workspaceFacts.length > 0) {
+      const merged = Array.from(new Set([...parsed.stableFacts, ...workspaceFacts]));
+      parsed.stableFacts = merged.slice(-20);
+    }
     return parsed;
   } catch {
+    const workspaceFacts = await loadWorkspaceMemory(cwd);
+    if (workspaceFacts.length > 0) {
+      const mem = emptyMemory(cwd);
+      mem.stableFacts = workspaceFacts.slice(-20);
+      return mem;
+    }
     return null;
   }
 }
@@ -73,6 +158,7 @@ export async function loadMemory(cwd: string): Promise<ProjectMemory | null> {
 export async function saveMemory(memory: ProjectMemory): Promise<void> {
   await mkdir(MEMORY_DIR, { recursive: true });
   await writeFile(memoryPath(memory.cwd), JSON.stringify(memory, null, 2), "utf8");
+  await syncWorkspaceMemory(memory);
 }
 
 export function emptyMemory(cwd: string): ProjectMemory {

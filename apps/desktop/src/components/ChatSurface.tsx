@@ -52,11 +52,30 @@ export const ChatSurface = memo(function ChatSurface() {
   const error = useAppStore((state) => state.error);
   const errorCode = useAppStore((state) => state.errorCode);
   const errorRetriable = useAppStore((state) => state.errorRetriable);
+  const providers = useAppStore((state) => state.providers);
   const activeSession = useAppStore((state) =>
     state.activeSessionId
       ? state.sessions.find((session) => session.id === state.activeSessionId)
       : undefined,
   );
+
+  const localProvider = useMemo(() => {
+    return providers.find(
+      (p) =>
+        p.enabled &&
+        p.models.length > 0 &&
+        (p.id === "ollama" ||
+          p.id === "lmstudio" ||
+          p.authKind === "none" ||
+          Boolean(
+            p.baseUrl &&
+              (p.baseUrl.includes("127.0.0.1") ||
+                p.baseUrl.includes("localhost") ||
+                p.baseUrl.includes(":11434") ||
+                p.baseUrl.includes(":1234")),
+          )),
+    );
+  }, [providers]);
 
   // A pending permission or ask is itself transcript content, so the empty
   // state must yield to it. Each pane subscribes to its own queues; the surface
@@ -215,6 +234,28 @@ export const ChatSurface = memo(function ChatSurface() {
                 }
               >
                 {t("errors.action.retry")}
+              </button>
+            ) : null}
+            {localProvider && localProvider.models[0] && !isRunning ? (
+              <button
+                type="button"
+                className="chat-error-action"
+                onClick={async () => {
+                  const store = useAppStore.getState();
+                  const targetModel = localProvider.models[0];
+                  await store.configureActiveSession({
+                    mode: activeSession?.mode ?? "agent",
+                    providerId: localProvider.id,
+                    modelId: targetModel.id,
+                    thinkingLevel: activeSession?.thinkingLevel ?? "off",
+                  });
+                  store.clearError();
+                  void store.retryLastPrompt();
+                }}
+              >
+                {t("chat.fallbackLocal", {
+                  provider: localProvider.name,
+                })}
               </button>
             ) : null}
             <TooltipButton

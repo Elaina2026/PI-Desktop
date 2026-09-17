@@ -20,11 +20,15 @@ export const MAX_PATCH_BYTES = 200 * 1024;
 
 type RunResult = { code: number; stdout: string; stderr: string };
 
-function runGit(cwd: string, args: string[]): Promise<RunResult> {
+function runGit(cwd: string, args: string[], stdinInput?: string): Promise<RunResult> {
   return new Promise((resolve) => {
     const child = spawn("git", args, { cwd, env: process.env });
     let stdout = "";
     let stderr = "";
+    if (stdinInput !== undefined) {
+      child.stdin.write(stdinInput);
+      child.stdin.end();
+    }
     child.stdout.on("data", (d) => (stdout += String(d)));
     child.stderr.on("data", (d) => (stderr += String(d)));
     child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
@@ -289,6 +293,40 @@ export async function collectWorkspaceDiff(cwd: string): Promise<WorkspaceDiff> 
 export async function gitStage(cwd: string, paths: string[]): Promise<RunResult> {
   if (paths.length === 0) return { code: 0, stdout: "", stderr: "" };
   return runGit(cwd, ["add", "--", ...paths]);
+}
+
+export function buildHunkPatch(filePath: string, hunkHeader: string, lines: DiffLine[]): string {
+  const normalizedPath = filePath.replaceAll("\\", "/");
+  const body = lines
+    .map((l) => (l.type === "add" ? `+${l.text}` : l.type === "del" ? `-${l.text}` : ` ${l.text}`))
+    .join("\n");
+  return [
+    `--- a/${normalizedPath}`,
+    `+++ b/${normalizedPath}`,
+    hunkHeader,
+    body,
+    "",
+  ].join("\n");
+}
+
+export async function gitStageHunk(
+  cwd: string,
+  filePath: string,
+  hunkHeader: string,
+  lines: DiffLine[],
+): Promise<RunResult> {
+  const patch = buildHunkPatch(filePath, hunkHeader, lines);
+  return runGit(cwd, ["apply", "--cached", "--unidiff-zero", "-"], patch);
+}
+
+export async function gitDiscardHunk(
+  cwd: string,
+  filePath: string,
+  hunkHeader: string,
+  lines: DiffLine[],
+): Promise<RunResult> {
+  const patch = buildHunkPatch(filePath, hunkHeader, lines);
+  return runGit(cwd, ["apply", "--reverse", "--unidiff-zero", "-"], patch);
 }
 
 export async function gitUnstage(cwd: string, paths: string[]): Promise<RunResult> {

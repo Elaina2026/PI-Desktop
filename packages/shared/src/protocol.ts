@@ -218,6 +218,8 @@ export const IPC = {
     workspaceDiff: "pi-desktop/workspace/diff",
     workspaceReviewRollback: "pi-desktop/workspace/review/rollback",
     gitStage: "pi-desktop/git/stage",
+    gitStageHunk: "pi-desktop/git/stageHunk",
+    gitDiscardHunk: "pi-desktop/git/discardHunk",
     gitUnstage: "pi-desktop/git/unstage",
     gitCommit: "pi-desktop/git/commit",
     gitGenerateCommitMessage: "pi-desktop/git/generateCommitMessage",

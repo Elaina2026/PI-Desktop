@@ -29,6 +29,8 @@ import {
 import {
   collectWorkspaceDiff,
   gitStage,
+  gitStageHunk,
+  gitDiscardHunk,
   gitUnstage,
   gitCommit,
   gitGetStagedDiff,
@@ -487,6 +489,36 @@ export function registerWorkspaceIpc({
     if (result.code !== 0) throw new Error(result.stderr || "git stage failed");
     return collectWorkspaceDiff(cwd);
   });
+
+  handle(
+    IPC.invoke.gitStageHunk,
+    async (input: { file: string; header: string; lines: any[] }) => {
+      if (!host) throw new Error("host unavailable");
+      const res = (await host.call("workspace.get")) as {
+        workspace: { path: string } | null;
+      };
+      const cwd = res.workspace?.path;
+      if (!cwd) throw new Error("No active workspace");
+      const result = await gitStageHunk(cwd, input.file, input.header, input.lines);
+      if (result.code !== 0) throw new Error(result.stderr || "git stage hunk failed");
+      return collectWorkspaceDiff(cwd);
+    },
+  );
+
+  handle(
+    IPC.invoke.gitDiscardHunk,
+    async (input: { file: string; header: string; lines: any[] }) => {
+      if (!host) throw new Error("host unavailable");
+      const res = (await host.call("workspace.get")) as {
+        workspace: { path: string } | null;
+      };
+      const cwd = res.workspace?.path;
+      if (!cwd) throw new Error("No active workspace");
+      const result = await gitDiscardHunk(cwd, input.file, input.header, input.lines);
+      if (result.code !== 0) throw new Error(result.stderr || "git discard hunk failed");
+      return collectWorkspaceDiff(cwd);
+    },
+  );
 
   handle(IPC.invoke.gitUnstage, async (input: { files: string[] } = { files: [] }) => {
     if (!host) throw new Error("host unavailable");
