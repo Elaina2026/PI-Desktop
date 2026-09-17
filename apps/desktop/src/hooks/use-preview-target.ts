@@ -3,6 +3,7 @@ import { useAppStore } from "../stores/app-store";
 import { api } from "../lib/api";
 import {
   isHtmlFilePath,
+  isImageFilePath,
   toWorkspaceRel,
   type ChatPreviewTarget,
 } from "../lib/chat-links";
@@ -30,6 +31,7 @@ export function useOpenPreviewTarget() {
  */
 export function useOpenChatFileRef() {
   const workspacePath = useAppStore((s) => s.workspace?.path ?? null);
+  const openFile = useAppStore((s) => s.openFileInWorkPanel);
   const openUrl = useAppStore((s) => s.openUrlInWorkPanel);
   const showToast = useAppStore((s) => s.showToast);
   return useCallback(
@@ -39,12 +41,16 @@ export function useOpenChatFileRef() {
         openUrl(rel);
         return;
       }
+      if (isImageFilePath(path) || path.startsWith("attachments/")) {
+        openFile(path);
+        return;
+      }
       void api.fsOpen(path).catch((error: unknown) => {
         showToast(error instanceof Error ? error.message : String(error), {
           variant: "error",
         });
       });
     },
-    [openUrl, showToast, workspacePath],
+    [openFile, openUrl, showToast, workspacePath],
   );
 }

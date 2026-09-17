@@ -20,7 +20,11 @@ function getOptionLabel(option: AskToolOption): string {
 }
 
 function getOptionPreview(option: AskToolOption): string | undefined {
-  return typeof option === "string" ? undefined : option.preview;
+  if (typeof option === "string" || !option.preview) return undefined;
+  return option.preview
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t");
 }
 
 function emptyDrafts(questions: AskToolQuestion[]): DraftAnswer[] {

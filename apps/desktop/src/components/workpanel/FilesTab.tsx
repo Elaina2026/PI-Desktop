@@ -149,6 +149,9 @@ export function FilesTab() {
   const { t } = useTranslation();
   const workspace = useAppStore((s) => s.workspace);
   const fileRequest = useAppStore((s) => s.workPanelFileRequest);
+  const activeTab = useAppStore((s) =>
+    s.workPanelTabs.find((tab) => tab.id === s.activeWorkPanelTabId),
+  );
   const root = workspace?.path ?? null;
 
   const [dirs, setDirs] = useState<Record<string, DirState>>({});
@@ -220,17 +223,25 @@ export function FilesTab() {
   // so "back" lands on a tree that reveals it. Attachment blobs and absolute
   // scratch paths live outside the workspace tree.
   useEffect(() => {
-    if (!fileRequest || !root) return;
-    if (fileRequest.seq === handledFileRequestSeq) return;
-    handledFileRequestSeq = fileRequest.seq;
-    const path = fileRequest.path;
+    const targetPath =
+      fileRequest?.path ||
+      (activeTab?.kind === "file" && activeTab.resource ? activeTab.resource : null);
+    if (!targetPath) return;
+
+    if (fileRequest) {
+      if (fileRequest.seq === handledFileRequestSeq && selected === targetPath) return;
+      handledFileRequestSeq = fileRequest.seq;
+    } else if (selected === targetPath) {
+      return;
+    }
+
     const isExternal =
-      path.startsWith("attachments/") ||
-      path.startsWith("/") ||
-      /^[A-Za-z]:[\\/]/.test(path) ||
-      path.startsWith("\\\\");
-    if (!isExternal) {
-      const parts = path.split("/").slice(0, -1);
+      targetPath.startsWith("attachments/") ||
+      targetPath.startsWith("/") ||
+      /^[A-Za-z]:[\\/]/.test(targetPath) ||
+      targetPath.startsWith("\\\\");
+    if (!isExternal && root) {
+      const parts = targetPath.split("/").slice(0, -1);
       const ancestors: string[] = [];
       let acc = "";
       for (const part of parts) {
@@ -240,8 +251,8 @@ export function FilesTab() {
       setExpanded((prev) => new Set([...prev, ...ancestors]));
       for (const dir of ancestors) void loadDir(dir);
     }
-    void openFile(path, fileRequest.mimeType);
-  }, [fileRequest, root, loadDir, openFile]);
+    void openFile(targetPath, fileRequest?.mimeType ?? activeTab?.mimeType);
+  }, [fileRequest, activeTab, root, loadDir, openFile, selected]);
 
   const renderDir = (rel: string, depth: number): React.ReactNode => {
     const state = dirs[rel];
@@ -305,16 +316,6 @@ export function FilesTab() {
     });
   };
 
-  if (!root) {
-    return (
-      <WorkTabEmpty
-        icon={IconFolder}
-        title={t("panel.files.noWorkspace")}
-        body={t("panel.files.noWorkspaceHint")}
-      />
-    );
-  }
-
   if (selected !== null) {
     return (
       <div className="file-viewer">
@@ -374,6 +375,18 @@ export function FilesTab() {
       </div>
     );
   }
+
+  if (!root) {
+    return (
+      <WorkTabEmpty
+        icon={IconFolder}
+        title={t("panel.files.noWorkspace")}
+        body={t("panel.files.noWorkspaceHint")}
+      />
+    );
+  }
+
+  return <div className="file-tree">{renderDir("", 0)}</div>;
 
   return <div className="file-tree">{renderDir("", 0)}</div>;
 }

@@ -51,6 +51,10 @@ export function isHtmlFilePath(path: string): boolean {
   return /\.html?$/i.test(path);
 }
 
+export function isImageFilePath(path: string): boolean {
+  return /\.(avif|bmp|gif|heic|jpe?g|png|svg|tiff?|webp)$/i.test(path);
+}
+
 function stripLineRef(path: string): string {
   return path.replace(/:\d+(?::\d+)?$/, "");
 }

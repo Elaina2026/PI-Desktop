@@ -2,6 +2,7 @@ import {
   fileReferenceLabel,
   formatFileInsert,
 } from "@pi-desktop/shared";
+import { useAppStore } from "../../../stores/app-store";
 import type { ComposerFileReference } from "./model";
 
 export { type ComposerFileReference } from "./model";
@@ -273,6 +274,10 @@ function buildChipElement(
   chip.dataset.token = token;
   chip.title = reference.path;
   const editableText = isEditableTextReference(reference);
+  const isImage =
+    reference.kind === "image" ||
+    isImageFilePath(reference.name) ||
+    Boolean(reference.mimeType?.startsWith("image/"));
   chip.setAttribute("role", editableText ? "button" : "listitem");
   chip.setAttribute("aria-label", `${reference.name} — ${reference.path}`);
   if (editableText) {
@@ -285,6 +290,20 @@ function buildChipElement(
       event.preventDefault();
       event.stopPropagation();
       onExpandText(token);
+    });
+  } else if (isImage || reference.kind === "file") {
+    chip.tabIndex = 0;
+    chip.style.cursor = "pointer";
+    chip.addEventListener("click", (event) => {
+      if ((event.target as HTMLElement).closest(".composer-chip-remove")) return;
+      useAppStore.getState().openFileInWorkPanel(reference.path, reference.mimeType);
+    });
+    chip.addEventListener("keydown", (event) => {
+      if (event.target !== chip) return;
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      event.stopPropagation();
+      useAppStore.getState().openFileInWorkPanel(reference.path, reference.mimeType);
     });
   }
 
