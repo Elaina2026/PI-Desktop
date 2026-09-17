@@ -373,13 +373,19 @@ export function VendorAccountsSection() {
                                       {b.name}:{" "}
                                       <strong style={{ color: b.disabled ? "var(--color-text-subtle, #888)" : b.remainingPercentage <= 15 ? "#ef4444" : "var(--color-text-normal, #ddd)" }}>
                                         {b.disabled
-                                          ? (i18n.language === "vi" ? "0% (Đã khóa / Hết hạn mức)" : "0% (Locked / Weekly Exhausted)")
-                                          : (i18n.language === "vi" ? `${b.remainingPercentage}% còn lại` : `${b.remainingPercentage}% remaining`)}
+                                          ? t("settings.quotaLocked", "0% (Đã khóa / Hết hạn mức)")
+                                          : t("settings.quotaRemaining", {
+                                              percent: b.remainingPercentage,
+                                              defaultValue: `${b.remainingPercentage}% còn lại`,
+                                            })}
                                       </strong>
                                     </span>
                                     {b.resetInSeconds && !b.disabled ? (
                                       <span>
-                                        Resets in {formatResetDuration(b.resetInSeconds)}
+                                        {t("settings.quotaResetsIn", {
+                                          duration: formatResetDuration(b.resetInSeconds),
+                                          defaultValue: `Resets in ${formatResetDuration(b.resetInSeconds)}`,
+                                        })}
                                       </span>
                                     ) : null}
                                   </div>
@@ -425,15 +431,19 @@ export function VendorAccountsSection() {
                                   Quota:{" "}
                                   <strong style={{ color: "var(--color-text-normal, #ddd)" }}>
                                     {quotas[account.providerId].remainingPercentage !== undefined
-                                      ? (i18n.language === "vi"
-                                          ? `${quotas[account.providerId].remainingPercentage}% còn lại`
-                                          : `${quotas[account.providerId].remainingPercentage}% remaining`)
-                                      : "Active"}
+                                      ? t("settings.quotaRemaining", {
+                                          percent: quotas[account.providerId].remainingPercentage,
+                                          defaultValue: `${quotas[account.providerId].remainingPercentage}% remaining`,
+                                        })
+                                      : t("settings.quotaActive", "Active")}
                                   </strong>
                                 </span>
                                 {quotas[account.providerId].resetInSeconds ? (
                                   <span>
-                                    Resets in {formatResetDuration(quotas[account.providerId].resetInSeconds!)}
+                                    {t("settings.quotaResetsIn", {
+                                      duration: formatResetDuration(quotas[account.providerId].resetInSeconds!),
+                                      defaultValue: `Resets in ${formatResetDuration(quotas[account.providerId].resetInSeconds!)}`,
+                                    })}
                                   </span>
                                 ) : null}
                               </div>

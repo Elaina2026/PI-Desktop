@@ -1533,6 +1533,7 @@ describe("DesktopAgentRuntime deferred tool catalog", () => {
       "asktool",
       "WebSearch",
       "WebFetch",
+      "GenerateImage",
       "Skill",
       "EnterPlanMode",
       "EnterGoalMode",

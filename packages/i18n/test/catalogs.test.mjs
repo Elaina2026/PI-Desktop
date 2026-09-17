@@ -164,23 +164,27 @@ test("locale resolution maps variants onto shipped catalogs and falls back to En
   assert.equal(resolveLocale("ko"), "ko");
   assert.equal(resolveLocale("ko-KR"), "ko");
   assert.equal(resolveLocale("ko_KR"), "ko");
+  assert.equal(resolveLocale("vi"), "vi");
+  assert.equal(resolveLocale("vi-VN"), "vi");
+  assert.equal(resolveLocale("vi_VN"), "vi");
   assert.equal(resolveLocale(), "en");
 });
 
 test("the locale registry lists English first, then other locales by English name", () => {
   assert.deepEqual(
     supportedLocales.map((locale) => locale.id),
-    ["en", "zh-CN", "zh-TW", "de", "es", "tr", "fr", "ko"],
+    ["en", "zh-CN", "zh-TW", "de", "es", "tr", "fr", "ko", "vi"],
   );
   assert.deepEqual(
     listedLocales().map((locale) => locale.id),
-    ["en", "zh-CN", "zh-TW", "fr", "de", "ko", "es", "tr"],
+    ["en", "zh-CN", "zh-TW", "fr", "de", "ko", "es", "tr", "vi"],
   );
   assert.equal(localeInfoNative("de"), "Deutsch");
   assert.equal(localeInfoNative("es"), "Español");
   assert.equal(localeInfoNative("fr"), "Français");
   assert.equal(localeInfoNative("tr"), "Türkçe");
   assert.equal(localeInfoNative("ko"), "한국어");
+  assert.equal(localeInfoNative("vi"), "Tiếng Việt");
   assert.equal(english["settings.languageSearchPlaceholder"], "Search languages…");
   assert.equal(english["settings.themeSearchPlaceholder"], "Search themes…");
   assert.equal(english["settings.languageAutoDesc"], "Currently {{state}}");

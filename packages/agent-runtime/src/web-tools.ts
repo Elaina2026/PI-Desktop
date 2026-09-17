@@ -32,12 +32,49 @@ export function validateSafeUrl(rawUrl: string): URL {
   return parsed;
 }
 
+async function fetchWithExa(
+  url: string,
+  apiKey: string,
+  maxChars: number,
+): Promise<string | null> {
+  try {
+    const res = await fetch("https://api.exa.ai/contents", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        urls: [url],
+        text: { maxCharacters: maxChars },
+      }),
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as any;
+    if (Array.isArray(data.results) && data.results[0]?.text) {
+      return data.results[0].text;
+    }
+  } catch {}
+  return null;
+}
+
 export async function executeWebFetch(
   url: string,
   maxChars = 20_000,
 ): Promise<string> {
   const parsed = validateSafeUrl(url);
   const cappedLimit = Math.min(Math.max(1000, maxChars), 100_000);
+
+  const exaKey = process.env.EXA_API_KEY?.trim();
+  if (exaKey) {
+    const exaContent = await fetchWithExa(parsed.toString(), exaKey, cappedLimit);
+    if (exaContent) {
+      return exaContent.length <= cappedLimit
+        ? exaContent
+        : `${exaContent.slice(0, cappedLimit)}\n\n[... Truncated at ${cappedLimit} characters]`;
+    }
+  }
 
   const response = await fetch(parsed.toString(), {
     headers: {
@@ -77,6 +114,41 @@ export type SearchResult = {
   snippet: string;
 };
 
+async function searchWithExa(
+  query: string,
+  apiKey: string,
+  limit: number,
+): Promise<SearchResult[] | null> {
+  try {
+    const res = await fetch("https://api.exa.ai/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        query,
+        numResults: limit,
+        useAutoprompt: true,
+        contents: { text: { maxCharacters: 1000 } },
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as any;
+    if (Array.isArray(data.results) && data.results.length > 0) {
+      return data.results.map((r: any) => ({
+        title: decodeHtmlEntities(r.title || r.url),
+        url: r.url,
+        snippet: decodeHtmlEntities(
+          r.text ? r.text.slice(0, 300).replace(/\s+/g, " ") : (r.highlights?.[0] || ""),
+        ),
+      }));
+    }
+  } catch {}
+  return null;
+}
+
 export async function executeWebSearch(
   query: string,
   limit = 5,
@@ -84,6 +156,19 @@ export async function executeWebSearch(
   const trimmed = query.trim();
   if (!trimmed) return "Query cannot be empty.";
   const maxResults = Math.min(Math.max(1, limit), 10);
+
+  const exaKey = process.env.EXA_API_KEY?.trim();
+  if (exaKey) {
+    const exaResults = await searchWithExa(trimmed, exaKey, maxResults);
+    if (exaResults && exaResults.length > 0) {
+      return exaResults
+        .map(
+          (result, idx) =>
+            `### ${idx + 1}. [${result.title}](${result.url})\n${result.snippet || "No description provided."}`,
+        )
+        .join("\n\n");
+    }
+  }
 
   // Use DuckDuckGo HTML endpoint with standard query
   const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(trimmed)}`;

@@ -64,7 +64,11 @@
   margin: 10px 0;
   padding: 14px 16px;
   border-radius: var(--radius-md);
-  background: var(--ds-tile);
+  background: var(--ds-bg-elevated-opaque);
+  border: 1px solid var(--ds-border-subtle);
+  box-shadow: var(--ds-shadow-dialog);
+  position: relative;
+  z-index: 10;
 }
 
 .asktool-card-header,
@@ -232,8 +236,8 @@
 
 .asktool-preview-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
-  gap: 12px;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 16px;
   align-items: stretch;
   margin-top: 12px;
 }

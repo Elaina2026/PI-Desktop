@@ -544,18 +544,40 @@ export class VendorOAuth {
             if (Array.isArray(group.buckets)) {
               for (const b of group.buckets) {
                 const isDisabled = !!b.disabled;
-                const rawRem = typeof b.remainingPercentage === "number"
-                  ? b.remainingPercentage
-                  : typeof b.remainingFraction === "number"
-                    ? Math.round(b.remainingFraction * 100)
-                    : 100;
+                const rawVal =
+                  typeof b.remainingPercentage === "number"
+                    ? b.remainingPercentage
+                    : typeof b.remaining_percentage === "number"
+                      ? b.remaining_percentage
+                      : typeof b.remainingFraction === "number"
+                        ? b.remainingFraction
+                        : typeof b.remaining_fraction === "number"
+                          ? b.remaining_fraction
+                          : typeof b.remaining === "number"
+                            ? b.remaining
+                            : 100;
+                const rawRem =
+                  rawVal > 0 && rawVal <= 1
+                    ? Math.round(rawVal * 100)
+                    : Math.min(100, Math.max(0, Math.round(rawVal)));
                 const rem = isDisabled ? 0 : rawRem;
-                let resetInSeconds: number | undefined;
-                if (b.resetTime) {
+                let resetInSeconds: number | undefined =
+                  typeof b.resetInSeconds === "number"
+                    ? b.resetInSeconds
+                    : typeof b.reset_in_seconds === "number"
+                      ? b.reset_in_seconds
+                      : undefined;
+                if (b.resetTime && resetInSeconds === undefined) {
                   const diff = new Date(b.resetTime).getTime() - Date.now();
                   if (diff > 0) resetInSeconds = Math.round(diff / 1000);
                 }
-                const windowLabel = b.window === "5h" ? "5h" : b.window === "weekly" ? "Weekly" : (b.displayName || b.window || "");
+                const rawWindow = b.window || b.displayName || "";
+                const windowLabel =
+                  rawWindow === "5h"
+                    ? "5h"
+                    : rawWindow.toLowerCase().includes("week")
+                      ? "Weekly"
+                      : rawWindow || "Standard";
                 const bucketName = `${groupPrefix} (${windowLabel})`;
                 buckets.push({
                   id: b.bucketId || `${groupPrefix}-${windowLabel}`,
@@ -577,7 +599,13 @@ export class VendorOAuth {
           }
         }
 
-        let percentage = buckets.length > 0 ? lowestPercentage : 100;
+        const activeBuckets = buckets.filter((b) => !b.disabled);
+        let percentage =
+          activeBuckets.length > 0
+            ? Math.min(...activeBuckets.map((b) => b.remainingPercentage))
+            : buckets.length > 0
+              ? 0
+              : 100;
         let resetTime = lowestResetTime;
         let resetInSeconds: number | undefined = lowestResetInSeconds;
 

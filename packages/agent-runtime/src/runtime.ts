@@ -152,6 +152,7 @@ import {
   projectMemoryPrompt,
 } from "./project-memory-prompt.js";
 import { executeWebSearch, executeWebFetch } from "./web-tools.js";
+import { executeImageGeneration } from "./image-tools.js";
 import {
   pluginSkillsPrompt,
   SKILL_TOOL_NAME,
@@ -536,6 +537,7 @@ const AGENT_CORE_TOOL_NAMES = new Set([
   "Bash",
   "WebSearch",
   "WebFetch",
+  "GenerateImage",
   ASK_TOOL_NAME,
   // The slash menu answers a user-invoked `/skill-id` with an instruction to
   // call `Skill { id }` on the first turn (ADR 0219), and a capability the
@@ -3088,6 +3090,55 @@ Delegation rules:
       },
     };
 
+    const generateImageTool: AgentTool = {
+      name: "GenerateImage",
+      label: "Generate image",
+      description:
+        "Generate an image, diagram, icon, or vector illustration using AI image generation or SVG vector markup. Saves resulting file into workspace (.pi/images/) and returns Markdown image embedding for inline transcript preview.",
+      parameters: Type.Object({
+        prompt: Type.String({ description: "Detailed description of the image, diagram, illustration, or graphic to create" }),
+        format: Type.Optional(Type.String({ description: "Output format: 'png' (AI model generation) or 'svg' (vector graphic). Default 'png'." })),
+        size: Type.Optional(Type.String({ description: "Resolution for raster generation (e.g. '1024x1024', '1024x1792', '1792x1024'). Default '1024x1024'." })),
+      }),
+      executionMode: "sequential",
+      execute: async (_toolCallId, params) => {
+        const { prompt, format, size } = (params ?? {}) as {
+          prompt?: string;
+          format?: "png" | "svg";
+          size?: string;
+        };
+        if (!prompt || !prompt.trim()) {
+          return {
+            content: [{ type: "text", text: "Prompt is required for image generation." }],
+            details: {},
+            isError: true,
+          };
+        }
+        try {
+          const apiKey = providerRequestKey(this.provider) || (this.provider as any)?.apiKey;
+          const providerBaseUrl = (this.provider as any)?.baseUrl;
+          const result = await executeImageGeneration({
+            prompt: prompt.trim(),
+            format: format === "svg" ? "svg" : "png",
+            size: size || "1024x1024",
+            workspacePath: this.projectPath,
+            providerBaseUrl,
+            apiKey,
+          });
+          return {
+            content: [{ type: "text", text: result.markdown }],
+            details: { prompt, format: result.format, filePath: result.filePath },
+          };
+        } catch (error) {
+          return {
+            content: [{ type: "text", text: `GenerateImage failed: ${error instanceof Error ? error.message : String(error)}` }],
+            details: { error: String(error) },
+            isError: true,
+          };
+        }
+      },
+    };
+
     const rememberTool: AgentTool = {
       name: "remember",
       label: "Remember project fact",
@@ -3250,6 +3301,7 @@ Delegation rules:
       askTool,
       webSearchTool,
       webFetchTool,
+      generateImageTool,
       rememberTool,
       forgetTool,
       dreamTool,
