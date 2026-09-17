@@ -432,9 +432,11 @@ export function MessageAttachmentImage({
       className="message-attachment-image"
       role="listitem"
       title={`${attachment.name} — ${attachment.ref}`}
-      onClick={() =>
-        useAppStore.getState().openLightbox(dataUrl, attachment.name)
-      }
+      onClick={() => {
+        useAppStore.getState().openLightbox(dataUrl, attachment.name);
+        // Fallback for work panel inspector:
+        // openFileInWorkPanel(attachment.ref, attachment.mimeType)
+      }}
     >
       <img src={dataUrl} alt={attachment.name} />
     </button>

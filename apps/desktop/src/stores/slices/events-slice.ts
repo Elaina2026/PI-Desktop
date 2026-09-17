@@ -412,9 +412,11 @@ export function createEventsSlice({
               });
             }
           } else if (event.reason === "manual") {
+            const msg = event.error?.message;
+            const isNoContext = msg?.toLowerCase().includes("no new context");
             get().showToast(
-              event.error?.message || i18n.t("contextCompaction.failed"),
-              { variant: "error" },
+              isNoContext ? (msg ?? i18n.t("contextCompaction.completed")) : (msg || i18n.t("contextCompaction.failed")),
+              { variant: isNoContext ? "info" : "error" },
             );
           }
           break;

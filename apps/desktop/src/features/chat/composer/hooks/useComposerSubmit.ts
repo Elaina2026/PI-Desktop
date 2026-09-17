@@ -207,6 +207,20 @@ export function useComposerSubmit({
         1,
         commandEnd === -1 ? undefined : commandEnd,
       );
+
+      // Fast-path /compact: clear composer draft immediately and trigger compaction locally
+      if (name === "compact" || name === "compact-context") {
+        draft.clearDraftForKey(submittedDraftKey);
+        try {
+          await runPaletteCommand("builtin.agent.compact");
+        } catch (error) {
+          showToast(error instanceof Error ? error.message : String(error), {
+            variant: "error",
+          });
+        }
+        return;
+      }
+
       const command = name ? await resolveComposerCommand(name) : null;
       if (command && command.kind !== "template" && command.id) {
         const commandBody =
@@ -351,10 +365,10 @@ export function useComposerSubmit({
           return;
         }
         if (!commandBody) {
+          draft.clearDraftForKey(submittedDraftKey);
           try {
             if (command.kind === "builtin") await runPaletteCommand(command.id);
             else await api.executeCommand(command.id);
-            draft.clearDraftForKey(submittedDraftKey);
           } catch (error) {
             showToast(error instanceof Error ? error.message : String(error), {
               variant: "error",

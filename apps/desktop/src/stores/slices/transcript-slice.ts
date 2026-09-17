@@ -73,11 +73,14 @@ export function createTranscriptSlice({
             [sessionId]: false,
           },
         }));
-        if ((error as { code?: string })?.code !== "CONTEXT_COMPACTION_FAILED") {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        const isCompactionFailed =
+          errorMsg.includes("CONTEXT_COMPACTION_FAILED") ||
+          errorMsg.includes("context compaction failed") ||
+          (error as { code?: string })?.code === "CONTEXT_COMPACTION_FAILED";
+        if (!isCompactionFailed) {
           get().showToast(
-            error instanceof Error
-              ? error.message
-              : i18n.t("contextCompaction.failed"),
+            errorMsg || i18n.t("contextCompaction.failed"),
             { variant: "error" },
           );
         }
