@@ -7,14 +7,12 @@ import type {
   TokenUsageHistoryItem,
 } from "@pi-desktop/shared";
 import { api } from "../../lib/api";
-import { Button } from "../ui";
-import { IconActivity, IconBot, IconReview } from "../icons";
+import { IconActivity, IconBot } from "../icons";
 import { useAppStore } from "../../stores/app-store";
 import {
   formatTokenCount,
   mergeUsageDailyAndHistory,
   buildContinuousCalendarGrid,
-  parseLocalMidnightMs,
   type HeatmapCalendarCell,
 } from "../../lib/model-pricing";
 
@@ -25,23 +23,12 @@ function cellFill(value: number, max: number): string {
   return `color-mix(in oklab, var(--ds-success) ${mix}%, transparent)`;
 }
 
-function mondayIndex(dateStr?: string): number {
-  if (!dateStr || typeof dateStr !== "string") return 0;
-  const parts = dateStr.split("-").map(Number);
-  if (parts.length < 3 || isNaN(parts[0]) || isNaN(parts[1]) || isNaN(parts[2])) return 0;
-  const weekday = new Date(parts[0], parts[1] - 1, parts[2]).getDay();
-  return weekday === 0 ? 6 : weekday - 1;
-}
-
-type TimeframeKey = "today" | "sevenDays" | "thirtyDays" | "allTime";
-
 export function UsagesPage() {
   const { t, i18n } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [summary, setSummary] = useState<ModelUsageSummaryResult | null>(null);
   const [historyItems, setHistoryItems] = useState<TokenUsageHistoryItem[]>([]);
-  const [selectedTimeframe, setSelectedTimeframe] = useState<TimeframeKey>("sevenDays");
   const [selectedCell, setSelectedCell] = useState<{
     date: string;
     total: number;
@@ -64,7 +51,6 @@ export function UsagesPage() {
   const settings = useAppStore((s) => s.settings);
   const sessions = useAppStore((s) => s.sessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
-  const showToast = useAppStore((s) => s.showToast);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
   const activeModelId =
@@ -74,14 +60,14 @@ export function UsagesPage() {
     "gemini-3.8-flash";
 
   const inFlightRef = useRef(false);
-  const loadData = async (silent = false, force = false) => {
-    if (inFlightRef.current && !force) return;
+  const loadData = async (silent = false) => {
+    if (inFlightRef.current) return;
     inFlightRef.current = true;
     if (!silent) setLoading(true);
     setError(false);
     try {
       const [sumRes, histRes] = await Promise.all([
-        api.getModelUsageSummary({ force }).catch(() => null),
+        api.getModelUsageSummary().catch(() => null),
         api.getTokenUsageHistory({ bucket: "day" }).catch(() => null),
       ]);
       if (sumRes) setSummary(sumRes);
@@ -89,18 +75,8 @@ export function UsagesPage() {
         setHistoryItems(histRes.items);
       }
       setSelectedCell(null);
-      if (force && !silent) {
-        showToast(t("settings.usageRefreshed", "Usage data refreshed"), {
-          variant: "success",
-        });
-      }
     } catch {
       setError(true);
-      if (force && !silent) {
-        showToast(t("settings.usageRefreshFailed", "Failed to refresh usage data"), {
-          variant: "error",
-        });
-      }
     } finally {
       inFlightRef.current = false;
       setLoading(false);
@@ -115,7 +91,7 @@ export function UsagesPage() {
     const unsub = api.onSessionsChanged(() => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        void loadData(true, true);
+        void loadData(true);
       }, 1000);
     });
     return () => {
@@ -124,14 +100,14 @@ export function UsagesPage() {
     };
   }, []);
 
-  const timeframesMap = summary?.timeframes;
-  const currentTfData: TimeframeUsageItem = useMemo(() => {
-    if (timeframesMap && timeframesMap[selectedTimeframe]) {
-      return timeframesMap[selectedTimeframe];
+  // Mode All-time by default
+  const allTimeData: TimeframeUsageItem = useMemo(() => {
+    if (summary?.timeframes?.allTime) {
+      return summary.timeframes.allTime;
     }
     return {
-      id: selectedTimeframe,
-      labelKey: `settings.usage${selectedTimeframe}`,
+      id: "allTime",
+      labelKey: "settings.usageAllTime",
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,
@@ -142,23 +118,23 @@ export function UsagesPage() {
       costUsd: 0,
       models: [],
     };
-  }, [timeframesMap, selectedTimeframe]);
+  }, [summary?.timeframes]);
 
-  // Models used in selected timeframe
-  const currentModels: ModelUsageSummaryItem[] = useMemo(() => {
-    if (currentTfData.models && currentTfData.models.length > 0) {
-      return currentTfData.models;
+  // Models across all time
+  const allModels: ModelUsageSummaryItem[] = useMemo(() => {
+    if (summary?.models && summary.models.length > 0) {
+      return summary.models;
     }
-    if (selectedTimeframe === "allTime") {
-      return summary?.models ?? [];
+    if (allTimeData.models && allTimeData.models.length > 0) {
+      return allTimeData.models;
     }
     return [];
-  }, [currentTfData, selectedTimeframe, summary]);
+  }, [summary?.models, allTimeData.models]);
 
-  // Top 5 models for the right-hand panel
+  // Top 5 models for the right-hand overview
   const topModels = useMemo(() => {
-    return currentModels.slice(0, 5);
-  }, [currentModels]);
+    return allModels.slice(0, 5);
+  }, [allModels]);
 
   // Continuous 53-week heatmap calendar data merged by local date string
   const mergedMap = useMemo(() => {
@@ -176,123 +152,79 @@ export function UsagesPage() {
     return false;
   }, [mergedMap]);
 
-  const timeframeCutoffMs = useMemo(() => {
-    const now = Date.now();
-    if (selectedTimeframe === "today") {
-      const d = new Date();
-      d.setHours(0, 0, 0, 0);
-      return d.getTime();
-    }
-    if (selectedTimeframe === "sevenDays") return now - 7 * 86400 * 1000;
-    if (selectedTimeframe === "thirtyDays") return now - 30 * 86400 * 1000;
-    return 0; // allTime
-  }, [selectedTimeframe]);
-
   const svgWidth = Math.max(28 + weeks.length * 13 + 6, 728);
   const svgHeight = 112;
 
-  const timeframeTabs: Array<{ id: TimeframeKey; labelKey: string }> = [
-    { id: "today", labelKey: "settings.usageToday" },
-    { id: "sevenDays", labelKey: "settings.usage7Days" },
-    { id: "thirtyDays", labelKey: "settings.usage1Month" },
-    { id: "allTime", labelKey: "settings.usageAllTime" },
-  ];
+  const totalCache =
+    allTimeData.cacheTokens ||
+    allTimeData.cacheReadTokens + allTimeData.cacheWriteTokens;
 
   return (
     <div className="usages-page">
-      {/* Top Header & Timeframe Selector Bar */}
+      {/* Top Header */}
       <div className="token-usage-toolbar">
         <div>
-          <h2 className="text-lg font-semibold text-text-primary">{t("settings.usages")}</h2>
-        </div>
-
-        <div className="flex items-center gap-3">
-          {/* Timeframe Selector Segment */}
-          <div className="token-usage-timeframe-selector" role="tablist">
-            {timeframeTabs.map((tab) => {
-              const active = selectedTimeframe === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  className={`token-usage-timeframe-btn ${active ? "active" : ""}`}
-                  onClick={() => setSelectedTimeframe(tab.id)}
-                >
-                  {t(tab.labelKey)}
-                </button>
-              );
-            })}
-          </div>
-
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => void loadData(false, true)}
-            disabled={loading}
-            aria-label={t("settings.usageRefresh")}
-          >
-            <IconReview className={loading ? "animate-spin" : ""} />
-          </Button>
+          <h2 className="text-lg font-semibold text-text-primary">
+            {t("settings.usages")}
+          </h2>
         </div>
       </div>
 
-      {/* Main 9router-style Dashboard Grid: 4 KPIs (left) & Active/Top Models (right) */}
+      {/* Main Dashboard Grid: Lifetime KPIs (left) & Active/Top Models (right) */}
       <div className="token-usage-dashboard-grid">
-        {/* Left Column: 4 Stat Cards */}
+        {/* Left Column: 4 Lifetime Stat Cards */}
         <div className="token-usage-stat-cards">
-          {/* Input Tokens */}
+          {/* Lifetime Input Tokens */}
           <div className="token-usage-card">
             <div className="text-xs font-medium text-text-muted">
               {t("settings.usageInputTokens")}
             </div>
             <div className="mt-2 text-2xl font-bold text-text-primary font-mono">
-              {formatTokenCount(currentTfData.inputTokens)}
+              {formatTokenCount(allTimeData.inputTokens)}
             </div>
             <div className="mt-1 text-xs text-text-muted font-mono">
-              {currentTfData.inputTokens.toLocaleString()} tokens
+              {allTimeData.inputTokens.toLocaleString()} tokens
             </div>
           </div>
 
-          {/* Cache Tokens */}
+          {/* Lifetime Cache Tokens */}
           <div className="token-usage-card">
             <div className="text-xs font-medium text-text-muted flex items-center justify-between">
               <span>{t("settings.usageCacheTokens")}</span>
               <span className="token-dot cache" />
             </div>
             <div className="mt-2 text-2xl font-bold text-sky-400 font-mono">
-              {formatTokenCount(currentTfData.cacheTokens || (currentTfData.cacheReadTokens + currentTfData.cacheWriteTokens))}
+              {formatTokenCount(totalCache)}
             </div>
             <div className="mt-1 text-xs text-text-muted font-mono">
-              {(currentTfData.cacheReadTokens + currentTfData.cacheWriteTokens).toLocaleString()} tokens
+              {totalCache.toLocaleString()} tokens
             </div>
           </div>
 
-          {/* Output Tokens */}
+          {/* Lifetime Output Tokens */}
           <div className="token-usage-card">
             <div className="text-xs font-medium text-text-muted flex items-center justify-between">
               <span>{t("settings.usageOutputTokens")}</span>
               <span className="token-dot output" />
             </div>
             <div className="mt-2 text-2xl font-bold text-emerald-400 font-mono">
-              {formatTokenCount(currentTfData.outputTokens)}
+              {formatTokenCount(allTimeData.outputTokens)}
             </div>
             <div className="mt-1 text-xs text-text-muted font-mono">
-              {currentTfData.outputTokens.toLocaleString()} tokens
+              {allTimeData.outputTokens.toLocaleString()} tokens
             </div>
           </div>
 
-          {/* Total Cost USD */}
+          {/* Lifetime Total Cost USD */}
           <div className="token-usage-card highlight">
             <div className="text-xs font-medium text-text-muted">
               {t("settings.usageTotalCost")}
             </div>
             <div className="mt-2 text-2xl font-bold text-ds-accent font-mono">
-              ${currentTfData.costUsd.toFixed(4)}
+              ${allTimeData.costUsd.toFixed(4)}
             </div>
             <div className="mt-1 text-xs text-text-muted">
-              {t(timeframeTabs.find((x) => x.id === selectedTimeframe)?.labelKey || "")} USD
+              {t("settings.usageAllTime")} USD
             </div>
           </div>
         </div>
@@ -306,37 +238,55 @@ export function UsagesPage() {
                 <IconBot size={13} />
                 {t("settings.usageActiveModel")}
               </span>
-              <span className="token-badge-active">{t("settings.usageStatusActive")}</span>
+              <span className="token-badge-active">
+                {t("settings.usageStatusActive")}
+              </span>
             </div>
             <div className="mt-1.5 text-sm font-semibold text-text-primary font-mono truncate">
               {activeModelId}
             </div>
           </div>
 
-          {/* Top Models ranking for current timeframe */}
+          {/* Top Models ranking for all time */}
           <div className="token-usage-top-models-box">
             <div className="text-xs font-medium text-text-muted mb-2">
               {t("settings.usageTopModels")}
             </div>
             <div className="flex flex-col gap-2.5">
               {topModels.length === 0 ? (
-                <div className="py-2 text-xs text-text-muted">{t("settings.usageEmpty")}</div>
+                <div className="py-2 text-xs text-text-muted">
+                  {t("settings.usageEmpty")}
+                </div>
               ) : (
                 topModels.map((m) => {
-                  const pct = m.percent ?? Math.round((m.totalTokens / (currentTfData.totalTokens || 1)) * 100);
+                  const pct =
+                    m.percent ??
+                    Math.round(
+                      (m.totalTokens / (allTimeData.totalTokens || 1)) * 100,
+                    );
                   return (
                     <div key={m.modelId} className="token-usage-model-rank-item">
                       <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="font-mono text-text-primary truncate max-w-[130px]" title={m.modelId}>
+                        <span
+                          className="font-mono text-text-primary truncate max-w-[130px]"
+                          title={m.modelId}
+                        >
                           {m.modelId.split("/").pop()}
                         </span>
                         <div className="flex items-center gap-2">
-                          <span className="font-mono text-text-secondary">{formatTokenCount(m.totalTokens)}</span>
-                          <span className="text-ds-accent font-mono text-xs-plus">${m.costUsd.toFixed(3)}</span>
+                          <span className="font-mono text-text-secondary">
+                            {formatTokenCount(m.totalTokens)}
+                          </span>
+                          <span className="text-ds-accent font-mono text-xs-plus">
+                            ${m.costUsd.toFixed(3)}
+                          </span>
                         </div>
                       </div>
                       <div className="token-progress-bar-bg">
-                        <div className="token-progress-bar-fill" style={{ width: `${Math.max(pct, 2)}%` }} />
+                        <div
+                          className="token-progress-bar-fill"
+                          style={{ width: `${Math.max(pct, 2)}%` }}
+                        />
                       </div>
                     </div>
                   );
@@ -357,23 +307,38 @@ export function UsagesPage() {
           <div className="token-usage-legend text-xs text-text-muted">
             <span>{t("settings.usageLess")}</span>
             <span className="token-usage-swatch" />
-            <span className="token-usage-swatch" style={{ backgroundColor: cellFill(1, 4) }} />
-            <span className="token-usage-swatch" style={{ backgroundColor: cellFill(2, 4) }} />
-            <span className="token-usage-swatch" style={{ backgroundColor: cellFill(3, 4) }} />
-            <span className="token-usage-swatch" style={{ backgroundColor: cellFill(4, 4) }} />
+            <span
+              className="token-usage-swatch"
+              style={{ backgroundColor: cellFill(1, 4) }}
+            />
+            <span
+              className="token-usage-swatch"
+              style={{ backgroundColor: cellFill(2, 4) }}
+            />
+            <span
+              className="token-usage-swatch"
+              style={{ backgroundColor: cellFill(3, 4) }}
+            />
+            <span
+              className="token-usage-swatch"
+              style={{ backgroundColor: cellFill(4, 4) }}
+            />
             <span>{t("settings.usageMore")}</span>
           </div>
         </div>
 
         {error ? (
-          <div className="py-10 text-center text-xs text-text-muted">{t("settings.usageLoadError")}</div>
+          <div className="py-10 text-center text-xs text-text-muted">
+            {t("settings.usageLoadError")}
+          </div>
         ) : loading && !summary ? (
-          <div className="py-10 text-center text-xs text-text-muted flex items-center justify-center gap-2">
-            <IconReview className="animate-spin" size={14} />
-            <span>{t("settings.usageRefresh")}...</span>
+          <div className="py-10 text-center text-xs text-text-muted">
+            {t("settings.usageEmpty")}
           </div>
         ) : !hasAnyTokens ? (
-          <div className="py-10 text-center text-xs text-text-muted">{t("settings.usageEmpty")}</div>
+          <div className="py-10 text-center text-xs text-text-muted">
+            {t("settings.usageEmpty")}
+          </div>
         ) : (
           <div className="token-usage-heatmap-layout">
             <svg
@@ -393,9 +358,15 @@ export function UsagesPage() {
                 </text>
               ))}
 
-              <text x="0" y="27" className="token-usage-svg-label">{t("settings.usageMon")}</text>
-              <text x="0" y="53" className="token-usage-svg-label">{t("settings.usageWed")}</text>
-              <text x="0" y="79" className="token-usage-svg-label">{t("settings.usageFri")}</text>
+              <text x="0" y="27" className="token-usage-svg-label">
+                {t("settings.usageMon")}
+              </text>
+              <text x="0" y="53" className="token-usage-svg-label">
+                {t("settings.usageWed")}
+              </text>
+              <text x="0" y="79" className="token-usage-svg-label">
+                {t("settings.usageFri")}
+              </text>
 
               {weeks.map((week, colIdx) => {
                 const colX = 28 + colIdx * 13;
@@ -405,9 +376,6 @@ export function UsagesPage() {
                       if (!item) return null;
                       const cellY = 18 + rowIdx * 13;
                       const isSelected = selectedCell?.date === item.date;
-                      const inActiveWindow =
-                        timeframeCutoffMs === 0 ||
-                        (item.timestamp ? Math.max(item.timestamp, parseLocalMidnightMs(item.date)) >= timeframeCutoffMs : parseLocalMidnightMs(item.date) >= timeframeCutoffMs);
 
                       return (
                         <rect
@@ -421,7 +389,7 @@ export function UsagesPage() {
                           className={`token-usage-svg-cell ${isSelected ? "selected" : ""}`}
                           style={{
                             fill: cellFill(item.totalTokens, maxTokens),
-                            opacity: inActiveWindow ? 1 : 0.25,
+                            opacity: 1,
                           }}
                           aria-pressed={isSelected}
                           onClick={() =>
@@ -453,22 +421,36 @@ export function UsagesPage() {
         )}
 
         {selectedCell ? (
-          <div className="token-usage-detail text-xs text-text-primary" style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "center" }}>
+          <div
+            className="token-usage-detail text-xs text-text-primary"
+            style={{ display: "flex", flexDirection: "column", gap: "6px" }}
+          >
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "12px",
+                alignItems: "center",
+              }}
+            >
               <span className="font-semibold">{selectedCell.date}</span>
               {selectedCell.turns !== undefined ? (
                 <span className="text-text-muted">
-                  {t("settings.usageTurns")}: {selectedCell.turns.toLocaleString()}
+                  {t("settings.usageTurns")}:{" "}
+                  {selectedCell.turns.toLocaleString()}
                 </span>
               ) : null}
               <span>
-                {t("settings.usageInput")}: {selectedCell.input.toLocaleString()}
+                {t("settings.usageInput")}:{" "}
+                {selectedCell.input.toLocaleString()}
               </span>
               <span>
-                {t("settings.usageOutput")}: {selectedCell.output.toLocaleString()}
+                {t("settings.usageOutput")}:{" "}
+                {selectedCell.output.toLocaleString()}
               </span>
               <span>
-                {t("settings.usageTotal")}: {selectedCell.total.toLocaleString()}
+                {t("settings.usageTotal")}:{" "}
+                {selectedCell.total.toLocaleString()}
               </span>
               {selectedCell.cost !== undefined ? (
                 <span className="font-medium text-ds-accent">
@@ -476,15 +458,24 @@ export function UsagesPage() {
                 </span>
               ) : null}
             </div>
-            {selectedCell.models && Object.keys(selectedCell.models).length > 0 ? (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "4px" }}>
+            {selectedCell.models &&
+            Object.keys(selectedCell.models).length > 0 ? (
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "6px",
+                  marginTop: "4px",
+                }}
+              >
                 {Object.entries(selectedCell.models).map(([mId, mData]) => (
                   <span
                     key={mId}
                     className="token-usage-model-tag"
                     style={{ fontSize: "11px", padding: "2px 6px" }}
                   >
-                    <strong>{mId}</strong>: {formatTokenCount(mData.totalTokens)} (${mData.costUsd.toFixed(4)})
+                    <strong>{mId}</strong>: {formatTokenCount(mData.totalTokens)}{" "}
+                    (${mData.costUsd.toFixed(4)})
                   </span>
                 ))}
               </div>
@@ -493,59 +484,10 @@ export function UsagesPage() {
         ) : null}
       </div>
 
-      {/* Timeframe Total Price Table */}
-      <div className="token-usage-card-block">
-        <h3 className="token-usage-card-heading">{t("settings.usageTimeframes")}</h3>
-        <div className="token-usage-table-wrap">
-          <table className="token-usage-table">
-            <thead>
-              <tr>
-                <th>{t("settings.usageTableTimeframe")}</th>
-                <th className="text-right">{t("settings.usageTableInput")}</th>
-                <th className="text-right">{t("settings.usageCacheTokens")}</th>
-                <th className="text-right">{t("settings.usageTableOutput")}</th>
-                <th className="text-right">{t("settings.usageTableTotal")}</th>
-                <th className="text-right">{t("settings.usageTableCost")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {timeframeTabs.map((tab) => {
-                const tf = timeframesMap ? timeframesMap[tab.id] : null;
-                const isCurrent = selectedTimeframe === tab.id;
-                return (
-                  <tr
-                    key={tab.id}
-                    className={isCurrent ? "bg-ds-tile/50 font-medium" : ""}
-                    style={{ cursor: "pointer" }}
-                    onClick={() => setSelectedTimeframe(tab.id)}
-                  >
-                    <td className="font-medium">
-                      <span className="flex items-center gap-2">
-                        {isCurrent ? <span className="w-1.5 h-1.5 rounded-full bg-ds-accent" /> : null}
-                        {t(tab.labelKey)}
-                      </span>
-                    </td>
-                    <td className="text-right font-mono">{(tf?.inputTokens ?? 0).toLocaleString()}</td>
-                    <td className="text-right font-mono text-sky-400">
-                      {((tf?.cacheTokens ?? ((tf?.cacheReadTokens ?? 0) + (tf?.cacheWriteTokens ?? 0)))).toLocaleString()}
-                    </td>
-                    <td className="text-right font-mono text-emerald-400">{(tf?.outputTokens ?? 0).toLocaleString()}</td>
-                    <td className="text-right font-mono font-semibold">{(tf?.totalTokens ?? 0).toLocaleString()}</td>
-                    <td className="text-right font-mono font-semibold text-ds-accent">
-                      ${(tf?.costUsd ?? 0).toFixed(4)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Per-Model Usage Breakdown Table */}
+      {/* Per-Model Usage Breakdown Table (All-Time Lifetime History) */}
       <div className="token-usage-card-block">
         <h3 className="token-usage-card-heading">
-          {t("settings.usageModels")} ({t(timeframeTabs.find((x) => x.id === selectedTimeframe)?.labelKey || "")})
+          {t("settings.usageModels")} ({t("settings.usageAllTime")})
         </h3>
         <div className="token-usage-table-wrap">
           <table className="token-usage-table">
@@ -561,14 +503,17 @@ export function UsagesPage() {
               </tr>
             </thead>
             <tbody>
-              {currentModels.length === 0 ? (
+              {allModels.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-6 text-center text-xs text-text-muted">
+                  <td
+                    colSpan={7}
+                    className="py-6 text-center text-xs text-text-muted"
+                  >
                     {t("settings.usageEmpty")}
                   </td>
                 </tr>
               ) : (
-                currentModels.map((m: ModelUsageSummaryItem) => (
+                allModels.map((m: ModelUsageSummaryItem) => (
                   <tr key={m.modelId}>
                     <td className="font-medium">
                       <span className="token-usage-model-tag">{m.modelId}</span>
@@ -576,12 +521,21 @@ export function UsagesPage() {
                     <td className="text-right text-xs text-text-muted">
                       ${m.rates?.input ?? 1} / ${m.rates?.output ?? 4}
                     </td>
-                    <td className="text-right font-mono">{m.inputTokens.toLocaleString()}</td>
-                    <td className="text-right font-mono text-sky-400">
-                      {(m.cacheTokens ?? (m.cacheReadTokens + m.cacheWriteTokens)).toLocaleString()}
+                    <td className="text-right font-mono">
+                      {m.inputTokens.toLocaleString()}
                     </td>
-                    <td className="text-right font-mono text-emerald-400">{m.outputTokens.toLocaleString()}</td>
-                    <td className="text-right font-mono font-semibold">{m.totalTokens.toLocaleString()}</td>
+                    <td className="text-right font-mono text-sky-400">
+                      {(
+                        m.cacheTokens ??
+                        m.cacheReadTokens + m.cacheWriteTokens
+                      ).toLocaleString()}
+                    </td>
+                    <td className="text-right font-mono text-emerald-400">
+                      {m.outputTokens.toLocaleString()}
+                    </td>
+                    <td className="text-right font-mono font-semibold">
+                      {m.totalTokens.toLocaleString()}
+                    </td>
                     <td className="text-right font-mono font-semibold text-ds-accent">
                       ${m.costUsd.toFixed(4)}
                     </td>

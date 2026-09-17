@@ -2164,37 +2164,6 @@
   flex-wrap: wrap;
 }
 
-.token-usage-timeframe-selector {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px;
-  border-radius: var(--radius-md);
-  background: var(--ds-tile);
-  border: 1px solid var(--ds-border-subtle);
-  gap: 2px;
-}
-
-.token-usage-timeframe-btn {
-  padding: 4px 12px;
-  border-radius: var(--radius-sm);
-  font-size: var(--text-xs);
-  font-weight: var(--font-weight-medium);
-  color: var(--ds-text-secondary);
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-  transition: all var(--motion-duration-fast) var(--motion-ease-out);
-}
-
-.token-usage-timeframe-btn:hover {
-  color: var(--ds-text-primary);
-}
-
-.token-usage-timeframe-btn.active {
-  background: var(--ds-bg-elevated);
-  color: var(--ds-text-primary);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
-}
 
 /* 9router-style Dashboard Grid: Left 4 Stat Cards, Right Active & Top Models */
 .token-usage-dashboard-grid {
