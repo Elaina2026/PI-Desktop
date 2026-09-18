@@ -14,13 +14,16 @@ import type {
   UiMessage,
 } from "@pi-desktop/shared";
 import {
+  formatCompactTokenCount,
   THINKING_LEVELS,
   type ThinkingLevel,
 } from "@pi-desktop/shared";
 import { useOpenChatFileRef, useOpenPreviewTarget } from "../../../hooks/use-preview-target";
+import { useDisclosureAnchorNotifier } from "../../../lib/disclosure-anchor-context";
 import { messageThinking as thinkingText } from "../../../lib/assistant-turns";
 import { useReferencedImageDataUrl } from "../../../lib/use-referenced-image-data-url";
 import { isHtmlFilePath, splitChatText } from "../../../lib/chat-links";
+import type { SourcePositionProps } from "../../../lib/markdown-source";
 import { getToolAction, type ToolAction } from "../../../lib/tool-display";
 import { calculateTokenRate } from "../../../lib/context-usage";
 import { computeTokenCost, resolveModelRate } from "../../../lib/model-pricing";
@@ -51,8 +54,6 @@ import {
   IconWrench,
 } from "../../../components/icons";
 import { TooltipButton } from "../../../components/ui";
-
-type Translate = (key: string, options?: Record<string, unknown>) => string;
 
 export function CopyButton({
   text,
@@ -90,16 +91,6 @@ export function CopyButton({
     </TooltipButton>
   );
 }
-
-
-export function formatTokenCount(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
-  if (value >= 10_000) return `${Math.round(value / 1000)}k`;
-  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
-  return String(value);
-}
-
-
 export function MessageMeta({
   modelId,
   usage,
@@ -146,7 +137,7 @@ export function MessageMeta({
       {showThroughput ? (
         <span className="message-meta-chip throughput">
           {t("chat.usageThroughputEstimated", {
-            count: formatTokenCount(throughput),
+            count: formatCompactTokenCount(throughput),
           })}
         </span>
       ) : null}
@@ -157,6 +148,8 @@ export function MessageMeta({
 export function AssistantErrorMessage({ message }: { message: UiMessage }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(true);
+  const detailsToggleRef = useRef<HTMLButtonElement | null>(null);
+  const notifyDisclosureAnchor = useDisclosureAnchorNotifier();
   const detailsId = useId();
   const error = message.error;
   if (!error) return null;
@@ -168,6 +161,15 @@ export function AssistantErrorMessage({ message }: { message: UiMessage }) {
     "PROVIDER_SECRET_MISSING",
     "PROVIDER_UNAUTHORIZED",
   ].includes(error.code);
+  // The transport errno is what separates "DNS did not resolve" from "TLS was
+  // rejected" from "the socket died" for the user; the localized summary can
+  // only say "can't reach the provider" (issue #234).
+  const networkCode = (() => {
+    const details = error.details;
+    if (!details || typeof details !== "object") return undefined;
+    const value = (details as { networkCode?: unknown }).networkCode;
+    return typeof value === "string" ? value : undefined;
+  })();
 
   return (
     <section className="message-error" aria-label={t("chat.responseError")}>
@@ -177,15 +179,25 @@ export function AssistantErrorMessage({ message }: { message: UiMessage }) {
         </span>
         <div className="message-error-copy">
           <strong>{summary}</strong>
-          <code>{error.code}</code>
+          <code>
+            {error.code}
+            {networkCode ? ` · ${networkCode}` : ""}
+          </code>
         </div>
         <div className="message-error-actions">
           <button
             type="button"
+            ref={detailsToggleRef}
             className="message-error-toggle"
             aria-expanded={open}
             aria-controls={detailsId}
-            onClick={() => setOpen((value) => !value)}
+            onClick={() => {
+              // The raw detail block changes the row's height, so this manual
+              // disclosure holds its own reading position like the others
+              // (#324).
+              notifyDisclosureAnchor?.(detailsToggleRef.current);
+              setOpen((value) => !value);
+            }}
           >
             <IconChevronRight size={12} aria-hidden />
             {open ? t("chat.hideErrorDetails") : t("chat.showErrorDetails")}
@@ -321,9 +333,17 @@ export function ToolActionIcon({ action }: { action: ToolAction }) {
  * but one user click takes ownership for the rest of that component's lifetime.
  * Layout effects keep the automatic transition from moving the transcript for a
  * painted frame.
+ *
+ * A *manual* toggle also hands its own title to the scroller that owns it,
+ * before the state changes (#324): the height under the click may keep changing
+ * for several frames, and the reader's place in the transcript is the one thing
+ * that must not move while it does. The automatic transition below goes through
+ * `setOpen` directly and never claims a reading position.
  */
-export function useAutomaticDisclosure(automaticOpen: boolean) {
-  const [open, setOpen] = useState(automaticOpen);
+export function useAutomaticDisclosure(automaticOpen: boolean, revealRequest?: number) {
+  const [open, setOpen] = useState(automaticOpen || revealRequest !== undefined);
+  const notifyAnchor = useDisclosureAnchorNotifier();
+  const titleRef = useRef<HTMLButtonElement | null>(null);
   const userInteractedRef = useRef(false);
   const previousAutomaticOpenRef = useRef(automaticOpen);
 
@@ -338,17 +358,25 @@ export function useAutomaticDisclosure(automaticOpen: boolean) {
     userInteractedRef.current = true;
   }, []);
 
+  useLayoutEffect(() => {
+    if (revealRequest === undefined) return;
+    claim();
+    setOpen(true);
+  }, [claim, revealRequest]);
+
   const toggle = useCallback(() => {
     claim();
+    notifyAnchor?.(titleRef.current);
     setOpen((value) => !value);
-  }, [claim]);
+  }, [claim, notifyAnchor]);
 
   const collapse = useCallback(() => {
     claim();
+    notifyAnchor?.(titleRef.current);
     setOpen(false);
-  }, [claim]);
+  }, [claim, notifyAnchor]);
 
-  return { open, toggle, collapse, claim };
+  return { open, toggle, collapse, claim, titleRef };
 }
 
 /** Actions whose path/url argument makes sense to preview in the panel. */
@@ -378,12 +406,13 @@ export function FileRefChip({
   path,
   kind,
   onOpen,
+  ...position
 }: {
   name: string;
   path: string;
   kind?: "image" | "file";
   onOpen: (path: string) => void;
-}) {
+} & SourcePositionProps) {
   const { t } = useTranslation();
   const Icon = fileChipIcon(name, kind);
   const html = isHtmlFilePath(path) || isHtmlFilePath(name);
@@ -391,6 +420,7 @@ export function FileRefChip({
     <button
       type="button"
       className="composer-chip chat-file-chip"
+      {...position}
       title={`${html ? t("chat.previewUrl") : t("chat.openFile")} — ${path}`}
       aria-label={`${name} — ${path}`}
       onClick={() => onOpen(path)}
@@ -450,31 +480,37 @@ export function LinkifiedText({ text }: { text: string }) {
   const openTarget = useOpenPreviewTarget();
   const openFileRef = useOpenChatFileRef();
   const segments = useMemo(() => splitChatText(text, root), [text, root]);
+  let offset = 0;
   return (
     <>
-      {segments.map((segment, index) =>
-        segment.kind === "text" ? (
-          <span key={index}>{segment.text}</span>
+      {segments.map((segment, index) => {
+        const start = offset;
+        offset += segment.text.length;
+        const position = { "data-source-start": start, "data-source-end": offset };
+        return segment.kind === "text" ? (
+          <span key={index} {...position}>{segment.text}</span>
         ) : segment.target.kind === "file" ? (
           <FileRefChip
             key={index}
             name={segment.label}
             path={segment.target.path}
             onOpen={openFileRef}
+            {...position}
           />
         ) : (
           <TooltipButton
             key={index}
             type="button"
             className="chat-text-link"
+            {...position}
             tooltip={t("chat.previewUrl")}
             ariaLabel={segment.text}
             onClick={() => openTarget(segment.target)}
           >
             {segment.text}
           </TooltipButton>
-        ),
-      )}
+        );
+      })}
     </>
   );
 }
@@ -528,8 +564,9 @@ export const ThinkingRow = memo(function ThinkingRow({
 }) {
   const { t } = useTranslation();
   const detailsId = useId();
-  const { open, toggle: toggleDisclosure, collapse: collapseDisclosure } =
-    useAutomaticDisclosure(autoOpen);
+  const disclosure = useAutomaticDisclosure(autoOpen);
+  const { open, toggle: toggleDisclosure, collapse: collapseDisclosure } = disclosure;
+  const titleRef = disclosure.titleRef;
   const toggleRow = useCallback(() => {
     onUserInteraction?.();
     toggleDisclosure();
@@ -543,6 +580,7 @@ export const ThinkingRow = memo(function ThinkingRow({
   return (
     <div className={`tool-row thinking ${open ? "open" : ""}`}>
       <button
+        ref={titleRef}
         className="tool-row-header"
         aria-expanded={open}
         aria-controls={detailsId}

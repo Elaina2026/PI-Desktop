@@ -2,6 +2,41 @@ import type { ChangelogEntry } from "./changelog.js";
 
 export const esEntries: ChangelogEntry[] = [
   {
+    "version": "0.15.0",
+    "date": "2026-09-17",
+    "highlights": [
+      "Reordena, edita, bloquea y promociona prompts en cola para que un mensaje posterior se ejecute a continuación.",
+      "Clona un repositorio git desde el diálogo de crear proyecto.",
+      "Arrastra el ancho del contenido de la conversación dentro de la columna de chat.",
+      "Los fallos de instalación del mercado de skills muestran un reintento en lugar de un botón inerte.",
+      "Los proveedores declarados por plugins aparecen como filas nativas, con claves API y agentes personalizados de confianza.",
+      "Los plugins pueden pedir conexiones en tiempo real, atajos globales, permisos de capacidad y un canal oficial con copias de seguridad.",
+      "Los plugins pueden registrar variables de tema, recursos de tema y un widget flotante transparente.",
+      "Elimina un proyecto junto con las sesiones que le pertenecen, tras una segunda confirmación.",
+      "Los subagentes tienen una lista ordenada de modelos de respaldo, se pueden reanudar desde la misma tarjeta Task, y los builtins se activan en Ajustes.",
+      "Las referencias de archivo en filas de herramientas abren la vista correcta, expandir detalles mantiene la lectura, y el hover de Plan es una placa opaca.",
+    ],
+  },
+
+  {
+    "version": "0.14.9",
+    "date": "2026-09-17",
+    "highlights": [
+      "Reordena, edita, bloquea y promociona prompts en cola para que un mensaje posterior se ejecute a continuación.",
+      "Clona un repositorio git desde el diálogo de crear proyecto.",
+      "Arrastra el ancho del contenido de la conversación dentro de la columna de chat.",
+      "Los fallos de instalación del mercado de skills muestran un reintento en lugar de un botón inerte.",
+      "Los proveedores declarados por plugins aparecen como filas nativas, con claves API y agentes personalizados de confianza.",
+      "Los plugins pueden pedir conexiones en tiempo real, atajos globales, permisos de capacidad y un canal oficial con copias de seguridad.",
+      "Los plugins pueden registrar variables de tema, recursos de tema y un widget flotante transparente.",
+      "Elimina un proyecto junto con las sesiones que le pertenecen, tras una segunda confirmación.",
+      "Los subagentes tienen una lista ordenada de modelos de respaldo, y los builtins incluidos se pueden activar en Ajustes.",
+      "Las referencias de archivo en filas de herramientas abren la vista correcta, expandir detalles mantiene la lectura, y el hover de Plan es una placa opaca.",
+    ],
+  },
+
+
+  {
     "version": "0.14.8",
     "date": "2026-09-14",
     "highlights": [

@@ -17,6 +17,7 @@ import { withReviewChangeState } from "../../lib/workspace-review";
 import { settleStoppedAssistantMetrics } from "../../lib/context-usage";
 import type { AppState } from "../app-state";
 import type { SessionRuntime } from "../runtime/session-runtime";
+import { prepareTranscriptAction } from "../runtime/transcript-action";
 import type { StoreAccess } from "./types";
 
 export type TranscriptSliceDependencies = StoreAccess & {
@@ -88,8 +89,9 @@ export function createTranscriptSlice({
     },
 
     retryAssistantMessage: async (messageId) => {
+      const prepared = await prepareTranscriptAction({ get, set }, runtime, messageId);
       const state = get();
-      if (state.isRunning) return;
+      if (!prepared || state.activeSessionId !== prepared.activeSessionId || state.isRunning) return;
       const index = state.messages.findIndex((message) => message.id === messageId);
       if (index < 0) return;
       const target = state.messages[index];
@@ -111,8 +113,9 @@ export function createTranscriptSlice({
     },
 
     editUserMessage: async (messageId, content, attachments) => {
+      const prepared = await prepareTranscriptAction({ get, set }, runtime, messageId);
       const state = get();
-      if (state.isRunning) return false;
+      if (!prepared || state.activeSessionId !== prepared.activeSessionId || state.isRunning) return false;
       const sessionId = state.activeSessionId;
       if (!sessionId) return false;
       if (state.pendingPlans[sessionId]?.status === "pending") return false;
@@ -431,6 +434,20 @@ export function createTranscriptSlice({
       const stateBeforeAbort = get();
       const sessionId = stateBeforeAbort.activeSessionId;
       if (!sessionId) return;
+      if (stateBeforeAbort.sessions.find((session) => session.id === sessionId)?.source === "pi-native") {
+        await api.abort(sessionId);
+        runtime.submittedComposerDrafts.delete(sessionId);
+        // Bypass in-flight pre-abort detail reads; request settled source state.
+        const detail = await api.getSession(sessionId);
+        const messages = detail.session?.messages;
+        if (messages) runtime.cacheSessionTranscript(sessionId, messages);
+        set((current) => ({
+          runningSessions: { ...current.runningSessions, [sessionId]: false },
+          ...(messages ? { retainedTranscripts: { ...current.retainedTranscripts, [sessionId]: messages } } : {}),
+          ...(current.activeSessionId === sessionId ? { isRunning: false, ...(messages ? { messages } : {}) } : {}),
+        }));
+        return;
+      }
       const submittedDraft = runtime.submittedComposerDrafts.get(sessionId);
       const preserveSteering = stateBeforeAbort.messages
         .slice(submittedDraft?.messageCountBeforeSend ?? 0)

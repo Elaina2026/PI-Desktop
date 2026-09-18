@@ -12,7 +12,7 @@ import {
   type McpTransport,
   type ProjectRecord,
 } from "@pi-desktop/shared";
-import { Button, Field, Input, TooltipButton, cx } from "../ui";
+import { Button, Field, Input, TooltipButton, cx, portalOverlay } from "../ui";
 import { IconPlay, IconServer, IconTerminal, IconX } from "../icons";
 import { ScopeControl } from "./ScopeControl";
 import { KeyValueRows, pairsToRecord, recordToPairs, type KeyValuePair } from "./KeyValueRows";
@@ -274,20 +274,17 @@ export function McpEditorSheet({
     id: McpTransport;
     icon: ReactNode;
     labelKey: string;
-    hintKey: string;
   }> = useMemo(
     () => [
       {
         id: "stdio",
         icon: <IconTerminal size={14} />,
         labelKey: "extensions.mcp.transportStdio",
-        hintKey: "extensions.mcp.transportStdioHint",
       },
       {
         id: "http",
         icon: <IconServer size={14} />,
         labelKey: "extensions.mcp.transportHttp",
-        hintKey: "extensions.mcp.transportHttpHint",
       },
     ],
     [],
@@ -295,7 +292,7 @@ export function McpEditorSheet({
   const insecureHttp =
     draft.transport === "http" && isNonLoopbackHttpMcpUrl(draft.url.trim());
 
-  return (
+  return portalOverlay(
     <div
       className="overlay ext-sheet-overlay"
       role="presentation"
@@ -344,7 +341,6 @@ export function McpEditorSheet({
                   </span>
                   <span className="ext-transport-copy">
                     <span className="ext-transport-name">{t(option.labelKey)}</span>
-                    <span className="ext-transport-hint">{t(option.hintKey)}</span>
                   </span>
                 </button>
               ))}
@@ -352,7 +348,7 @@ export function McpEditorSheet({
           </div>
 
           <div className="ext-field-pair">
-            <Field label={t("extensions.mcp.label")} hint={t("extensions.mcp.labelHint")}>
+            <Field label={t("extensions.mcp.label")}>
               <Input
                 value={draft.label}
                 placeholder={t("extensions.mcp.labelPlaceholder")}
@@ -430,7 +426,7 @@ export function McpEditorSheet({
             </>
           )}
 
-          <Field label={t("extensions.mcp.description")} hint={t("extensions.mcp.descriptionHint")}>
+          <Field label={t("extensions.mcp.description")}>
             <Input
               value={draft.description}
               placeholder={t("extensions.mcp.descriptionPlaceholder")}

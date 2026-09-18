@@ -45,6 +45,8 @@ PI-Desktop 的行为类似于桌面应用程序 shell，因此意外拖动
   用户可以编辑草稿、搜索和使用本机 `Cmd/Ctrl+A/C/V` 行为。
 - 转录消息正文、渲染的 Markdown、代码块和工具
   input/output 仍然可以选择进行复制和检查。
+- 携带用户可能需要留存文本的瞬时表面——尤其是 toast 消息——仍然可以选择；
+  其图标与关闭控件属于不可选择的镶边。
 - 新的类文档表面必须选择共享 `.selectable` 类（或
   等效的显式 `user-select: text` 规则）。
 - Electron 渲染器设置 `user-select` 和 `-webkit-user-select`；
@@ -97,7 +99,7 @@ PI-Desktop 的行为类似于桌面应用程序 shell，因此意外拖动
   名称、版本和规范图标；没有可见库存 Electron 名称或图标。
   开发启动使用生成的品牌主机包，因为 AppKit
   从主机包而不是 Electron 运行时 API 中读取此标识。
-- 在 Windows、Electron 主寄存器上，规范的 `com.pi-desktop.app`
+- 在 Windows、Electron 主寄存器上，规范的 `net.aiuo.pi-desktop`
   准备就绪之前的 AppUserModelID。运行时 ID、打包的可执行文件名称、
   和 NSIS 快捷方式标识保持一致，以便本机通知，
   通知设置和任务栏组将应用程序标识为 `PI-Desktop`
@@ -146,6 +148,7 @@ PI-Desktop 的行为类似于桌面应用程序 shell，因此意外拖动
 |---|---|---|---|
 | `--color-bg-primary` | `#181818` | 法典 `gray-900` | 主表面 |
 | `--color-bg-sidebar`/下 | `#000000`（深色）/`#f3f3f3`（浅色） | 法典 `surface-under` / grey-75 | 侧栏导轨 |
+| `--ds-bg-sidebar-image` | `none`（可选 `<image>`） | — | 仅用于侧栏 `background-image`（渐变/图片）。`--ds-bg-sidebar` 保持颜色，供 glass tint、边框与 `color-mix` 使用 |
 | `--color-bg-secondary` | `#212121` | 法典 `gray-800` | 高架表面，输入框 |
 | `--color-bg-tertiary` | `#282828` | 法典 `gray-750` | 悬停/不透明升高 |
 | `--color-bg-inset` | `#0d0d0d` | 法典 `gray-1000` | 代码块，最深的插入 |
@@ -380,6 +383,7 @@ UI 字体栈可从设置 → 基础 → 外观中由用户覆盖（ADR 0083）�
 
 | 代币 | 价值 | 用途 |
 |---|---|---|
+| `space-0.25` | 1像素 | 密集列表节奏中的发丝行间隙（侧边栏会话行、设置导航项） |
 | `space-0.5` | 2像素 | 紧密的内嵌间隙 |
 | `space-1` | 4像素 | 图标文本间隙、徽章填充 |
 | `space-1.5` | 6像素 | 紧凑的内垫 |
@@ -461,13 +465,21 @@ WebKit 与 Chromium 会忽略伪元素，该表面退回为常显的原生滚动
 
 工具栏行为 46 像素。 macOS 将交通信号灯放置在 `{x:16,y:16}` 处并保持
 展开侧边栏的折叠侧边栏图标按钮右对齐
-在同一行。 macOS 行省略侧边栏 logo/title，保留 `76px`
+在同一行。 macOS 行省略侧边栏 logo/title，保留 `88px`
 在窗口模式下的本机 chrome 左侧，并回收该填充
-全屏。 Windows/Linux 将身份和侧边栏操作保留在第一位置
+全屏。 该预留量是共享 token `--ds-window-lead-inset` —— 灯簇 `76px` 右缘
+（与主进程放置按钮所用的是同一份 `@pi-desktop/shared` 几何）加 `12px` 留白。
+Windows/Linux 将身份和侧边栏操作保留在第一位置
 行并为三个无框窗口控件保留最右边的 112px。每个
 control 拥有 46px 高保留带的全部份额。展开的工作面板标题使用可横向滚动的
 标签条和固定 `+` 入口，每个标签拥有自己的关闭操作，避免在 Windows 原生
-关闭控件旁重复第二个 `×`。主要、设置和
+关闭控件旁重复第二个 `×`。头部的 `+`、最大化与视口固定的折叠开关共用同一
+个控制间距（`--ds-work-panel-control-gap`，4px）：标签条到动作组、`+` 到
+最大化，以及动作组到开关的车道预留（`calc(size + inset + gap)`，44px）。
+动作组不再有自己的分隔线、内缩或外边距，因此这三个按钮读作一组。三者都是共享的
+chrome 图标控件：28px 方形、透明底座、指针悬停时显示语义化淡色、禁用时变暗，
+因此 `+`、最大化与折叠开关保持安静的图标形态，而不是填充或抬升的方块；开关的
+`aria-pressed` 状态只改变图形与墨色。主要、设置和
 工作面板拖动区域必须在此保留之前终止，而不是
 重叠它并仅依赖于后代 `no-drag`，因此每个可见控件
 像素仍然可点击。终止是几何意义上的：区域在元素的
@@ -504,9 +516,67 @@ shadow-lg:  0 8px 24px rgba(0,0,0,0.12)
 | 色块 | `--ds-tile`（文字色 3.5% 混合）；悬停 `--ds-tile-hover`（6%）；加深 `--ds-tile-deep`（8%） | 面板、列表行、卡片、表单字段、芯片、代码块、空状态 |
 | 抬起 | `--ds-raised` + `--ds-raised-shadow` | 分段控件的当前项、展开的详情块、录制键帽 |
 | 停靠列 | `--ds-bg-dock`（列本身）、`--ds-bg-dock-raised`（其标题栏与查看器条目栏） | 工作面板列及其内部条目栏。两者都是标记而非字面量，插件主题可以覆盖（D419） |
+| 主侧栏 / 设置导航 | `--ds-bg-sidebar`（不透明回退：浅色 `#f3f3f3`、深色 `#000000`）、`--ds-bg-sidebar-image` 和共享 macOS tint/sheen | 两处导航使用同一 `sidebar-surface` 材质，内容区保持不透明 |
+| 设置搜索 | `--ds-settings-field-bg`（浅色 `#ffffff`、深色 `#212121`） | 导航轨搜索框 |
+| 设置选中项 | `--ds-settings-nav-active`（浅色为 12% `#1a1c1f` 混合白底；深色为 10% `--gray-0` 混合透明底） | 选中导航胶囊 |
+| 内嵌搜索 | `--ds-field-inset-bg`、`--ds-field-inset-focus-bg`（浅色 `#f3f3f3` / 白色；深色为 5% / 7% 主文本色混合透明底） | 插件搜索和 Agent 能力搜索，包含焦点状态 |
+| 正文键帽 / 思考代码 | `--ds-prose-kbd-fg`（浅色 `#303030`、深色 `--ds-text-secondary`）、`--ds-thinking-code-bg`（浅色 `#f0f0f0`、深色 4.5% 文字色混合） | 键帽墨色与思考区代码芯片 |
+| 代码卡外壳 | `--ds-code-head-bg`、`--ds-code-hover-bg`（浅色在代码底板上混合 3.5% / 6% `#1a1c1f`；深色 4% / 8% 白色） | `.code-block` 的标题带与悬停填充。Shiki 语法底板与其墨色刻意不设为标记 —— 见下 |
+| Mermaid 画布 | `--ds-mermaid-canvas`（浅色 `#ffffff`、深色 94% `--ds-bg-primary` + 6% 文字色混合） | `.mermaid-block` 内的图表主体 |
+| 遮罩 / 面纱 | `--ds-scrim`（深色约 45% 黑、浅色约 28% `#1a1c1f`，D148）、`--ds-modal-veil`（深色 78% `--ds-bg-primary`、浅色约 32% `#1a1c1f`） | 对话框遮罩与插件权限蒙层 |
+| 工具输出 | `--ds-tool-row-bg`（浅色 2% `#1a1c1f`、深色 `--ds-tile`） | 会话记录中的工具结果与错误输出块 |
+| 禁用发送芯片 | `--ds-send-disabled-bg`、`--ds-send-disabled-fg`（浅色 `#8e8e90` / `#ffffff`；深色 18% 文字色混合 / 70% `--gray-900`） | 输入框的禁用发送按钮 |
+| 输入占位符 | `--ds-placeholder-ink`（浅色 `#4a4c4f`、深色 42% 白） | 两种输入框状态的输入与占位墨色 |
 
-外壳绘制的任何表面色都必须来自标记。`:root[data-theme="light"]` 覆写里写字面量
-会抬高特异度、压过读标记的基础规则，等于把该表面钉死在所有主题之外 —— 见 D419。
+主侧栏与设置导航共享整套材质，不仅是颜色相近。旧 `--ds-settings-rail-bg` 保留共享调色板的
+可读默认值，并作为两处侧栏颜色的回退，继续支持主题覆盖；显式 `--ds-bg-sidebar` 优先。
+这样保留旧主题颜色读取和输入，不再维持独立设置底板，也不形成循环别名。
+macOS 的共享 tint 从该颜色派生，其他平台使用不透明背景；两处均支持 `--ds-bg-sidebar-image`。
+
+深色输入框壳直接使用 `--ds-bg-elevated-primary`，浅色继续使用
+`--ds-bg-composer`。开启状态的开关旋钮在两套调色板中均使用
+`--ds-switch-knob-on`。这些表面保留内置配色、焦点环和阴影，插件样式可通过变量
+覆盖填充色。组件的主题专属规则可以保留既有阴影或布局差异，但不得用字面量
+覆盖原本读取变量的填充色。
+
+正文与会话记录的墨色统一走 `--ds-text-primary`：原先硬编码 `#1a1c1f` 的浅色覆写
+改为混合该标记，整套浅色墨阶随主题移动（5/6 级标题 62%、列表标记 40%、引用墨色
+72%、链接下划线 30% 与悬停 80%、内联代码芯片 6% 与满强度墨色、思考正文 58% 及其
+代码 68%）。
+
+**约定**：`:root[data-theme="…"]` 规则不得写字面量颜色。这类规则既抬高特异度
+压过读标记的基础规则，又完全不读变量，等于把该表面钉死在所有主题之外 —— 见
+D419。主题专属取值应写在 `styles/tokens.css` 的标记块里，两套调色板各定义同名
+`--ds-*`，由基础规则读取一次。
+
+`pnpm lint` 运行 `scripts/style-surface-tokens.mjs`，机械地守住这条约定。规则一：
+`:root[data-theme]` 规则内的每个颜色声明 —— `color`、`background`/`-color`/`-image`、
+`text-decoration-color`、`-webkit-text-fill-color`、`border` 及其颜色长写、`outline`、
+`fill`、`stroke`、`accent-color`、`caret-color` 以及 `box-shadow` —— 都必须经由自
+定义属性解析；标记块正是存放字面量的地方，而组件局部自定义属性若持有字面量颜色同样
+违规，因为它会遮蔽根标记。规则二：已迁移外壳族的基础规则（设置导航轨、搜索、导航项、
+开关旋钮、能力搜索、插件搜索、输入框壳、输入工具栏/芯片/占位符/输入，以及正文、代码
+卡（`code-block`、标题带、语言条）、Mermaid（块、主体、标题带、标题、错误、源码）、
+遮罩、工具输出、发送按钮与空状态标题）同样不得绘制字面量。
+
+豁免项逐条写明理由，不留隐形缺口：
+
+- `one-dark-pro` / `one-light` 的 Shiki 调色板（底板与其墨色由 Shiki 主题产出并以行内
+  颜色渲染，二者必须一起移动 —— 走 Shiki 主题而非 CSS 标记）；
+- 半透明的黑/白 alpha 阴影值（`box-shadow`、`text-shadow`、`filter`），它们只叠加
+  暗度；不透明的阴影颜色仍会被检查；
+- ⌘K 的 `.search-overlay` 遮罩：它在两套调色板中都保持深色 45% 黑色混合，因而仍与
+  D148 的浅色更轻面纱不一致。这属于维护者决策，已登记为已知缺口；它确实会被检查，也
+  确实在该处被放行，删掉这条豁免 `pnpm lint` 就会失败。
+
+有两处边界是刻意留开的。族规则是固定清单而非全量选择器：它拦住已迁移表面的回归，但
+拦不住没人审过的选择器上新出现的字面量。而该守卫是静态文本分析，看不到两条读标记的
+规则之间的级联冲突（#339 的成因）。正因如此，`pnpm test:e2e:theme-surfaces` 的真实
+渲染检查依然必要：它把每个已迁移表面的构建后配色与改动前采样的值逐项比对，因此任何
+默认值不等于原字面量的标记都会在此失败。该探针钉住的浅色限定 `.tool-row-content` 规则
+必须保留：它以 (0,3,0) 压过 `.tool-row-content.is-error`、并与
+`.tool-block.is-plain .tool-row-content` 同分靠顺序取胜，删掉它会让错误输出被染色、并
+只在浅色下给纯文本工具块加底纹。
 
 | 场景 | 处理 |
 |---|---|
@@ -741,7 +811,10 @@ UTF-8 写入活动会话的临时 `pasted/` 目录，并在粘贴位置显示一
 随后编写器读取有界文本文件，在当前位置以可编辑文本替换哨兵，移除引用并将
 插入符号放到内容末尾。读取失败或不支持时保留芯片。渲染器会在发送前只解析
 仍存在的哨兵引用一次。该阈值位于 AI → 默认项中，默认为 600 个字符，只作用于
-纯文本粘贴；剪贴板文件和图像仍使用芯片展示。
+纯文本粘贴；剪贴板文件和图像仍使用芯片展示。如果 Word 同时提供非空白
+`text/plain` 和仅由无原生路径的 `image/*` 文件组成的图片副本，则选择正文，
+并应用同一个大文本阈值。真实文件、非图片文件、纯图片和仅空白文字加图片的
+粘贴仍保留附件芯片。
 
 ## 8. 2 Composer 运行时控件
 
@@ -880,8 +953,17 @@ Linux 保留淡入淡出和滑动退出。
 - 面板 open/collapse/final 关闭和分隔符提交更新已提交
   首选宽度。本机边缘调整窗口大小并重排 MainChat。
 - 预览模式是临时的 shell 状态：卸载 MainChat，工作面板填充侧边栏之外的客户区。
-  窗口级 46px chrome 行保留拖动区域、新建任务、侧边栏和本机窗口控件。
-  侧边栏折叠时，macOS 窗口模式左侧预留 76px，全屏预留 8px 给交通灯。
+  The 46px chrome row retains shell and native controls but declares neither
+  drag nor no-drag across the panel and passes pointer events through outside
+  controls. The panel header alone owns dragging in the preview pane. Its
+  border box excludes shell actions plus an 8px gap in both sidebar states on
+  every platform. The left inset is 8px except collapsed-sidebar windowed macOS
+  (88px through `--ds-window-lead-inset`: the shared 76px native cluster edge
+  plus 12px, from the same `@pi-desktop/shared` geometry used by main).
+  The expanded action lane uses the shared 28px control size plus 8px; the
+  collapsed lane uses two controls, 4px spacing and an 8px gap.
+  Right native-control exclusion is unchanged. Header-height background
+  paint fills the excluded lane without covering panel controls.
 - 外层外壳在每个平台上都保留原生边缘/角落调整大小。无边框标题栏的
   拖动区域不会替代操作系统的调整大小所有权。300ms 的稳定边界等待窗口
   可避免恢复逻辑与慢速指针手势竞争，原生调整大小/移动事件停止 600ms 后
@@ -899,7 +981,13 @@ Linux 保留淡入淡出和滑动退出。
 | 小学 | px-3 py-1.5 | 32像素 | 短信-sm 500 | 半径-sm | 无 | 口音 |
 | 中学 | px-3 py-1.5 | 32像素 | 短信-sm 400 | 半径-sm | 无（D297） | `--ds-tile`，悬停 `--ds-tile-hover` |
 | 幽灵 | px-2 py-1 | 28像素 | 短信-sm 400 | 半径-sm | 无 | 透明 |
+| 仅图标 | 无 | 28px | — | radius-full | 无 | 透明；`.icon-btn-square` 把宽度固定到 `--ds-control-size` |
 | 危险 | px-3 py-1.5 | 32像素 | 短信-sm 500 | 半径-sm | 无 | 错误 |
+
+仅图标的控件声明 `.icon-btn-square`。单独的 `.icon-btn` 宽度来自内容 —— 图形加左右各 8px
+内边距 —— 这是带文字的胶囊按钮想要的，而不是没有文字的控件该继承的。该变体把两个轴都固定
+到 `--ds-control-size`（28px），保留 `flex: 0 0` 以免拥挤的工具条把它压扁，并去掉侧向内边距
+（在全局 `border-box` 下，那会给 15px 的图形只留 12px 内容区）。
 
 ### 11. 2 输入/文本区域
 
@@ -1018,9 +1106,10 @@ Linux 保留淡入淡出和滑动退出。
 |---|---|
 | **基础内边距 8px（空格-2）** | 列表项、表单组的默认内部填充 |
 | **消息间隙10px** | 聊天消息行之间——更密集的类似 WorkBuddy 的文字记录 |
-| **节间隙 16px（空间 4）** | 在不同的 UI 部分（侧边栏部分、设置组）之间 |
+| **节间隙 16px（空间 4）** | 在不同的 UI 部分（目标页面、设置组、页面级区块）之间 |
 | **面板间隙0px** | 面板边对边接触，并带有微妙的边框分隔符 - 无排水沟 |
 | **紧凑列表行 28 像素高度** | 侧边栏会话项目、设置列表行 |
+| **侧边栏节奏 1px / 2px / 8px** | 侧边栏列表：行与行之间 1px；分组标题或分区标签到首行 2px；展开的项目分组之后以及侧边栏分区之间 8px（前一个分组折叠时为 1px） |
 | **按钮行 32px 高度** | 标准按钮 |
 | **垂直间隙切勿超过 24 像素** | 即使是“呼吸空间”——这也是一个工作站 |
 | **最大内容宽度 720 像素** | 聊天消息、工具披露行——防止眼距过宽 |
@@ -1092,7 +1181,7 @@ Linux 保留淡入淡出和滑动退出。
   其固定/所有项目/已存档分组是面板内标题条，并承载页面上唯一的计数。
   它没有英雄区块、装饰渐变，也没有页面级计数器串
 - **设置**：按照 D063/D090/D133/D166 的全页 Codex shell（275 像素紧凑型
-  八个目的地铁路、`#f4f4f4` 灯、高架内容卡、返回应用程序）；
+  与主侧栏共享材质的导航、高架内容卡、返回应用程序）；
   根据 D092，内容卡填充当前可用的窗格宽度
   窗口而不是保留 D070 的固定 720px 上限 - 早期的 in-shell
   200px 轨道和广泛的分组目录被取代

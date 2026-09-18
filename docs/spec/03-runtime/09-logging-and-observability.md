@@ -45,13 +45,33 @@ The application categories are:
 
 - `lifecycle` — boot, shutdown, and application supervision
 - `session` — prompts, turns, session lifecycle, and compaction
-- `tool` — tool start/end events
+- `tool` — tool execution outcomes and interruptions
 - `permission` — permission requests and decisions
 - `plugin` — plugin loading, services, and plugin tool execution
 - `provider` — provider/model discovery, retries, and cache failures
 - `persistence` — transcript and outbox persistence failures
 - `updater` — updater diagnostics and errors
-- `diagnostics` — blocked navigation, menu, and template diagnostics
+- `diagnostics` — blocked navigation, menu, template, and outbound-fetch
+  diagnostics. The skill market's two channels record one
+  `skillMarket.sourceFailed` / `skillMarket.documentFailed` record per source
+  or document that produced nothing, with `source`, `host`, `kind`, `address`
+  and — for a guard refusal — `reason`, `addressKind` and `route` in `data`. `kind`
+  is `policy` when the guard judged the target's own address, `fake-ip` when it
+  judged a placeholder the local proxy invented for the name (Clash's
+  `198.18.0.0/15`), `unresolved` when the local resolver returned no answer, and
+  `network` otherwise; `code` is `NETWORK_POLICY_BLOCKED` for the first two and
+  `NETWORK_RESOLVE_FAILED` for the third, so one log line separates "the address
+  is not public" from "a proxy answered with a fake-IP" from "the resolver
+  answered nothing". `reason` names the guard's own branch (`url-syntax`,
+  `resolve-failed`, `non-public-address`, `redirect-limit`), `addressKind` the
+  class of the refused address (`benchmark` for a TUN fake-IP, `private` for
+  RFC1918), and `route` the route that address was judged on (`proxied`, `direct`,
+  or `unknown` when the transport reported no readable route), so a fake-IP
+  refusal on a direct route reads apart from one on a route nobody could read
+  (ADR 0272). The record carries the host name, the address it resolved to, that
+  class and that route — never the URL, its path, query or credentials — because a
+  catalog source URL is user-supplied and the refused host and address are the
+  whole diagnostic value (issue #419).
 - `runtime` — host/sidecar lifecycle, uncategorized child output, and
   main-process `uncaughtException` / `unhandledRejection` records
 
@@ -69,18 +89,30 @@ type LogRecord = {
   level: "debug" | "info" | "warn" | "error"
   channel: string
   category: string
+  event: string              // stable dot-separated machine-readable name
   message: string
   traceId?: string
+  requestId?: string
   sessionId?: string
   turnId?: string
   toolCallId?: string
+  parentToolCallId?: string
+  agentName?: string
   pluginId?: string
+  executionId?: string
   code?: string
   data?: unknown
 }
 ```
 
 Format: NDJSON files.
+
+`event` is the stable query key; `message` is a short human-readable summary.
+Correlation fields are emitted at the top level so a failed tool, its
+permission request, and its parent/child agent can be joined without parsing
+free-form text. `data` is diagnostic metadata, not a transcript or command
+output: it is redacted, depth/collection bounded, and capped at 8 KiB per
+record.
 
 ## 5. What must be logged
 
@@ -90,7 +122,7 @@ Format: NDJSON files.
 - host/agent spawn, handshake, and unexpected exit;
 - session create/delete;
 - prompt accepted/aborted;
-- tool start/end and permission request/decision/timeout;
+- tool completion/failure/interruption and permission request/decision/timeout;
 - Plan artifact creation, approval, expiry, rejection, execution transition,
   and startup interruption;
 - shell identity, timeout, abort, and process-tree shutdown;
@@ -98,8 +130,12 @@ Format: NDJSON files.
 - tool admission rejection, queue/resource exhaustion, and updater errors.
 
 These records should identify the relevant session, turn, tool call, plugin, or
-stable error code when available. Normal successful operations should not emit
-per-phase or per-request latency records.
+stable error code when available. A normal tool call emits one completion or
+failure record after `tool_end`; an unexpected sidecar exit emits one
+interruption record for each still-active tool. The sidecar protocol still
+uses `tool_start` and `tool_end` unchanged for execution and transcript
+correctness. Normal successful operations should not emit per-phase or
+per-request latency records.
 
 ### Never
 
@@ -109,11 +145,21 @@ per-phase or per-request latency records.
 
 ## 6. Redaction rules
 
-1. Keys matching `/token|secret|password|api[_-]?key/i` are redacted.
-2. Authorization headers are redacted.
-3. Tool argument previews are bounded (for example, 2KB).
-4. Long command output is counted or truncated in audit records; stdout/stderr
-   chunks are not written wholesale to normal channels.
+1. Keys matching token, secret, password, API key, authorization, cookie,
+   credential, private key, or client secret are redacted.
+2. Bearer/Basic credentials, URL user-info, and common provider token formats
+   are redacted even when they occur inside a string.
+3. Home, application-data, and log-directory prefixes are normalized to
+   placeholders; raw local paths are not retained in diagnostic records.
+4. Arbitrary strings are bounded. Structured data is bounded by depth and
+   collection size and then capped at 8 KiB per record, including host-core
+   audit payloads after shaping.
+5. Tool arguments and results are never copied wholesale into normal logs.
+   Tool results retain only safe metadata such as outcome, error code,
+   duration, field names, content-block count, and stdout/stderr sizes.
+   Long command output is counted or truncated in audit records.
+6. Child stderr is stored as a bounded, ANSI-free `data.output` field under a
+   stable `child.process.stderr` event; it is not used as the record message.
 
 ## 7. Trace correlation
 
@@ -159,7 +205,8 @@ Session transcripts are user data and are not deleted by log rotation.
 
 ## 10. Acceptance
 
-1. Failed tool calls can be traced by `toolCallId` across key logs.
+1. Failed and interrupted tool calls can be traced by `toolCallId` across key
+   logs, with one outcome record per normal execution.
 2. Secrets never appear in log files during normal flows.
 3. The logs folder can be opened from the app/command palette.
 4. Boot, host, sidecar, plugin, updater, and renderer paths emit only their

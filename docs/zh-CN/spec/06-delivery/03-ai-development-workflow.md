@@ -439,6 +439,7 @@ D164 与 D260。 GitHub 发行说明并不能替代。
 | 为落地链接 pull request 而对贡献者分支 force-push | 违反 R6；落地修复加在作者提交之上 |
 | 在不为每个已发货语言更新 `packages/shared/src/changelog.ts` 的情况下标记稳定的应用程序版本 | 违反 D164/D345/发布操作手册；该语言版本的应用内新增功能为空 |
 | 在 `README.md` / `README.zh-CN.md` 仍声明旧版本线时标记稳定版本，或用 `--skip-docs-check` 绕过 `scripts/check-release-docs.mjs` | 违反 D260/发布操作手册；已发布文档宣传的版本与实际发布不符 |
+| 在必需的 E2E 于已集成的本地 `main` 上运行之前推送请求分支或创建 PR/MR，或在缺少该结果（已记录的 `NOT RUN` 限制除外）的情况下宣告含代码变更已交付 | 违反 R7 的固定顺序；审查将从未经验证的提交开始 |
 
 ---
 

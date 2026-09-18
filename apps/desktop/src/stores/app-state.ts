@@ -27,6 +27,7 @@ import type {
   UiMessage,
 } from "@pi-desktop/shared";
 import type { SettingsTabId } from "../lib/settings-search";
+import type { TranscriptSearchTarget, TranscriptView } from "../lib/transcript-reading";
 import type {
   ProjectMeta,
   ProjectSort,
@@ -35,7 +36,10 @@ import type {
 } from "../lib/sidebar-preferences";
 import type { PermissionQueues } from "../lib/pending-permissions";
 import type { AskQueues } from "../lib/pending-asks";
-import type { QueuedPrompts } from "../lib/queued-prompts";
+import type {
+  QueuedPromptDirection,
+  QueuedPrompts,
+} from "../lib/queued-prompts";
 import type { SubagentPanelSelection } from "../lib/subagent-panel";
 import type {
   ComposerDraftSnapshot,
@@ -74,6 +78,8 @@ export type PendingPlanRefreshResult = "pending" | "terminal" | "unavailable";
 export type SessionHistoryWindow = {
   messageStart: number;
   hasMoreBefore: boolean;
+  /** A display-capped tail is not canonical action input, even in a short chat. */
+  contentLimited?: boolean;
 };
 
 export type NavigationOptions = {
@@ -94,6 +100,7 @@ export type DraftSessionConfiguration = {
   modelId?: string;
   permissionMode?: PermissionMode;
 };
+
 
 export type AppState = {
   ready: boolean;
@@ -125,6 +132,8 @@ export type AppState = {
   retainedTranscripts: Record<string, UiMessage[]>;
   /** Renderer-owned range metadata for the lazily loaded active transcript. */
   sessionHistory: Record<string, SessionHistoryWindow>;
+  /** Reading ranges are separate from the live/runtime transcript projection. */
+  transcriptViews: Record<string, TranscriptView>;
   isRunning: boolean;
   /** Run state per session id — sessions run independent agents. */
   runningSessions: Record<string, boolean>;
@@ -175,7 +184,9 @@ export type AppState = {
   bootstrap: () => Promise<void>;
   refreshSessions: (options?: RefreshSessionsOptions) => Promise<void>;
   prefetchSession: (id: string) => Promise<void>;
-  loadOlderMessages: (sessionId: string) => Promise<void>;
+  navigateTranscript: (target: Omit<TranscriptSearchTarget, "requestId">) => Promise<void>;
+  loadTranscriptPage: (sessionId: string, direction: "before" | "after") => Promise<void>;
+  returnToLatestTranscript: (sessionId: string) => void;
   selectSession: (
     id: string,
     opts?: { record?: boolean } & NavigationOptions,
@@ -201,8 +212,15 @@ export type AppState = {
     content: string,
     draft?: ComposerDraftSnapshot,
     sessionId?: string,
-  ) => void;
+  ) => Promise<boolean>;
   removeQueuedPrompt: (promptId: string) => void;
+  /** Move one waiting row past its neighbour; promoted rows stay locked. */
+  moveQueuedPrompt: (
+    promptId: string,
+    direction: QueuedPromptDirection,
+  ) => Promise<void>;
+  /** Return one waiting row to the composer as an editable draft. */
+  editQueuedPrompt: (promptId: string) => void;
   sendQueuedNow: (promptId: string) => Promise<void>;
   refreshQueuedPrompts: (sessionId: string) => Promise<void>;
   applyQueueChanged: (event: AgentQueueChangedEvent) => void;
@@ -230,6 +248,12 @@ export type AppState = {
     folders: string[];
     primaryPath: string;
   }) => Promise<void>;
+  /** Clone a public git remote into a chosen folder, then create its project. */
+  createProjectFromGit: (input: {
+    name: string;
+    url: string;
+    parentPath: string;
+  }) => Promise<void>;
   cloneProject: (url: string) => Promise<ProjectWorkspace | null>;
   /** Re-read the active workspace metadata without changing the visible project. */
   refreshProject: (path: string) => Promise<ProjectWorkspace | null>;
@@ -241,6 +265,14 @@ export type AppState = {
   switchProjectPath: (path: string) => Promise<ProjectWorkspace | null>;
   closeProjectPath: (path: string) => Promise<void>;
   clearProject: (opts?: NavigationOptions) => Promise<void>;
+  /**
+   * Delete a project and its stored sessions on the host, then drop every
+   * renderer-local record of it. A path the host has no durable row for is
+   * still removed locally instead of being reported as missing. Host errors
+   * (such as a path that belongs to a multi-folder project group) propagate to
+   * the caller.
+   */
+  deleteProject: (path: string) => Promise<void>;
   toggleSessionPinned: (id: string) => void;
   toggleSessionArchived: (id: string) => void;
   archiveSession: (id: string) => void;
@@ -326,6 +358,8 @@ export type AppState = {
   /** Toggle the selected subagent detail. */
   toggleSubagentPanel: (delegationId: string) => void;
   closeSubagentPanel: () => void;
+  /** Abort one session's running turn, visible or not. */
+  abortSession: (sessionId: string) => Promise<void>;
   openWorkPanel: () => void;
   toggleWorkPanel: () => void;
   openWorkPanelTab: (tab: WorkPanelTab) => void;

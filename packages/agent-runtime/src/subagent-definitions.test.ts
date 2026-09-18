@@ -36,6 +36,10 @@ describe("builtin subagent documents", () => {
       "ui-designer",
     ]);
     expect(definitions).toHaveLength(BUILTIN_SUBAGENT_DOCUMENTS.length);
+    // The turn cap is gone (ADR 0253): no builtin document declares one.
+    for (const document of BUILTIN_SUBAGENT_DOCUMENTS) {
+      expect(document).not.toMatch(/max[_-]?turns/i);
+    }
     for (const definition of definitions) {
       expect(definition.source).toBe("builtin");
       expect(definition.description.length).toBeGreaterThan(20);
@@ -55,7 +59,7 @@ describe("builtin subagent documents", () => {
     const explorer = definitions.find((definition) => definition.name === "explorer")!;
     expect(explorer.tools).toEqual(["Read", "Glob", "Grep", "Bash"]);
     expect(subagentCanMutate(explorer)).toBe(true);
-    expect(explorer.maxTurns).toBe(60);
+    expect("maxTurns" in explorer).toBe(false);
     expect(explorer.idleTimeoutSeconds).toBe(
       DEFAULT_SUBAGENT_IDLE_TIMEOUT_SECONDS,
     );
@@ -63,7 +67,7 @@ describe("builtin subagent documents", () => {
     expect(definitions[2].tools).toContain("Bash");
     const designer = definitions.find((definition) => definition.name === "ui-designer")!;
     expect(designer.tools).toContain("BrowserPreview");
-    expect(designer.maxTurns).toBe(80);
+    expect("maxTurns" in designer).toBe(false);
     expect(designer.description).toBe(findSubagentPreset("ui-designer")?.description);
     expect(designer.prompt).toBe(findSubagentPreset("ui-designer")?.body.trim());
   });
@@ -105,6 +109,36 @@ describe("loadSubagentDefinitions", () => {
     expect(definitions.filter((d) => d.name === "explorer")).toHaveLength(1);
     // The shadowed builtin is gone, the other builtins stay.
     expect(definitions.map((d) => d.name)).toContain("code-reviewer");
+  });
+
+  it("drops a switched-off builtin from the catalog and keeps it as a builtin row", async () => {
+    const { definitions, builtins, diagnostics } = await loadSubagentDefinitions(null, {
+      disabledBuiltins: ["fixer"],
+    });
+
+    expect(diagnostics).toEqual([]);
+    expect(definitions.map((d) => d.name)).not.toContain("fixer");
+    expect(definitions.map((d) => d.name)).toContain("explorer");
+    // Settings needs the row back: its switch is the only way on again, and a
+    // builtin has no document to delete.
+    expect(builtins.map((d) => d.name)).toContain("fixer");
+    expect(builtins.every((d) => d.source === "builtin")).toBe(true);
+  });
+
+  it("lets a user document keep a handle the user switched the builtin off", async () => {
+    const { definitions, builtins } = await loadSubagentDefinitions(null, {
+      userDocuments: [
+        {
+          id: "fixer",
+          document: "---\nname: fixer\ndescription: Mine.\ntools: [Read]\n---\nMine.\n",
+          filePath: "/home/.agents/subagents/fixer.md",
+        },
+      ],
+      disabledBuiltins: ["fixer"],
+    });
+
+    expect(definitions.find((d) => d.name === "fixer")?.source).toBe("user");
+    expect(builtins.map((d) => d.name)).not.toContain("fixer");
   });
 
   it("reports a malformed document without losing the others", async () => {
@@ -219,7 +253,6 @@ describe("resolveSubagentProviders", () => {
       description: `Delegate ${name}.`,
       tools: ["Read"],
       ...(pin ? { model: pin } : {}),
-      maxTurns: 4,
       prompt: "Do the thing.",
       source: "user",
     };
@@ -376,4 +409,34 @@ describe("resolveSubagentProviders", () => {
     expect(resolved).toEqual({});
     expect(diagnostics[0]).toContain("has no API key");
   });
+});
+
+
+it("resolves definition-scoped fallback pins with their own credentials", async () => {
+  const { providers, diagnostics } = await resolveSubagentProviders({
+    definitions: [{ name: "worker", description: "Fixture", tools: ["Read"], prompt: "Finish", source: "user",
+      model: { providerId: "primary", modelId: "one" },
+      fallbackModels: [{ providerId: "other", modelId: "two" }, { providerId: "missing", modelId: "three" }],
+    }],
+    providers: [{ id: "primary", name: "Primary" }, { id: "other", name: "Other", headers: { "x-fixture": "backup" } }],
+    getSecret: async (id) => `fixture-${id}`,
+  });
+  expect(providers["primary/one"].apiKey).toBe("fixture-primary");
+  expect(providers["other/two"].apiKey).toBe("fixture-other");
+  expect(providers["other/two"].headers).toEqual({ "x-fixture": "backup" });
+  expect(providers["missing/three"]).toBeUndefined();
+  expect(diagnostics).toEqual(['worker: no enabled provider matches "missing"']);
+});
+
+
+it("never resolves a disabled fallback provider", async () => {
+  const resolved = await resolveSubagentProviders({
+    definitions: [{ name: "worker", description: "Fixture", tools: ["Read"], prompt: "Finish", source: "user",
+      fallbackModels: [{ providerId: "disabled", modelId: "private" }],
+    }],
+    providers: [{ id: "disabled", name: "Disabled", enabled: false, authKind: "none" }],
+    getSecret: async () => { throw new Error("disabled credentials must not be read"); },
+  });
+  expect(resolved.providers).toEqual({});
+  expect(resolved.diagnostics).toHaveLength(1);
 });

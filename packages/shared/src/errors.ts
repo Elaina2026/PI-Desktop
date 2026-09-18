@@ -41,6 +41,30 @@ export const ErrorCodes = {
   CONFLICT: "CONFLICT",
   TIMEOUT: "TIMEOUT",
   NETWORK_ERROR: "NETWORK_ERROR",
+  /**
+   * The main-process public-network guard refused a fetch: the URL failed the
+   * syntactic public-HTTPS check, or the local DNS lookup returned an address
+   * the policy classifies as non-public. Users behind a proxy that answers DNS
+   * itself (Clash fake-IP, a TUN resolver, a corporate split resolver) hit this
+   * even though the same URL opens in a browser, because the guard resolves
+   * locally while `net.fetch` goes through the proxy (ADR 0177, ADR 0243).
+   *
+   * This is a verdict on an address the resolver produced. A resolver that
+   * produces no answer at all is `NETWORK_RESOLVE_FAILED` instead, because
+   * reporting it as an address-check refusal names a decision the guard never
+   * made (issue #419).
+   */
+  NETWORK_POLICY_BLOCKED: "NETWORK_POLICY_BLOCKED",
+  /**
+   * The main-process public-network guard could not classify the target host:
+   * the local DNS lookup returned no answer, or threw before returning one. The
+   * request is refused exactly as before — this is the absence of a verdict,
+   * never permission — but no address was judged, so it must not be reported as
+   * an address-check refusal (ADR 0243, issue #419). Retriable: unlike a policy
+   * refusal, a resolver or proxy that starts answering the same host makes the
+   * same request succeed.
+   */
+  NETWORK_RESOLVE_FAILED: "NETWORK_RESOLVE_FAILED",
   AGENT_BUSY: "AGENT_BUSY",
   AGENT_NOT_FOUND: "AGENT_NOT_FOUND",
   TURN_NOT_FOUND: "TURN_NOT_FOUND",
@@ -158,6 +182,18 @@ export const ErrorCodes = {
   PLUGIN_MARKET_INVALID: "PLUGIN_MARKET_INVALID",
   PLUGIN_MARKET_UNTRUSTED_HOST: "PLUGIN_MARKET_UNTRUSTED_HOST",
   PLUGIN_MARKET_YANKED: "PLUGIN_MARKET_YANKED",
+  /** The platform has the version and is not offering it yet. */
+  PLUGIN_MARKET_NOT_PUBLISHED: "PLUGIN_MARKET_NOT_PUBLISHED",
+  /** The plugin was withdrawn from the platform. */
+  PLUGIN_MARKET_ARCHIVED: "PLUGIN_MARKET_ARCHIVED",
+  /** The platform does not have that plugin or version. */
+  PLUGIN_MARKET_NOT_FOUND: "PLUGIN_MARKET_NOT_FOUND",
+  /** The download endpoint asked the client to wait before asking again. */
+  PLUGIN_MARKET_RATE_LIMITED: "PLUGIN_MARKET_RATE_LIMITED",
+  /** No distribution target can serve the package. */
+  PLUGIN_MARKET_NO_SOURCE: "PLUGIN_MARKET_NO_SOURCE",
+  /** The user cancelled an install while it was downloading. */
+  PLUGIN_CANCELLED: "PLUGIN_CANCELLED",
   MCP_INVALID: "MCP_INVALID",
   SKILL_INVALID: "SKILL_INVALID",
   SUBAGENT_INVALID: "SUBAGENT_INVALID",

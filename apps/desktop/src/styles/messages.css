@@ -11,6 +11,14 @@
   /* Skip layout/paint for far-offscreen rows in long transcripts. */
   content-visibility: auto;
   contain-intrinsic-size: auto 140px;
+  /* Paint containment clips descendants to the padding box, which squared off
+     the deliberate bleed of the disclosure row chrome: the activity header
+     pulls its hover fill 3px past the column edge and a run row's head 4px, so
+     the icon can sit on the text's alignment line while the fill keeps its
+     padding, and the focus ring reaches 3.5px beyond its own box. 8px covers
+     the widest of them. .tool-activity-group clips the same chrome and carries
+     the same margin. */
+  overflow-clip-margin: 8px;
 }
 
 .message-row.user {
@@ -45,14 +53,14 @@
 .message-row.assistant .message-col,
 .message-row.system .message-col,
 .message-row.tool .message-col {
-  width: min(100%, 720px);
+  width: min(100%, var(--chat-prose-max-width, 720px));
   align-items: flex-start;
 }
 
 /* Decision cards are soft tiles (D297): risk rides in the tint and the risk
    pill rather than a coloured rail. */
 .permission-card {
-  width: min(100%, 720px);
+  width: min(100%, var(--chat-prose-max-width, 720px));
   margin: 10px 0;
   padding: 14px 16px;
   border-radius: var(--radius-md);
@@ -60,7 +68,7 @@
 }
 
 .asktool-card {
-  width: min(100%, 720px);
+  width: min(100%, var(--chat-prose-max-width, 720px));
   margin: 10px 0;
   padding: 14px 16px;
   border-radius: var(--radius-md);
@@ -170,6 +178,8 @@
   scroll-padding-block: 2px;
 }
 
+/* The card rides the composer plate below, so its option rows are inlaid fills
+   on that plate rather than the raised layer of an in-flow surface (D297). */
 .asktool-option {
   display: flex;
   width: 100%;
@@ -178,8 +188,7 @@
   min-height: 30px;
   padding: 4px 8px;
   border-radius: var(--radius-sm);
-  background: var(--ds-raised);
-  box-shadow: var(--ds-raised-shadow);
+  background: var(--ds-tile-deep);
   color: var(--ds-text-secondary);
   cursor: pointer;
   font: inherit;
@@ -190,7 +199,7 @@
 
 .asktool-option:hover,
 .asktool-option.selected {
-  background: color-mix(in oklab, var(--ds-accent) 10%, var(--ds-raised));
+  background: color-mix(in oklab, var(--ds-accent) 10%, var(--ds-tile-deep));
   color: var(--ds-text-primary);
 }
 
@@ -350,8 +359,7 @@
   padding: 6px 8px;
   border: 0;
   border-radius: var(--radius-sm);
-  background: var(--ds-raised);
-  box-shadow: var(--ds-raised-shadow);
+  background: var(--ds-tile-deep);
   color: var(--ds-text-primary);
   font: inherit;
   font-size: var(--text-md);
@@ -388,7 +396,7 @@
 .working-indicator {
   box-sizing: border-box;
   display: flex;
-  width: min(100%, 720px);
+  width: min(100%, var(--chat-prose-max-width, 720px));
   align-items: center;
   gap: 7px;
   margin: 2px 0 8px;
@@ -465,7 +473,8 @@
 
 /* The retry reason borrows the assistant error card's hierarchy without
    adding a second transcript row. It is hover/focus-only so the active row
-   remains compact at rest. */
+   remains compact at rest. The in-flow `.message-error` wash is transparent;
+   this floating tooltip mixes the same tint over an opaque elevated plate. */
 .run-activity-error-popover.message-error {
   position: absolute;
   bottom: calc(100% + 8px);
@@ -474,6 +483,7 @@
   display: block;
   width: min(360px, calc(100vw - 32px));
   padding: 10px 12px;
+  background: color-mix(in oklab, var(--ds-error) 10%, var(--ds-bg-elevated-opaque));
   box-shadow: var(--ds-shadow-dialog);
   opacity: 0;
   pointer-events: none;
@@ -557,7 +567,7 @@
 .planning-state-indicator {
   box-sizing: border-box;
   display: flex;
-  width: min(100%, 720px);
+  width: min(100%, var(--chat-prose-max-width, 720px));
   align-items: center;
   gap: 7px;
   margin: 2px 0 8px;
@@ -641,7 +651,7 @@
   --review-change-rail: var(--ds-text-muted);
   position: relative;
   box-sizing: border-box;
-  width: min(calc(100% - 24px), 720px);
+  width: min(calc(100% - 24px), var(--chat-prose-max-width, 720px));
   margin: 0 0 2px 24px;
 }
 
@@ -877,7 +887,7 @@
 }
 
 .turn-outcome-card {
-  width: min(100%, 720px);
+  width: min(100%, var(--chat-prose-max-width, 720px));
   margin: 12px 0 8px;
   border-radius: var(--radius-md);
   background: var(--ds-tile);
@@ -1476,50 +1486,96 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Compact in-flow editor. Outer composer shadow clips: the row uses
+   content-visibility (paint containment) and has no horizontal padding, and
+   the transcript scroller clips overflow. Separate from the pane with the
+   same 8% mix as a user bubble (`--ds-tile-deep`); focus uses an inset ring
+   so it stays inside the plate. The textarea is unboxed; actions sit in a
+   28px footer. */
 .message-edit {
   display: flex;
-  width: min(100%, 720px);
+  width: min(100%, var(--chat-prose-max-width, 720px));
+  margin: 0;
   flex-direction: column;
-  gap: 8px;
+  border: 0;
+  border-radius: var(--ds-composer-radius, var(--radius-xl));
+  background: var(--ds-tile-deep);
+  box-shadow: none;
+  isolation: isolate;
+}
+
+.message-edit:focus-within {
+  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--ds-focus) 28%, transparent);
 }
 
 /* A prompt being edited needs typing room, so the user column drops its
    narrow chat-plate clamp for as long as the editor is open. */
 .message-row.user .message-col:has(.message-edit) {
   width: 100%;
-  max-width: min(100%, 720px);
+  max-width: min(100%, var(--chat-prose-max-width, 720px));
 }
 
 .message-row.user .message-bubble:has(.message-edit) {
   width: 100%;
+  max-width: 100%;
+  border-radius: 0;
   background: transparent;
   padding: 0;
 }
 
 .message-edit-input {
+  display: block;
   width: 100%;
-  min-height: 112px;
-  max-height: 50vh;
-  resize: vertical;
+  min-height: 3lh;
+  max-height: min(12lh, 50vh);
+  resize: none;
+  overflow-y: auto;
   border: 0;
-  border-radius: var(--radius-md-plus);
-  background: var(--ds-raised);
-  box-shadow: var(--ds-raised-shadow);
-  padding: 10px 12px;
+  background: transparent;
+  padding: 12px 14px 8px;
   color: var(--ds-text-primary);
   font: inherit;
+  font-size: var(--text-base);
   line-height: var(--leading-chat);
   outline: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
 }
 
-.message-edit-input:focus {
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--ds-accent) 30%, transparent);
+.message-edit-input:focus,
+.message-edit-input:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 .message-edit-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 4px;
+  padding: 4px 8px 8px;
+}
+
+.message-edit-cancel {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 10px;
+  color: var(--ds-text-secondary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--leading-compact);
+  white-space: nowrap;
+}
+
+.send-btn.message-edit-submit {
+  width: auto;
+  min-width: 28px;
+  flex: 0 0 auto;
+  padding: 0 12px;
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--leading-compact);
+  white-space: nowrap;
 }
 
 .message-revision-label {
@@ -1534,7 +1590,7 @@
 }
 
 .message-bubble {
-  max-width: min(100%, 720px);
+  max-width: min(100%, var(--chat-prose-max-width, 720px));
   border-radius: var(--radius-lg-plus);
   padding: 10px 14px;
   line-height: var(--leading-chat);
@@ -1550,7 +1606,7 @@
 }
 
 .message-row.session-message .message-col {
-  width: min(100%, 720px);
+  width: min(100%, var(--chat-prose-max-width, 720px));
   max-width: 100%;
   align-items: stretch;
 }
@@ -1834,6 +1890,10 @@
   /* Skip layout/paint for collapsed groups far offscreen (D247). */
   content-visibility: auto;
   contain-intrinsic-size: auto 40px;
+  /* Clips the same disclosure chrome as .message-row — at the column's left
+     edge, and at its right for a run row's head — so it relaxes its clip by
+     the same amount; with either one left tight the fill is squared off. */
+  overflow-clip-margin: 8px;
 }
 
 .tool-activity-header {
@@ -1878,7 +1938,7 @@
 
 /* Live tail while running: last thought line / current tool, single line. */
 .tool-activity-preview {
-  max-width: min(100%, 720px);
+  max-width: min(100%, var(--chat-prose-max-width, 720px));
   margin: 1px 0 0 26px;
   overflow: hidden;
   color: var(--ds-text-muted);
@@ -1915,6 +1975,12 @@
 .tool-activity-collapse-inner {
   min-height: 0;
   overflow: hidden;
+  /* This scroller's padding box is the clip edge, and overflow-clip-margin
+     does not apply to scroll containers, so a run row's 4px hover-fill
+     overhang is given layout room instead. The negative margin keeps the
+     content box — and therefore every row inside — the size it was. */
+  padding-right: 8px;
+  margin-right: -8px;
 }
 
 .tool-activity-body {
@@ -2564,6 +2630,12 @@
   color: var(--ds-text-secondary);
 }
 
+/* Tool details stay in the tool row's level rather than adding a second inset. */
+.tool-row:not(.thinking):not(.subagent-topology-node) > .tool-row-body {
+  margin-left: 0;
+  padding-left: 0;
+}
+
 .disclosure-collapse-rail {
   position: absolute;
   inset-block: 0;
@@ -2754,7 +2826,7 @@
   margin: 0;
   overflow: auto;
   border-radius: var(--radius-md);
-  background: var(--ds-tile);
+  background: var(--ds-tool-row-bg);
   padding: 10px 12px;
   color: var(--ds-text-secondary);
   font-family: var(--font-mono);
@@ -3063,4 +3135,41 @@
 .todo-chat-item.pending .todo-chat-text {
   text-decoration: none;
   color: var(--ds-text-secondary, #a1a1aa);
+}
+
+/* Search navigation uses the original message tree and its rendered text. */
+.message-row.transcript-search-target {
+  content-visibility: visible;
+}
+
+::highlight(transcript-search) {
+  color: var(--ds-text-primary);
+  background-color: color-mix(in srgb, var(--ds-accent) 35%, transparent);
+}
+
+.transcript-search-source-match {
+  background-color: color-mix(in srgb, var(--ds-accent) 25%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--ds-accent) 65%, transparent);
+  outline-offset: 2px;
+}
+
+.transcript-load-later {
+  display: block;
+  margin: 16px auto;
+  padding: 8px 12px;
+  color: var(--ds-text-muted);
+  border-radius: var(--radius-md);
+  background: var(--ds-bg-elevated-opaque);
+}
+
+.transcript-navigation-loading {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  background: var(--ds-bg-elevated-opaque);
+  color: var(--ds-text-muted);
+  font-size: var(--text-xs);
 }

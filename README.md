@@ -283,6 +283,31 @@ Plugins can extend PI-Desktop with:
 
 Install plugins locally or through the marketplace using the `.piplug` package workflow.
 
+### Session Orchestrator
+
+The official `pi.session-orchestrator` plugin lets an Agent coordinate durable worker sessions in parallel. Install `pi.session-orchestrator` from the Plugins marketplace, then use its `SessionTask` tool to spawn, send, supervise, inspect status, wait for bounded results, accept reports, cancel work, and list workers.
+
+Workers inherit the parent project's provider, model, thinking level, and permission mode. They remain ordinary PI-Desktop sessions, so you can open and inspect their transcripts at any time. Work is parent-scoped and bounded to four active workers per parent and sixteen across the plugin.
+
+<table>
+<tr>
+<td width="50%">
+
+<img src="docs/image/readme/session-orchestrator-overview.png" alt="PI-Desktop Session Orchestrator coordinating worker sessions" />
+
+<p align="center"><sub>Coordinate multiple durable worker sessions from one conversation</sub></p>
+
+</td>
+<td width="50%">
+
+<img src="docs/image/readme/session-orchestrator-worker.png" alt="PI-Desktop Session Orchestrator worker session" />
+
+<p align="center"><sub>Open a worker session and inspect its progress independently</sub></p>
+
+</td>
+</tr>
+</table>
+
 **[Build your first plugin →](docs/plugin-development.md)**
 
 > [!NOTE]
@@ -502,7 +527,7 @@ The desktop application also uses technologies including Electron, React, TypeSc
 
 PI-Desktop is an early preview under active development.
 
-The current **0.14.x** line includes the desktop shell, streaming agent runtime, Agent / Plan / Goal workflows, permission-aware workspace tools, projects and sessions, session imports, local MCP control, MCP / Skills / Subagents, background delegation, multi-provider model configuration, plugins and marketplace support, context checkpoints, notifications, release notes, and cross-platform packaging.
+The current **0.15.x** line includes the desktop shell, streaming agent runtime, Agent / Plan / Goal workflows, permission-aware workspace tools, projects and sessions, session imports, local MCP control, MCP / Skills / Subagents, background delegation, multi-provider model configuration, plugins and marketplace support, context checkpoints, notifications, release notes, and cross-platform packaging.
 
 Current priorities include:
 
@@ -637,6 +662,18 @@ This project was created with the models below.
 ## Community
 
 - [Linux.Do](https://linux.do/) — Share, discuss, and follow development with the community.
+
+---
+
+## Star History
+
+<a href="https://star-history.com/#vastsa/PI-Desktop&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=vastsa/PI-Desktop&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=vastsa/PI-Desktop&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=vastsa/PI-Desktop&type=Date" />
+ </picture>
+</a>
 
 ---
 

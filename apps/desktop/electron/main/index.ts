@@ -41,6 +41,11 @@ import { isTemplateName, scaffold } from "@pi-desktop/plugin-devkit";
 
 import { HostProcess } from "./host-process";
 import {
+  knownProjectGroups,
+  pluginWorkspaceInfo,
+  refreshProjectGroups,
+} from "./workspace-roots";
+import {
   shouldCreateTaskNotification as shouldCreateTaskNotificationPolicy,
   shouldShowNativeNotification,
 } from "./notification-policy";
@@ -115,6 +120,7 @@ import { registerIpcHandlers } from "./ipc/register";
 import {
   type WindowLifecycleState,
 } from "./bootstrap/window";
+import { registerApplicationActivation } from "./bootstrap/app-activation";
 import type { RuntimeState } from "./runtime/context";
 import { createHostRuntime } from "./runtime/host";
 import { createSidecarRuntime } from "./runtime/sidecar";
@@ -129,6 +135,7 @@ import { createSessionCoordination } from "./runtime/session-coordination";
 import { createScheduledRuntime } from "./runtime/scheduled";
 import { createDesktopServices } from "./services/desktop-services";
 import { createPluginServices } from "./services/plugin-services";
+import { wirePluginThemeRuntimeServices } from "./plugin-theme-services";
 import { createSessionCollaborationService } from "./services/session-collaboration";
 import {
   createApplicationLifecycle,
@@ -214,7 +221,7 @@ let pluginLauncherWindow: BrowserWindow | null = null;
 let pluginLauncherCreationPromise: Promise<BrowserWindow> | null = null;
 let pluginLauncherAccelerator: string | null = null;
 let pluginLauncherBinding: string | null = null;
-let summonWindowAccelerator: string | null = null;
+let toggleWindowAccelerator: string | null = null;
 const launcherState: LauncherState = {
   get creationPromise() {
     return pluginLauncherCreationPromise;
@@ -228,11 +235,11 @@ const launcherState: LauncherState = {
   set pluginLauncherAccelerator(value) {
     pluginLauncherAccelerator = value;
   },
-  get summonWindowAccelerator() {
-    return summonWindowAccelerator;
+  get toggleWindowAccelerator() {
+    return toggleWindowAccelerator;
   },
-  set summonWindowAccelerator(value) {
-    summonWindowAccelerator = value;
+  set toggleWindowAccelerator(value) {
+    toggleWindowAccelerator = value;
   },
 };
 let windowCreationPromise: Promise<void> | null = null;
@@ -467,10 +474,10 @@ const applyPluginLauncherShortcutForLifecycle = (
 ) => {
   launcherRuntime?.applyPluginLauncherShortcut(keybindings);
 };
-const applySummonWindowShortcutForLifecycle = (
+const applyToggleWindowShortcutForLifecycle = (
   keybindings?: KeybindingOverrides,
 ) => {
-  launcherRuntime?.applySummonWindowShortcut(keybindings);
+  launcherRuntime?.applyToggleWindowShortcut(keybindings);
 };
 const applyCloseBehaviorForLifecycle = (next: CloseBehavior) => {
   if (!closeBehaviorRuntime) {
@@ -536,7 +543,8 @@ const agentExtensions = new AgentExtensionBridge({
 
 const logger = new Logger(
   dataDir,
-  process.env.NODE_ENV === "production" ? "info" : "debug",
+  isDevelopmentBuild ? "debug" : "info",
+  { mirrorConsole: isDevelopmentBuild },
 );
 installMainProcessErrorHandlers({
   emit: (record) => {
@@ -672,8 +680,10 @@ const {
   emitBrowserState,
   pluginPanels,
   pluginViews,
+  pluginSettingsViews,
   browserHost,
   browserPane,
+  announceTurnEnded,
 } = pluginServices;
 
 const providerCatalogRuntime = createProviderCatalogRuntime({
@@ -715,6 +725,7 @@ const {
   refreshUserMcp,
   activeUserSkills,
   activeUserSubagentDocuments,
+  disabledBuiltinSubagents,
   loadUserSkillBody,
   resolveEffectiveCommandShell,
   resolveAgentRuntimeLaunch,
@@ -758,13 +769,6 @@ function currentWorkspacePath(): string | null {
   return (globalThis as { __piWorkspacePath?: string | null }).__piWorkspacePath ?? null;
 }
 
-function workspaceInfo(
-  path: string | null,
-): { path: string; name: string } | null {
-  if (!path) return null;
-  return { path, name: path.split(/[\\/]/).filter(Boolean).at(-1) || path };
-}
-
 /** Push a panel event to detached windows and docked views. */
 function broadcastPluginPanelEvent(event: string, payload: unknown): void {
   pluginPanels.broadcast(event, payload);
@@ -775,9 +779,21 @@ function setCurrentWorkspacePath(path: string | null): void {
   const previous = currentWorkspacePath();
   (globalThis as { __piWorkspacePath?: string | null }).__piWorkspacePath = path;
   if (previous === path) return;
-  const payload = workspaceInfo(path);
+  const payload = pluginWorkspaceInfo(path);
   broadcastPluginPanelEvent("workspace:changed", payload);
   plugins.broadcastEvent("workspace:changed", [payload]);
+  // The group snapshot starts cold, so this first push can only carry the bare
+  // workspace. Fetch the project's folders once and repeat it, so a plugin that
+  // was already open sees them without waiting for the next switch; every later
+  // switch finds the snapshot warm and broadcasts exactly once (ADR 0263).
+  if (knownProjectGroups() === null) {
+    void refreshProjectGroups(host).then((changed) => {
+      if (!changed) return;
+      const enriched = pluginWorkspaceInfo(currentWorkspacePath());
+      broadcastPluginPanelEvent("workspace:changed", enriched);
+      plugins.broadcastEvent("workspace:changed", [enriched]);
+    });
+  }
 }
 
 /** One-line message for an error of unknown shape, for user-facing lists. */
@@ -907,17 +923,20 @@ applicationLifecycle = createApplicationLifecycle({
   applyCloseBehavior: applyCloseBehaviorForLifecycle,
   browserPane,
   pluginViews,
+  pluginSettingsViews,
   plugins,
   logger,
   refreshReleaseNotes: () => updater.refreshReleaseNotes(),
   applyPluginLauncherShortcut: applyPluginLauncherShortcutForLifecycle,
-  applySummonWindowShortcut: applySummonWindowShortcutForLifecycle,
+  applyToggleWindowShortcut: applyToggleWindowShortcutForLifecycle,
   broadcastPluginPanelEvent,
+  getHost: () => host,
 });
 const {
   applyDevelopmentBranding,
   hasVisibleWindow,
   restoreMainWindow,
+  toggleMainWindow,
   updateTrayMenu,
   createTray,
   resetMenuRendererReady,
@@ -931,10 +950,19 @@ const {
   applyDeveloperMode,
   applyNativeThemeSource,
   applyApplicationMenuSettings,
+  applyAppThemePreference,
   resolveAppearance,
   broadcastAppearance,
   flushPendingApplicationMenuCommands,
 } = applicationLifecycle;
+
+wirePluginThemeRuntimeServices({
+  plugins,
+  getHost: () => host,
+  sendToRenderer,
+  applyAppThemePreference,
+  broadcastAppearance,
+});
 
 closeBehaviorRuntime = createCloseBehaviorRuntime({
   state: windowLifecycleState,
@@ -955,7 +983,7 @@ const createdLauncher = createLauncher({
   getHost: () => host,
   logger,
   safeOpenExternal,
-  restoreMainWindow,
+  toggleMainWindow,
 });
 launcherRuntime = createdLauncher;
 const {
@@ -963,7 +991,7 @@ const {
   showPluginLauncher,
   togglePluginLauncher,
   applyPluginLauncherShortcut,
-  applySummonWindowShortcut,
+  applyToggleWindowShortcut,
 } = createdLauncher;
 
 /** sessionId → open host turn id, for turn bookkeeping across agent events. */
@@ -997,8 +1025,6 @@ const planRuntimeState: PlanRuntimeState = {
     approvedExecutionDrain = value;
   },
 };
-const turnFinalizations = new Map<string, Promise<void>>();
-
 /** sessionId → scheduled task_run id awaiting completion. */
 const scheduledRunsBySession = new Map<string, string>();
 /** Session currently rendered on the chat page; focus remains Main-owned. */
@@ -1032,6 +1058,10 @@ const {
   planSubmissionTurnKey,
   waitForTurnSettlement,
   shouldCreateTaskNotification,
+  lockAbortReason,
+  isTurnDispatchable,
+  isSessionBusy,
+  isStaleTerminalEvent,
 } = sessionCoordination;
 
 async function withGitBranch<T extends { path?: string; name?: string } | null | undefined>(
@@ -1093,12 +1123,9 @@ const planRuntime = createPlanRuntime({
   planState: planRuntimeState,
   logger,
   sendToRenderer,
-  activeTurns,
-  activeTurnUsages,
+  coordination: sessionCoordination,
   scheduledRunsBySession,
   activeToolCalls,
-  turnFinalizations,
-  turnSettlements,
   planSubmissionTurnIds,
   approvedExecutionIdsBySession,
   claimedExecutionSessions,
@@ -1108,9 +1135,7 @@ const planRuntime = createPlanRuntime({
   dispatchingApprovedExecutions,
   inFlightExecutionFinishes,
   pendingExecutionFinishes,
-  waitForTurnSettlement,
-  planSubmissionTurnKey,
-  shouldCreateTaskNotification,
+  announceTurnEnded,
   emitAgentEvent: (envelope) => emitAgentEvent(envelope),
   acquireSessionOperation,
   resolveAgentRuntimeLaunch,
@@ -1141,6 +1166,7 @@ const eventPersistence = createEventPersistence({
   addActiveTurnUsage,
   logger,
   finishTurn,
+  isStaleTerminalEvent,
   finishApprovedExecution,
   emitAgentEvent: (envelope) => emitAgentEvent(envelope),
 });
@@ -1157,6 +1183,7 @@ const sidecarRuntime = createSidecarRuntime({
   claimedExecutionSessions,
   inflightCheckpointer,
   finishTurn,
+  isStaleTerminalEvent,
   finishApprovedExecution,
   superviseRestart,
   isQuitting: () => quitting,
@@ -1192,7 +1219,9 @@ const { wireHost, startHost } = createHostRuntime({
   emitAgentEvent,
   togglePluginLauncher,
   finishTurn,
+  isTurnDispatchable,
   finishApprovedExecution,
+  activeTurns,
   approvedExecutionIdsBySession,
   claimedExecutionSessions,
   importLegacyScheduled,
@@ -1214,6 +1243,7 @@ runtimeLifecycle = createRuntimeLifecycle({
   rememberPluginScopes,
   refreshUserMcp,
   isQuitting: () => quitting,
+  getDisplayLocale: () => applicationAppearanceState.updaterLocale,
 });
 const { bootHostStatus, runtimeArch, bootBackends } = runtimeLifecycle;
 
@@ -1234,7 +1264,7 @@ function registerIpc() {
     updater,
     dataDir,
     activeTurns,
-    turnFinalizations,
+    isTurnDispatchable,
     sessionProjects,
     persistenceOutbox,
     logger,
@@ -1285,6 +1315,7 @@ function registerIpc() {
     claimedExecutionSessions,
     resolveAgentRuntimeLaunch,
     finishTurn,
+    lockAbortReason,
     finishApprovedExecution,
     dispatchApprovedPlan,
     dispatchExecutionForProposal,
@@ -1293,7 +1324,9 @@ function registerIpc() {
     refreshUserMcp,
     describeError,
     activeUserSubagentDocuments,
+    disabledBuiltinSubagents,
     pluginViews,
+    pluginSettingsViews,
     pluginScopes,
     rememberPluginScopes,
     pluginPanels,
@@ -1357,7 +1390,7 @@ registerApplicationStartup({
   modelsDevCatalog,
   plugins,
   activeTurns,
-  turnFinalizations,
+  isSessionBusy,
   getHost: () => host,
   getMainWindow: () => mainWindow,
   sendToRenderer,
@@ -1372,7 +1405,7 @@ registerApplicationStartup({
   applyApplicationMenuSettings,
   applyDeveloperMode,
   applyPluginLauncherShortcut,
-  applySummonWindowShortcut,
+  applyToggleWindowShortcut,
   ensureWindow,
   bootHostStatus,
   flushPendingApplicationMenuCommands,
@@ -1427,11 +1460,11 @@ const shutdownState: ShutdownState = {
   set pluginLauncherAccelerator(value) {
     pluginLauncherAccelerator = value;
   },
-  get summonWindowAccelerator() {
-    return summonWindowAccelerator;
+  get toggleWindowAccelerator() {
+    return toggleWindowAccelerator;
   },
-  set summonWindowAccelerator(value) {
-    summonWindowAccelerator = value;
+  set toggleWindowAccelerator(value) {
+    toggleWindowAccelerator = value;
   },
 };
 
@@ -1449,38 +1482,15 @@ registerShutdownHandlers({
   userMcp,
   browserPane,
   pluginViews,
+  pluginSettingsViews,
   updater,
   logger,
   confirmQuitDialog,
 });
 
-app.on("activate", () => {
-  restoreMainWindow();
+registerApplicationActivation({
+  restoreMainWindow,
+  isQuitting: () => quitting,
+  isApplicationBooted: () => applicationLifecycleState.applicationBooted,
+  hasVisibleWindow,
 });
-
-// Launching PI-Desktop again is a request to see the app that is already
-// running, not to start another one. The duplicate process quits before it
-// boots anything, and Electron hands its launch to the lock holder here, so the
-// visible result is the same as the tray's Show action — including a window
-// that was closed or hidden into the tray, which `restoreMainWindow` recreates.
-app.on("second-instance", () => {
-  restoreMainWindow();
-});
-
-// macOS only emits `activate` from `applicationShouldHandleReopen:` — a Dock
-// click or a relaunch. Cmd+Tab, App Exposé, and Spotlight activation do not
-// reach it, and macOS traffic-light minimize hides the window into the tray
-// (ADR 0078), so the app could be focused with nothing on screen and no way
-// back except the tray.
-// Restore only when no window is visible: activating the plugin launcher or a
-// plugin panel must not drag the main window up with it (ADR 0086).
-if (process.platform === "darwin") {
-  app.on("did-become-active", () => {
-    if (
-      quitting ||
-      !applicationLifecycleState.applicationBooted ||
-      hasVisibleWindow()
-    ) return;
-    restoreMainWindow();
-  });
-}

@@ -81,6 +81,8 @@ export function Composer({
   const sendPrompt = useAppStore((s) => s.sendPrompt);
   const steerPrompt = useAppStore((s) => s.steerPrompt);
   const removeQueuedPrompt = useAppStore((s) => s.removeQueuedPrompt);
+  const moveQueuedPrompt = useAppStore((s) => s.moveQueuedPrompt);
+  const editQueuedPrompt = useAppStore((s) => s.editQueuedPrompt);
   const sendQueuedNow = useAppStore((s) => s.sendQueuedNow);
   const abort = useAppStore((s) => s.abort);
   const isRunning = useAppStore((s) => s.isRunning);
@@ -90,6 +92,13 @@ export function Composer({
   const settings = useAppStore((s) => s.settings);
   const sessions = useAppStore((s) => s.sessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const activeSessionSummary = sessions.find(
+    (session) => session.id === activeSessionId,
+  );
+  const nativeSession = activeSessionSummary?.source === "pi-native";
+  const nativeReadOnly =
+    nativeSession && activeSessionSummary.capabilities?.canPrompt !== true;
+  const nativeInputBlocked = nativeReadOnly || (nativeSession && isRunning);
   const workspacePath = useAppStore((s) => s.workspace?.path ?? "");
   const providers = useAppStore((s) => s.providers);
   const providerModels = useAppStore((s) => s.providerModels);
@@ -147,7 +156,7 @@ export function Composer({
     prefill,
     t,
     invalidatePromptEnhancement,
-    inputBlocked: planCheckpoint?.status === "pending",
+    inputBlocked: planCheckpoint?.status === "pending" || nativeInputBlocked,
   });
   const {
     ref,
@@ -172,6 +181,7 @@ export function Composer({
     restoreDraftForKey,
     persistDraft,
     commitEditorDom,
+    readLiveDraft,
     insertNewlineInEditor,
     handleInput,
   } = draft;
@@ -181,7 +191,7 @@ export function Composer({
     settings?.largePasteThreshold,
   );
   const attachments = useComposerAttachments({
-    inputBlocked: approvalPending,
+    inputBlocked: approvalPending || nativeSession,
     activeSessionId,
     draftKey,
     largePasteThreshold,
@@ -211,13 +221,23 @@ export function Composer({
   } = attachments;
   const executionActive = isActivePlanExecution(planCheckpoint);
   const runActive = isRunning || executionActive;
-  const inputBlocked = approvalPending || pasting;
-  const controlsBlocked = approvalPending;
-  const sendBlocked = approvalPending || pasting;
+  const inputBlocked = approvalPending || pasting || nativeInputBlocked;
+  const controlsBlocked = approvalPending || nativeSession;
+  const sendBlocked = approvalPending || pasting || nativeInputBlocked;
   const enhancementDraft = stripInlineComposerFileReferenceTokens(
     value,
     activeFileReferences,
   );
+  // Edit returns one queued row to the composer. The row is removed and its
+  // captured draft becomes the input, so the input must be empty first: the
+  // live read is the only current source (the draft cache is not per keystroke).
+  const handleEditQueuedPrompt = (id: string) => {
+    if (readLiveDraft().trim() || activeFileReferences.length) {
+      showToast(t("chat.editQueuedPromptBusy"), { variant: "info" });
+      return;
+    }
+    editQueuedPrompt(id);
+  };
   const placeholderKeys = PLACEHOLDER_KEYS[variant];
   const placeholderKey =
     placeholderKeys[placeholderIndex % placeholderKeys.length] ?? placeholderKeys[0];
@@ -365,11 +385,12 @@ export function Composer({
     thinkingLevel,
     controlsBlocked,
   });
-  const modelReady =
-    !!provider &&
-    provider.enabled &&
-    !!modelId &&
-    (provider.hasSecret || provider.authKind === "none");
+  const modelReady = nativeSession
+    ? activeSessionSummary.capabilities?.canPrompt === true
+    : !!provider &&
+      provider.enabled &&
+      !!modelId &&
+      (provider.hasSecret || provider.authKind === "none");
   const currentModelBinding = provider?.models?.find((m) => m.id === modelId);
   const supportsVision = Boolean(
     currentModelBinding?.supportsImages ??
@@ -539,6 +560,7 @@ export function Composer({
     <div
       ref={dockRef}
       className={`composer-dock composer-dock-${variant}`}
+      data-composer-dock={variant}
     >
       <div className="composer-stack">
         {planCheckpoint?.status === "pending" ? (
@@ -547,13 +569,19 @@ export function Composer({
         {pendingAsk ? (
           <AskToolCard request={pendingAsk} queued={queuedAsks} />
         ) : null}
+        {nativeReadOnly ? (
+          <div className="composer-status" role="status">
+            Native Pi session is read-only: {activeSessionSummary?.readOnlyReason ?? "continuation unavailable"}.
+          </div>
+        ) : null}
         <ComposerStatus
           t={t}
           queuedPrompts={queuedPrompts}
           removeQueuedPrompt={removeQueuedPrompt}
+          moveQueuedPrompt={moveQueuedPrompt}
+          editQueuedPrompt={handleEditQueuedPrompt}
           sendQueuedNow={sendQueuedNow}
           approvalPending={approvalPending}
-          runActive={runActive}
           enhancementError={enhancementError}
           clearEnhancementError={clearEnhancementError}
           droppedDirectories={droppedDirectories}
@@ -573,6 +601,7 @@ export function Composer({
         >
           {inputFocused ? (
             <ComposerAutocomplete
+              anchorRef={composerShellRef}
               ac={composerAc}
               onAccept={acceptCompletion}
             />

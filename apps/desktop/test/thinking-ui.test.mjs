@@ -187,7 +187,8 @@ test("main resolves reasoning from each session's exact selected model", () => {
   assert.match(providerCatalogSource, /const resolveSessionCapabilityTarget/);
   assert.match(providerCatalogSource, /defaults\?\.defaultProviderId/);
   assert.match(providerCatalogSource, /modelsDevModelFor\(provider, modelId\)/);
-  assert.match(sessionIpcSource, /sessions:\s*result\.sessions\.map/);
+  assert.match(sessionIpcSource, /result\.sessions\.map\(\(session\) =>/);
+  assert.match(sessionIpcSource, /enrichSession\(session, providers, defaults\)/);
   assert.match(providerCatalogSource, /modelConfigFromModelsDev\(\s*modelsDevModel,\s*provider\.baseUrl\s*\)/);
   // models.dev records stamp reasoning capability per exact model id.
   assert.match(providerCatalogSource, /capabilitiesFromModelConfig\(modelConfig\)/);
@@ -231,12 +232,12 @@ test("expanded assistant activity rails collapse their disclosures", () => {
 });
 
 test("live thinking follows the latest step without auto-expanding tool details", () => {
-  assert.match(transcriptSource, /function useAutomaticDisclosure\(automaticOpen: boolean\)/);
+  assert.match(transcriptSource, /function useAutomaticDisclosure\(automaticOpen: boolean, revealRequest\?: number\)/);
   assert.match(transcriptSource, /const userInteractedRef = useRef\(false\)/);
   assert.match(transcriptSource, /useLayoutEffect\(\(\) => \{/);
   assert.match(transcriptSource, /if \(userInteractedRef\.current\) return/);
   assert.match(transcriptSource, /const \{ open, toggle: toggleDisclosure, collapse: collapseDisclosure \}/);
-  assert.match(transcriptSource, /useAutomaticDisclosure\(live\)/);
+  assert.match(transcriptSource, /useAutomaticDisclosure\(live, revealRequest\)/);
   assert.match(
     transcriptSource,
     /<ThinkingRow[\s\S]*?autoOpen=\{live && itemIndex === items\.length - 1\}/,

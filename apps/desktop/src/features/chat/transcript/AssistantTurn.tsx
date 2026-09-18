@@ -8,6 +8,7 @@ import type {
   AgentActivity,
   ContextCompactionMark,
 } from "@pi-desktop/shared";
+import { formatCompactTokenCount } from "@pi-desktop/shared";
 import {
   assistantTurnContent,
   assistantTurnMessages,
@@ -31,7 +32,6 @@ import {
   AssistantErrorMessage,
   CopyButton,
   MessageMeta,
-  formatTokenCount,
 } from "./shared";
 import { activityItemsEqual, ActivityGroup } from "./ActivityGroup";
 import { MessageRow } from "./MessageRow";
@@ -276,6 +276,7 @@ export const AssistantTurn = memo(function AssistantTurn({
     <div
       className={`message-row assistant assistant-turn${streaming ? " streaming" : ""}`}
       data-minimap-id={entry.anchorId}
+      data-row-role="assistant"
       role="article"
       aria-label={t("chat.assistantMessage")}
     >
@@ -302,6 +303,7 @@ export const AssistantTurn = memo(function AssistantTurn({
                   ? " streaming"
                   : ""
               }`}
+              data-message-id={part.message.id}
               key={part.message.id}
             >
               {part.message.content ? (
@@ -370,7 +372,7 @@ export function CompactionRow({ mark }: { mark: ContextCompactionMark }) {
       <span className="transcript-compaction-detail">
         {mark.summarized
           ? t("chat.compactionRowSummary", {
-              tokens: formatTokenCount(mark.summaryTokens),
+              tokens: formatCompactTokenCount(mark.summaryTokens),
             })
           : t("chat.compactionRowNoSummary")}
       </span>

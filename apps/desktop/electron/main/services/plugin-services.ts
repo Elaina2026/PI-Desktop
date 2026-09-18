@@ -1,4 +1,4 @@
-import { dialog, shell, type BrowserWindow } from "electron";
+import { dialog, globalShortcut, shell, type BrowserWindow } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,6 +7,7 @@ import {
   type AppSettings,
   type BrowserState,
   type ModelBinding,
+  type ShortcutPlatform,
   type ThinkingLevel,
   type UiMessage,
 } from "@pi-desktop/shared";
@@ -28,8 +29,12 @@ import {
   type RuntimeProviderConfig,
 } from "@pi-desktop/agent-runtime";
 import { createFsConsentService } from "../plugin-fs-consent";
+import { pluginWorkspaceInfo } from "../workspace-roots";
 import { createDesktopConsentService } from "../plugin-desktop-consent";
 import { PluginRuntime } from "../plugin-runtime";
+import { PluginShortcutRegistry } from "../plugin-shortcut-registry";
+import { PluginWebSocketRegistry } from "../plugin-websocket";
+import { hostGlobalShortcutBindings } from "../bootstrap/launcher";
 import { UserMcpRuntime } from "../user-mcp";
 import {
   MCP_CALL_TIMEOUT_MS,
@@ -43,6 +48,7 @@ import { BrowserHost, BROWSER_PLUGIN_ID } from "../browser-host";
 import { OAUTH_AUTH_KIND, type VendorOAuth } from "../oauth";
 import type { AgentExtensionBridge } from "../agent-extensions";
 import type { ClipboardHistory } from "../clipboard-history";
+import type { TurnEndedPayload } from "../runtime/session-coordination";
 import type { HostProcess } from "../host-process";
 import type { Logger } from "../logger";
 import type { PluginAppearance } from "../../shared/plugin-panel-chrome";
@@ -152,7 +158,48 @@ export function createPluginServices({
     }
     return { projectId: project.id, path: project.path, name: project.name };
   };
+  /**
+   * System-wide accelerators for plugins. Electron's `globalShortcut` is the
+   * same registration API the app's own shortcuts use, so a plugin binding
+   * conflicts with the host instead of fighting it, and the registry owns
+   * every release path.
+   */
+  const shortcutPlatform: ShortcutPlatform =
+    process.platform === "darwin"
+      ? "darwin"
+      : process.platform === "win32"
+        ? "win32"
+        : "linux";
+  const pluginShortcuts = new PluginShortcutRegistry({
+    platform: shortcutPlatform,
+    // The launcher owns the app's own global accelerators; asking it what it
+    // currently holds keeps a rebound accelerator available to plugins instead
+    // of blocking the shipped default forever.
+    hostBindings: hostGlobalShortcutBindings,
+    register: (accelerator, handler) => globalShortcut.register(accelerator, handler),
+    unregister: (accelerator) => {
+      globalShortcut.unregister(accelerator);
+    },
+    // Late-bound: the runtime is constructed just below, and a trigger can
+    // Late-bound: the runtime is constructed just below, and a trigger can
+    // only arrive once the app is running and a plugin holds a shortcut.
+    onTrigger: (entry) => {
+      void plugins.triggerPluginShortcut(entry);
+    },
+    onRefused: (info) =>
+      logger.app("plugin", "warn", "plugin global shortcut refused", { data: info }),
+  });
+  /**
+   * Real-time sockets for plugins. The transport is `ws`, wrapped by a registry
+   * that owns the budget, the bounds, and the release path; events are routed
+   * to the owning plugin's process only.
+   */
+  const pluginSockets = new PluginWebSocketRegistry({
+    onEvent: (pluginId, event) => plugins.deliverSocketEvent(pluginId, event),
+  });
   const plugins: PluginRuntime = new PluginRuntime({
+    pluginShortcuts,
+    pluginSockets,
     getWorkspacePath: () => {
       // Filled after host boots; temporary stub until services rebinding.
       return null;
@@ -337,7 +384,14 @@ export function createPluginServices({
         runtimeProvider,
         context,
         launch.sidecarParams.thinkingLevel,
-        { signal: input.signal, sessionId: launchSessionId },
+        {
+          signal: input.signal,
+          sessionId: launchSessionId,
+          // Spec 07-plugins/03-plugin-api.md: empty model output answers the
+          // plugin with INVALID_ARGUMENT, not the runtime's internal code.
+          emptyErrorCode: "INVALID_ARGUMENT",
+          emptyErrorMessage: "The model returned no text.",
+        },
       );
       return {
         text: result.text,
@@ -360,6 +414,7 @@ export function createPluginServices({
       // surface. Drop it; the renderer re-opens it on the pluginChanged event if
       // the tab is still active and the plugin came back.
       pluginViews.closePlugin(pluginId);
+      pluginSettingsViews.closePlugin(pluginId);
       if (pluginId === BROWSER_PLUGIN_ID) browserHost.disposeGuest();
       sendToRenderer(IPC.event.pluginChanged,{ reason: "crash", pluginId });
     },
@@ -387,6 +442,7 @@ export function createPluginServices({
       });
       // Views were loaded from the previous revision of the plugin's files.
       pluginViews.closePlugin(pluginId);
+      pluginSettingsViews.closePlugin(pluginId);
       if (pluginId === BROWSER_PLUGIN_ID) browserHost.disposeGuest();
       sendToRenderer(IPC.event.pluginChanged,{ reason: "reload", pluginId });
     },
@@ -418,6 +474,41 @@ export function createPluginServices({
     pluginPanels.broadcast("browser:state", state);
     pluginViews.broadcast("browser:state", state);
   };
+  /**
+   * Tell the plugin surfaces that a host turn reached a terminal state. The
+   * three surfaces are independent: a failure to reach one of them must not
+   * suppress the other two, and inside each one an unreachable recipient is
+   * skipped by the host that owns the fan-out.
+   *
+   * Delivery is best-effort by contract — no acknowledgement, no replay, and no
+   * guarantee for a plugin that is loading, crashed or unloaded right now.
+   */
+  const announceTurnEnded = (payload: TurnEndedPayload): void => {
+    try {
+      plugins.broadcastEvent("session:turnEnded", [payload]);
+    } catch (error) {
+      logger.app("plugin", "warn", "turnEnded plugin broadcast failed", {
+        sessionId: payload.sessionId,
+        data: String(error),
+      });
+    }
+    try {
+      pluginPanels.broadcast("session:turnEnded", payload);
+    } catch (error) {
+      logger.app("plugin", "warn", "turnEnded panel broadcast failed", {
+        sessionId: payload.sessionId,
+        data: String(error),
+      });
+    }
+    try {
+      pluginViews.broadcast("session:turnEnded", payload);
+    } catch (error) {
+      logger.app("plugin", "warn", "turnEnded view broadcast failed", {
+        sessionId: payload.sessionId,
+        data: String(error),
+      });
+    }
+  };
   const browserPane = new BrowserPane(emitBrowserState);
   const pluginViews = new PluginViewHost(({ pluginId, url }) => {
     logger.app("plugin", "warn", "plugin.api", {
@@ -426,7 +517,17 @@ export function createPluginServices({
       data: { api: "view.egress", ok: false, url, ts: Date.now() },
     });
   });
+  // Settings extensions use the same sandboxed preload and egress policy as
+  // work-panel views, but have their own visible surface and lifecycle.
+  const pluginSettingsViews = new PluginViewHost(({ pluginId, url }) => {
+    logger.app("plugin", "warn", "plugin.api", {
+      pluginId,
+      code: "PERMISSION_DENIED",
+      data: { api: "settings.egress", ok: false, url, ts: Date.now() },
+    });
+  });
   pluginPanels.addSenderResolver((senderId) => pluginViews.pluginIdForSender(senderId));
+  pluginPanels.addSenderResolver((senderId) => pluginSettingsViews.pluginIdForSender(senderId));
   const browserHost = new BrowserHost({
     pane: browserPane,
     isPluginLoaded: (pluginId) => Boolean(plugins.getLoaded(pluginId)),
@@ -457,6 +558,19 @@ export function createPluginServices({
     browserHost.setChromeSurface(surface);
   };
   plugins.setServices({
+    /**
+     * The richer workspace payload, so `pi.workspace.get` and the
+     * `workspace:changed` event both expose the open project's folder roots
+     * (ADR 0263) instead of the bare primary path.
+     */
+    getWorkspaceInfo: () => pluginWorkspaceInfo(getWorkspacePath()),
+    /**
+     * The project each live session belongs to, so an fs call made by one
+     * session's tool follows that session instead of whichever project the
+     * window happens to be showing (ADR 0016, D093). Cold for a session whose
+     * runtime has not launched yet, which falls back to the visible workspace.
+     */
+    getWorkspacePathForSession: (sessionId) => sessionProjects.get(sessionId) ?? null,
     agentExtensionsChanged: () =>
       sendToRenderer(IPC.event.pluginChanged, { reason: "agentExtensions" }),
     browser: {
@@ -484,8 +598,10 @@ export function createPluginServices({
     pluginScopes,
     sessionProjects,
     emitBrowserState,
+    announceTurnEnded,
     pluginPanels,
     pluginViews,
+    pluginSettingsViews,
     browserHost,
     browserPane,
   };

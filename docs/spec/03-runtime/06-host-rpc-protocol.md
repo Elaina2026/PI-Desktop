@@ -206,6 +206,14 @@ type ToolBudgetHealth = {
   by last-opened time; includes records materialized by session imports
 - `projects.create({ path })` — upserts a durable project record without
   changing the active workspace and returns the host-generated project id
+- `projects.remove({ path })` — deletes one durable project row together with
+  every session attached to it, removing those sessions' transcript, scratch,
+  and review files and the project's durable memory, and never touching the
+  project folder on disk. Idempotent: an unknown path returns
+  `{ removed: false, sessionsRemoved: 0 }`. A path that is a root of a stored
+  multi-folder project group is refused so the group keeps a valid primary root,
+  and the call is refused (1008 / `CONFLICT`) while any attached session has a
+  running turn, so a live turn never loses the transcript it is writing.
 - `project.memory.get({ path })` — returns the durable memory for the canonical
   project path, or an empty record when no memory has been saved
 - `project.memory.set({ path, entries })` — normalizes and stores visual memory
@@ -213,6 +221,29 @@ type ToolBudgetHealth = {
   derived value is injected into that project's next runtime context as
   user-provided context. `{ path, content }` remains supported for legacy
   callers and returns a memory record without structured entries.
+- `project.groups.list` — returns one host-owned logical group per named
+  project. Existing path-only records are compatibility `legacy` groups.
+- `project.group.create({ name, folders })` — validates the display name and
+  local directories, stores the ordered roots, and returns the new group
+  without changing the active workspace. A non-legacy root cannot belong to a
+  second group.
+- `project.group.rename({ groupId, name })` — persists the group display name.
+- `project.group.update({ groupId, name, folders })` — edits the group name and
+  ordered roots. The primary root must remain first; duplicate roots are
+  removed, roots owned by another non-legacy group are rejected, and a root
+  with existing chats cannot be detached. Removed roots are retained as
+  suppressed historical paths rather than reappearing as standalone legacy
+  groups.
+- `project.group.memory.get/set({ groupId, entries })` — reads or normalizes
+  shared group memory using the existing 32 KiB entry limit.
+- `project.group.instructions.get/set({ groupId, content })` — reads or stores
+  shared group instructions using a bounded host-owned value.
+- `project.group.context({ path })` — resolves the group containing a primary or
+  member root and returns its shared instructions and memory for runtime launch.
+  Legacy groups return no group context so the path-scoped compatibility APIs
+  remain authoritative. Builtin tools default to the primary root; absolute
+  paths under registered additional roots use the same canonical containment
+  resolver and never become arbitrary external access.
 
 ### Secrets
 - `secrets.set`
@@ -267,6 +298,16 @@ to later refresh and inference; the vendor picker does not collect them.
   positions, clamped against the cached transcript layout rather than the
   deduplicated session index counter, and a window is served by seeking to its
   first selected line instead of scanning the history before it.
+  Optional `messageAround` centers that window on a stable message ID resolved
+  against the canonical file, requires `messageLimit`, and excludes
+  `messageBefore`. Missing IDs return no session. The focused user/assistant
+  message retains its complete text; neighboring text and tool fields stay
+  capped. Bounded reads also return exclusive physical `messageEnd` and
+  `hasMoreAfter` to support contiguous forward pages (ADR session-content-search).
+  When the selected message has `parentToolCallId`, optional `navigationParent`
+  contains the latest matching Task tool-call projection from the same canonical
+  transcript. It is capped separately and does not widen the window or alter its
+  cursors. Ordinary and uncapped reads omit this navigation-only field.
 - `session.delete`
 - `session.getScratchPath` — the session's scratch directory (D114), created
   on demand
@@ -356,9 +397,15 @@ to later refresh and inference; the vendor picker does not collect them.
   session, rechecks its permission ceiling, claims the delivery, and binds the
   new turn to its message id. A collaboration turn cannot be started from
   caller-supplied replacement text.
-- `session.queuePush` / `session.queueList` / `session.queueRemove` — the
-  Host-owned turn queue (D386 / ADR 0213, schema v15); push is idempotent per
-  principal and key, bounded at eight entries per session
+- `session.queuePush` / `session.queueList` / `session.queueRemove` /
+  `session.queuePrioritize` / `session.queueReorder` — the Host-owned turn queue
+  (D386 / ADR 0213 / ADR 0265, schema v18); push is idempotent per principal and
+  key, bounded at eight entries per session. `queuePrioritize` appends an entry
+  to the end of its session's priority block (`priority = MAX + 1`) and refuses
+  an already promoted entry with `CONFLICT`; `queueReorder` swaps one
+  non-promoted entry with its adjacent non-promoted neighbour and reports
+  `{ moved }`. Listing and delivery order is `priority ASC` for promoted entries
+  followed by `position ASC` for the rest
 - `session.endTurn` — atomically moves a running turn to its terminal state and
   conditionally returns the newly created notification for `completed`/`error`;
   returns no notification when `createNotification=false`, for `aborted`, or
@@ -549,6 +596,15 @@ one after the final row would be wrong.
 ### Providers and models
 - `providers.list` / `providers.get` / `providers.create` /
   `providers.update` / `providers.delete`
+- a plugin-owned row (`ownerPluginId`) is refreshed from its manifest on every
+  load, so `providers.update` / `providers.delete` refuse it with a
+  `PROVIDER_OWNED_BY_PLUGIN` error; only the owning plugin's lifecycle changes
+  or removes it (ADR 0259)
+- `providers.setSecret({ id, secretValue })` — stores or clears one provider's
+  API key (`secret:provider:<id>:api_key` and the row's `secret_ref`). It is the
+  write a plugin-owned row accepts: only the credential the declaration asks for
+  changes, never a field the manifest owns. An empty or omitted `secretValue`
+  deletes the stored key. Returns `{ provider }`, or `null` for an unknown id
 - `providers.getSecret` — main/host only, never reachable from the renderer
 - `providers.listModels` / `providers.cacheModels` — discovered model rows
   and their host-side cache (ADR 0027 / ADR 0134)
@@ -557,21 +613,56 @@ one after the final row would be wrong.
 ### Agent capabilities (skills, subagents, MCP servers)
 - `skills.list` / `skills.active` / `skills.read` / `skills.create` /
   `skills.update` / `skills.remove` / `skills.import` /
-  `skills.setEnabled` / `skills.setScope` — user skill documents
-  (`SKILL_INVALID` on validation failure)
+  `skills.setEnabled` / `skills.setScope` / `skills.transfer` — user skill
+  documents (`SKILL_INVALID` on validation failure)
 - `agents.list` / `agents.active` / `agents.read` / `agents.create` /
   `agents.update` / `agents.remove` / `agents.setEnabled` /
   `agents.setScope` — user subagent documents (`SUBAGENT_INVALID`)
 - `mcp.list` / `mcp.active` / `mcp.upsert` / `mcp.remove` /
-  `mcp.setEnabled` / `mcp.setScope` — user MCP server definitions
-  (`MCP_INVALID`)
+  `mcp.setEnabled` / `mcp.setScope` / `mcp.transfer` — user MCP server
+  definitions (`MCP_INVALID`)
+
+`skills.transfer` and `mcp.transfer` take `{ id, from, to }`, each end a
+`{ level, projectPath? }` target (`projectPath` is required for the project
+level), and return `{ skill }` / `{ server }` for the document where it landed.
+A transfer moves the document between the two levels rather than copying it, so
+the source level stops listing the entry. A destination that already owns the
+same id gives the arriving document a `-2`/`-3` id suffix; one that owns the
+same display name / label, compared case-insensitively, gives it a matching
+` (2)`/` (3)` display suffix. The existing entry stays untouched. Enablement
+travels with the document: the source level drops every state entry for the old
+id, including its project overrides, and the destination stores the value the
+source was showing (a project target keeps that project's state, a global
+target the global default). Naming the source's own directory as the
+destination is a no-op.
 
 `*.active` returns the entries that apply to the given project after
 activation-scope filtering (`CAPABILITY_INVALID` for an unknown scope).
 
 ### Search, artifacts, keyboard
-- `search.query` — global search across sessions, projects, and settings
-  destinations (ADR 0034)
+- `search.query` — legacy indexed-message hits; existing response and limit remain compatible
+- `search.sessions({ query, offset? }) -> { hits, nextOffset }` — global session
+  discovery with title/project metadata and indexed user/assistant text. Trimmed
+  literal queries have a 500-character limit (`INVALID_ARGUMENT` above it).
+  Each 30-session page includes `session`, `projectName`, `metadataMatch`, the
+  full matching `messageCount`, and at most two `matches` containing
+  `messageId`, `role`, `createdAt`, and a `snippet` containing the matching
+  sentence or line. Long sentences are capped to a match-centered 180-character
+  window, extended when needed to preserve the complete literal query.
+  `nextOffset: null` marks the last page. Sort by updated time descending and
+  session ID ascending; exclude soft-deleted sessions. Empty queries return no
+  hits because the renderer owns its recent-session presentation.
+- `search.context({ sessionId, messageId, query, direction? })` — resolve a
+  stable message ID in the owning, non-deleted session's JSONL layout. Default
+  `direction: "around"` returns up to 21 nearby message text projections;
+  `"before"` / `"after"` returns up to 20 messages excluding the anchor. Return
+  `messages`, `hasMoreBefore`, `hasMoreAfter`, `previousMatchId`, and
+  `nextMatchId`. Adjacent matching IDs follow transcript sequence order and
+  have no 100-message cutoff. Context comes from canonical JSONL and is capped
+  at 64 Ki characters per message; the target is centered on the query. Tool
+  bodies, thinking, and attachments are omitted. Missing/deleted targets return
+  `NOT_FOUND`; invalid directions or identifiers return `INVALID_ARGUMENT`.
+  See [ADR session-content-search](../../adr/session-content-search.md).
 - `artifacts.list` — Plan/Goal checkpoint artifacts for a session
 - `keyboard.setGlobalShortcut` — host-owned native fallback for the plugin
   launcher chord where Electron cannot register it
@@ -1001,6 +1092,12 @@ numeric slot; the string is the contract, the number is transport detail.
 | 1016 | SKILL_INVALID | user skill document failed validation |
 | 1017 | SUBAGENT_INVALID | user subagent document failed validation |
 | 1018 | CAPABILITY_INVALID | agent capability root/scope setting failed validation |
+| 1019 | PLUGIN_CANCELLED | the user cancelled a marketplace install while it was downloading |
+| 1020 | PLUGIN_MARKET_NOT_PUBLISHED | the platform has the version and is not offering it yet |
+| 1021 | PLUGIN_MARKET_ARCHIVED | the plugin was withdrawn from the platform |
+| 1022 | PLUGIN_MARKET_NOT_FOUND | the platform does not have that plugin or version |
+| 1023 | PLUGIN_MARKET_RATE_LIMITED | the download endpoint asked the client to wait |
+| 1024 | PLUGIN_MARKET_NO_SOURCE | no distribution target can serve the package |
 | -32029 | HOST_OVERLOADED | RPC dispatcher capacity exhausted |
 | -32601 | — | unknown method |
 | -32700 | — | unparseable request line |

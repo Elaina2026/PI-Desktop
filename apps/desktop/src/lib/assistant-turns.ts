@@ -74,18 +74,20 @@ function isDelegationStartActivity(item: AssistantActivityItem): boolean {
   return item.kind === "tool" && isDelegationStartTool(item.message.toolName);
 }
 
-/** Delegate rows grouped by the `Task` call that produced them. */
+/** Delegate rows grouped by the `Task` call that produced them, chains merged. */
 function collectSubagentRuns(
   messages: readonly UiMessage[],
 ): Map<string, SubagentRun> {
+  const latestCall = chainLatestCalls(messages);
   const runs = new Map<string, SubagentRun>();
   for (const message of messages) {
     const parent = message.parentToolCallId;
     if (!parent) continue;
-    let run = runs.get(parent);
+    const key = latestCall(parent);
+    let run = runs.get(key);
     if (!run) {
       run = { items: [] };
-      runs.set(parent, run);
+      runs.set(key, run);
     }
     if (message.agentName && !run.agentName) run.agentName = message.agentName;
     if (message.role === "tool") {
@@ -101,6 +103,61 @@ function collectSubagentRuns(
     }
   }
   return runs;
+}
+
+// Map each Task call to the last call of its chain (ADR 0279): a resumed
+// delegation is one delegate session continued by a later Task call, so the
+// chain's rows all belong on the latest card, where they read as one
+// continuing conversation rather than a card per call.
+function chainLatestCalls(
+  messages: readonly UiMessage[],
+): (toolCallId: string) => string {
+  const callByDelegationId = new Map<string, string>();
+  const childOf = new Map<string, string>();
+  for (const message of messages) {
+    if (message.role !== "tool" || !isDelegationStartTool(message.toolName)) {
+      continue;
+    }
+    const toolCallId = message.toolCallId;
+    if (!toolCallId) continue;
+    const result = message.toolResult;
+    const details =
+      result && typeof result === "object" && !Array.isArray(result)
+        ? (result as { details?: unknown }).details
+        : undefined;
+    const delegationId =
+      details && typeof details === "object" && !Array.isArray(details)
+        ? (details as { delegationId?: unknown }).delegationId
+        : undefined;
+    if (typeof delegationId === "string" && delegationId) {
+      callByDelegationId.set(delegationId, toolCallId);
+    }
+    const args = message.toolArgs;
+    const resume =
+      args && typeof args === "object" && !Array.isArray(args)
+        ? (args as { resume?: unknown }).resume
+        : undefined;
+    const prior =
+      typeof resume === "string" && resume.trim()
+        ? callByDelegationId.get(resume.trim())
+        : undefined;
+    if (prior) childOf.set(prior, toolCallId);
+  }
+  const latest = new Map<string, string>();
+  return (toolCallId: string): string => {
+    const cached = latest.get(toolCallId);
+    if (cached) return cached;
+    let current = toolCallId;
+    const seen = new Set<string>([current]);
+    for (;;) {
+      const next = childOf.get(current);
+      if (!next || seen.has(next)) break;
+      seen.add(next);
+      current = next;
+    }
+    latest.set(toolCallId, current);
+    return current;
+  };
 }
 
 /**

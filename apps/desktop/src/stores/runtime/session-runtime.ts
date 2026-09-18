@@ -10,6 +10,7 @@ import {
   dedupeSessionMessages,
   durableCoversLiveSessionMessages,
   mergeLiveSessionMessages,
+  projectMessageEnd,
   removeLiveSessionMessage,
   upsertLiveSessionMessage,
 } from "../../lib/session-transcript";
@@ -20,6 +21,7 @@ import {
 } from "../../lib/sidebar-session-groups";
 import type { ComposerDraftSnapshot } from "../../lib/composer-smart-stop";
 import { formatToolValue } from "../../lib/tool-display";
+import { recordPaneTranscript } from "../../lib/session-panes";
 import type { AppState, SessionHistoryWindow } from "../app-state";
 import type { StoreAccess } from "../slices/types";
 
@@ -50,7 +52,6 @@ export type SessionRuntime = {
   readonly submittedComposerDrafts: Map<string, SubmittedComposerDraft>;
   readonly pendingSessionConfigurations: Map<string, SessionConfiguration>;
   readonly sessionConfigurationFlushes: Map<string, Promise<void>>;
-  readonly sessionOlderLoads: Map<string, Promise<void>>;
   beginNavigationIntent: () => number;
   navigationIntentIsCurrent: (intent: number) => boolean;
   newSessionScopeKey: (projectPath?: string | null) => string;
@@ -68,6 +69,7 @@ export type SessionRuntime = {
     messages: UiMessage[],
     window?: SessionHistoryWindow,
   ) => void;
+  syncTranscriptProjection: (state: AppState, previous: AppState) => void;
   loadSessionDetail: (
     id: string,
     options?: {
@@ -76,7 +78,7 @@ export type SessionRuntime = {
       contentLimit?: number;
     },
   ) => ReturnType<typeof api.getSession>;
-  loadFullSessionMessages: (id: string) => Promise<UiMessage[] | null>;
+  loadFullSessionMessages: (id: string, cache?: boolean) => Promise<UiMessage[] | null>;
   insertOptimisticUserMessage: (sessionId: string, message: UiMessage) => void;
   retractOptimisticUserMessage: (sessionId: string, message: UiMessage) => void;
   cacheBackgroundTranscriptEvent: (envelope: AgentEventEnvelope) => void;
@@ -127,7 +129,6 @@ export function createSessionRuntime({ get, set }: StoreAccess): SessionRuntime 
   const pendingSessionConfigurations = new Map<string, SessionConfiguration>();
   const sessionConfigurationFlushes = new Map<string, Promise<void>>();
   const sessionDetailLoads = new Map<string, ReturnType<typeof api.getSession>>();
-  const sessionOlderLoads = new Map<string, Promise<void>>();
   const toolStartsByCallId = new Map<string, ToolStart>();
   const planSyncGenerations = new Map<string, number>();
 
@@ -172,6 +173,7 @@ export function createSessionRuntime({ get, set }: StoreAccess): SessionRuntime 
         cacheSessionTranscript(id, messages, {
           messageStart: detail.session.messageStart ?? 0,
           hasMoreBefore: detail.session.hasMoreBefore === true,
+          contentLimited: options?.contentLimit !== undefined,
         });
       }
       return detail;
@@ -189,14 +191,26 @@ export function createSessionRuntime({ get, set }: StoreAccess): SessionRuntime 
     return request;
   }
 
-  async function loadFullSessionMessages(id: string): Promise<UiMessage[] | null> {
+  /** Every canonical writer (streaming, edits, retries) shares this cache boundary. */
+  function syncTranscriptProjection(state: AppState, previous: AppState) {
+    if (state.messages === previous.messages && state.activeSessionId === previous.activeSessionId) return;
+    const id = state.activeSessionId;
+    if (!id) return;
+    if (state.runningSessions[id] || previous.runningSessions[id]) liveSessionTranscripts.add(id);
+    cacheSessionTranscript(id, state.messages, state.sessionHistory[id]);
+    if (state.retainedTranscripts[id] === state.messages) return;
+    set((current) => current.activeSessionId === id
+      ? recordPaneTranscript(current, id, current.messages) : {});
+  }
+
+  async function loadFullSessionMessages(id: string, cache = true): Promise<UiMessage[] | null> {
     const detail = await api.getSession(id);
     if (!detail.session) return null;
     const messages = detail.session.messages ?? [];
-    cacheSessionTranscript(id, messages, {
-      messageStart: 0,
-      hasMoreBefore: false,
-    });
+    if (cache) cacheSessionTranscript(id, messages, {
+        messageStart: 0,
+        hasMoreBefore: false,
+      });
     return messages;
   }
 
@@ -236,13 +250,8 @@ export function createSessionRuntime({ get, set }: StoreAccess): SessionRuntime 
     }
   }
 
-  function cacheBackgroundTranscriptEvent(envelope: AgentEventEnvelope): void {
-    const { sessionId, event } = envelope;
-    const state = get();
-    const current =
-      sessionTranscriptCache.get(sessionId) ?? state.retainedTranscripts[sessionId];
-    if (!current) return;
-
+  function projectTranscriptEvent(current: UiMessage[], envelope: AgentEventEnvelope): UiMessage[] {
+    const { event } = envelope;
     let next = current;
     switch (event.type) {
       case "message_start":
@@ -255,15 +264,7 @@ export function createSessionRuntime({ get, set }: StoreAccess): SessionRuntime 
       }
         break;
       case "message_end": {
-        const failed =
-          event.message.status === "error" || event.message.status === "aborted";
-        const empty =
-          !(event.message.content || "").trim() &&
-          !(event.message.thinking || "").trim();
-        next =
-          failed && empty && !event.message.error
-            ? removeLiveSessionMessage(current, event.message.id)
-            : upsertLiveSessionMessage(current, event.message);
+        next = projectMessageEnd(current, event);
         break;
       }
       case "tool_start":
@@ -284,13 +285,13 @@ export function createSessionRuntime({ get, set }: StoreAccess): SessionRuntime 
         });
         break;
       case "tool_update": {
-        if (event.partialResult === undefined) return;
+        if (event.partialResult === undefined) return current;
         const existing = current.find(
           (message) =>
             message.toolCallId === event.toolCallId &&
             message.toolStatus === "running",
         );
-        if (!existing) return;
+        if (!existing) return current;
         next = upsertLiveSessionMessage(current, {
           ...existing,
           content:
@@ -340,9 +341,20 @@ export function createSessionRuntime({ get, set }: StoreAccess): SessionRuntime 
         break;
       }
       default:
-        return;
+        return current;
     }
 
+    return next;
+  }
+
+  function cacheBackgroundTranscriptEvent(envelope: AgentEventEnvelope): void {
+    const { sessionId } = envelope;
+    const state = get();
+    const current =
+      sessionTranscriptCache.get(sessionId) ?? state.retainedTranscripts[sessionId];
+    if (!current) return;
+
+    const next = projectTranscriptEvent(current, envelope);
     if (next === current) return;
     liveSessionTranscripts.add(sessionId);
     cacheSessionTranscript(
@@ -374,10 +386,10 @@ export function createSessionRuntime({ get, set }: StoreAccess): SessionRuntime 
     sessionTranscriptCache,
     liveSessionTranscripts,
     sessionHistoryCache,
+    syncTranscriptProjection,
     submittedComposerDrafts,
     pendingSessionConfigurations,
     sessionConfigurationFlushes,
-    sessionOlderLoads,
     beginNavigationIntent: () => navigationIntents.begin(),
     navigationIntentIsCurrent: (intent) => navigationIntents.isCurrent(intent),
     newSessionScopeKey: (projectPath) =>

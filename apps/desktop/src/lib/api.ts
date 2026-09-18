@@ -1,6 +1,7 @@
 import type {
   AccountQuotaInfo,
   ActivationScope,
+  AgentCapabilityMove,
   AgentCapabilityQuery,
   AgentEventEnvelope,
   AgentCompactRequest,
@@ -30,6 +31,7 @@ import type {
   ComposerCommand,
   ComposerPasteFile,
   ComposerPastedFile,
+  FsChatRefResolveResult,
   FsEntry,
   FsImageDataUrlResult,
   FsIndexResult,
@@ -49,14 +51,18 @@ import type {
   OAuthStartResult,
   OAuthVendor,
   PluginSummary,
+  PluginPermissionReview,
   PluginSettingDefinition,
   PluginServiceStatus,
   PluginViewMeta,
+  PluginSettingsDestinationMeta,
   PluginTheme,
   MarketPluginSummary,
   MarketPluginDetail,
   PluginInstallResult,
+  PluginInstallProgress,
   ProjectRecord,
+  ProjectGroupRecord,
   ProjectMemory,
   ProjectMemoryEntry,
   ProjectWorkspace,
@@ -67,6 +73,9 @@ import type {
   ProviderUpdateInput,
   Result,
   SessionDetail,
+  SessionSearchPage,
+  SessionSearchContext,
+  SessionSearchContextRequest,
   SessionSummary,
   SessionCollaborationSummary,
   ToolPermissionResolution,
@@ -101,6 +110,7 @@ import {
   normalizeMode,
   normalizeNetworkProxy,
   resolveFontScale,
+  normalizeChatContentMaxWidth,
   validateNetworkProxy,
 } from "@pi-desktop/shared";
 
@@ -166,6 +176,7 @@ async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
 function normalizeSession(session: SessionSummary): SessionSummary {
   return {
     ...session,
+    source: session.source ?? "desktop",
     mode: normalizeMode((session as { mode?: unknown }).mode),
   };
 }
@@ -180,6 +191,8 @@ function normalizeSessionDetail(detail: SessionDetail | null): SessionDetail | n
 }
 
 export type SessionHistoryReadOptions = {
+  /** Center a bounded read on this stable ID and retain its original text. */
+  messageAround?: string;
   /** Return the newest page ending before this zero-based message offset. */
   messageBefore?: number;
   /** Maximum number of messages in the returned page. */
@@ -213,6 +226,7 @@ export function validateSettingsWrite(settings: AppSettings): AppSettings {
     defaultCommandShell?: unknown;
     largePasteThreshold?: unknown;
     fontScale?: unknown;
+    chatContentMaxWidth?: unknown;
     networkProxy?: unknown;
   };
   if (
@@ -239,6 +253,14 @@ export function validateSettingsWrite(settings: AppSettings): AppSettings {
     throw Object.assign(new Error("fontScale is invalid"), {
       errorCode: "INVALID_PARAMS",
     });
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "chatContentMaxWidth")) {
+    const next = normalizeChatContentMaxWidth(value.chatContentMaxWidth);
+    if (next === undefined || next !== value.chatContentMaxWidth) {
+      throw Object.assign(new Error("chatContentMaxWidth is invalid"), {
+        errorCode: "INVALID_PARAMS",
+      });
+    }
   }
   if (Object.prototype.hasOwnProperty.call(value, "networkProxy")) {
     const proxy = validateNetworkProxy(value.networkProxy);
@@ -339,6 +361,10 @@ export const api = {
       title,
       throughMessageId,
     }).then((result) => ({ ...result, session: normalizeSessionDetail(result.session)! })),
+  searchSessions: (query: string, offset = 0) =>
+    invoke<SessionSearchPage>(IPC.invoke.sessionSearch, { query, offset }),
+  getSearchContext: (request: SessionSearchContextRequest) =>
+    invoke<SessionSearchContext>(IPC.invoke.sessionSearchContext, request),
   getSession: (id: string, options?: SessionHistoryReadOptions) =>
     invoke<{ session: SessionDetail | null }>(IPC.invoke.sessionGet, {
       id,
@@ -406,6 +432,15 @@ export const api = {
       input,
     ),
   deleteProvider: (id: string) => invoke(IPC.invoke.providersDelete, id),
+  /**
+   * Set or clear one provider's API key. The only write a plugin-declared row
+   * accepts from the user path, since `updateProvider` refuses it.
+   */
+  setProviderSecret: (input: { id: string; secretValue?: string }) =>
+    invoke<{ provider: ProviderPublic | null }>(
+      IPC.invoke.providersSetSecret,
+      input,
+    ),
   testProvider: (id: string) => invoke(IPC.invoke.providersTest, id),
   /**
    * Discover models from the provider's own endpoint. Saved providers pass
@@ -476,6 +511,26 @@ export const api = {
     invoke<{ workspace: ProjectWorkspace | null }>(IPC.invoke.projectGet),
   listProjects: () =>
     invoke<{ projects: ProjectRecord[] }>(IPC.invoke.projectList),
+  listProjectGroups: () =>
+    invoke<{ groups: ProjectGroupRecord[] }>(IPC.invoke.projectGroupList),
+  createProjectGroup: (name: string, folders: string[]) =>
+    invoke<{ group: ProjectGroupRecord }>(IPC.invoke.projectGroupCreate, { name, folders }),
+  renameProjectGroup: (groupId: string, name: string) =>
+    invoke<{ group: ProjectGroupRecord }>(IPC.invoke.projectGroupRename, { groupId, name }),
+  updateProjectGroup: (groupId: string, name: string, folders: string[]) =>
+    invoke<{ group: ProjectGroupRecord }>(IPC.invoke.projectGroupUpdate, {
+      groupId,
+      name,
+      folders,
+    }),
+  getProjectGroupMemory: (groupId: string) =>
+    invoke<{ memory: ProjectMemory }>(IPC.invoke.projectGroupMemoryGet, { groupId }),
+  saveProjectGroupMemory: (groupId: string, entries: ProjectMemory["entries"]) =>
+    invoke<{ memory: ProjectMemory }>(IPC.invoke.projectGroupMemorySave, { groupId, entries }),
+  getProjectGroupInstructions: (groupId: string) =>
+    invoke<{ content: string }>(IPC.invoke.projectGroupInstructionsGet, { groupId }),
+  saveProjectGroupInstructions: (groupId: string, content: string) =>
+    invoke<{ content: string }>(IPC.invoke.projectGroupInstructionsSave, { groupId, content }),
   openProject: () =>
     invoke<{ workspace: ProjectWorkspace | null; canceled?: boolean }>(
       IPC.invoke.projectOpen,
@@ -494,6 +549,11 @@ export const api = {
       IPC.invoke.projectClone,
       { url },
     ),
+  cloneProjectInto: (url: string, parentPath: string) =>
+    invoke<{ path: string; name: string }>(IPC.invoke.projectCloneCheckout, {
+      url,
+      parentPath,
+    }),
   pickFiles: () =>
     invoke<{ token: string | null; canceled?: boolean }>(IPC.invoke.composerPickFiles),
   getDroppedFilePath: (file: File) =>
@@ -513,6 +573,11 @@ export const api = {
   recordClipboardPaste: (text: string) =>
     invoke<{ ok: boolean }>(IPC.invoke.clipboardRecordPaste, { text }),
   clearProject: () => invoke(IPC.invoke.projectClear),
+  removeProject: (path: string) =>
+    invoke<{ removed: boolean; sessionsRemoved: number }>(
+      IPC.invoke.projectRemove,
+      { path },
+    ),
   setProject: (path: string) =>
     invoke<{ workspace: ProjectWorkspace | null }>(IPC.invoke.projectSet, path),
   listPullRequests: () =>
@@ -574,6 +639,8 @@ export const api = {
     invoke(IPC.invoke.agentQueueRemove, { turnId }),
   prioritizeQueuedPrompt: (turnId: string) =>
     invoke(IPC.invoke.agentQueuePrioritize, { turnId }),
+  reorderQueuedPrompt: (turnId: string, direction: "up" | "down") =>
+    invoke<{ moved: boolean }>(IPC.invoke.agentQueueReorder, { turnId, direction }),
   getStatus: (sessionId: string) =>
     invoke<{ status: AgentStatus }>(IPC.invoke.agentGetStatus, sessionId),
   getAgentInstructions: (projectPath?: string) =>
@@ -604,8 +671,24 @@ export const api = {
     invoke<PlanResolutionResult>(IPC.invoke.plansResolve, resolution),
   listPlugins: () =>
     invoke<{ plugins: PluginSummary[] }>(IPC.invoke.pluginList),
-  loadDevPlugin: () => invoke(IPC.invoke.pluginLoadDev),
-  reloadPlugin: (id: string) => invoke(IPC.invoke.pluginReload, id),
+  /**
+   * Picking a folder only reports what it declares; the load happens in
+   * `confirmLoadDevPlugin` once the user has seen that.
+   */
+  loadDevPlugin: () =>
+    invoke<{ canceled?: boolean; review?: PluginPermissionReview }>(
+      IPC.invoke.pluginLoadDev,
+    ),
+  confirmLoadDevPlugin: (input: { path: string; grantedPermissions: string[] }) =>
+    invoke(IPC.invoke.pluginLoadDevConfirm, input),
+  /**
+   * A manifest that asks for more than the current approval comes back as a
+   * `review` instead of a reload, so the page asks before anything is granted.
+   */
+  reloadPlugin: (id: string) =>
+    invoke<{ review?: PluginPermissionReview }>(IPC.invoke.pluginReload, id),
+  confirmReloadPlugin: (input: { id: string; grantedPermissions: string[] }) =>
+    invoke(IPC.invoke.pluginReloadConfirm, input),
   createPluginFromTemplate: (template: string) =>
     invoke<{
       canceled?: boolean;
@@ -613,6 +696,7 @@ export const api = {
       name?: string;
       dir?: string;
       files?: string[];
+      review?: PluginPermissionReview;
     }>(IPC.invoke.pluginCreateFromTemplate, { template }),
   installPluginFromPath: () => invoke(IPC.invoke.pluginInstallFromPath),
   installPluginFromPackage: () => invoke(IPC.invoke.pluginInstallFromPackage),
@@ -655,6 +739,13 @@ export const api = {
   ) => invoke(IPC.invoke.mcpSetEnabled, { id, enabled, ...query }),
   setMcpServerScope: (id: string, scope: ActivationScope) =>
     invoke(IPC.invoke.mcpSetScope, { id, scope }),
+  /**
+   * Move one server to the other level. The document is moved, not copied, and
+   * the response carries the id it ended up under: a destination that already
+   * holds the same id or name renames the arriving server.
+   */
+  transferMcpServer: (move: AgentCapabilityMove) =>
+    invoke<{ server: McpServerRecord }>(IPC.invoke.mcpTransfer, move),
   /** Force one handshake and report what happened, for the editor's test button. */
   testMcpServer: (id: string, query?: Partial<AgentCapabilityQuery>) =>
     invoke<{ status: McpServerStatus }>(IPC.invoke.mcpTest, { id, ...query }),
@@ -673,10 +764,27 @@ export const api = {
 
   // --- Skill market ----------------------------------------------------------
   searchSkillMarket: (query: string, sources: { id: string; name: string; url: string }[]) =>
-    invoke<{ entries: SkillCatalogEntry[]; failedSources?: string[] }>(
-      IPC.invoke.skillMarketSearch,
-      { query, sources },
-    ),
+    invoke<{
+      entries: SkillCatalogEntry[];
+      failedSources?: string[];
+      /**
+       * Why each named source failed, so the market can explain a policy/DNS
+       * refusal instead of reporting every source as merely unreachable.
+       */
+      failureKinds?: Record<string, "policy" | "fake-ip" | "unresolved" | "network">;
+      /**
+       * The host, the address it resolved to, and the guard's own reason behind
+       * each failed source. Without them the panel can say a source was refused
+       * but not *what* was refused — and `198.18.0.1` is what tells a user their
+       * proxy is in fake-IP mode. `route` adds which route the guard judged that
+       * address on, so a fake-IP refusal on a direct route reads apart from one
+       * on a proxied route (issue #419, ADR 0272).
+       */
+      failureDetails?: Record<
+        string,
+        { host?: string; address?: string; reason?: string; addressKind?: string; route?: string }
+      >;
+    }>(IPC.invoke.skillMarketSearch, { query, sources }),
   /** Fetch one catalog document (frontmatter split off) for preview/install. */
   fetchSkillMarketDocument: (entry: SkillCatalogEntry) =>
     invoke<{ name?: string; description?: string; body: string; resources?: Array<{ path: string; body: string }> }>(
@@ -710,6 +818,13 @@ export const api = {
   setUserSkillScope: (id: string, scope: ActivationScope) =>
     invoke(IPC.invoke.skillSetScope, { id, scope }),
   /**
+   * Move one skill to the other level. The document is moved, not copied, and
+   * the response carries the id it ended up under: a destination that already
+   * holds the same id or display name renames the arriving skill.
+   */
+  transferUserSkill: (move: AgentCapabilityMove) =>
+    invoke<{ skill: UserSkillRecord }>(IPC.invoke.skillTransfer, move),
+  /**
    * Level and project must travel with the id: a project skill has no global
    * counterpart to fall back to, so resolving by id alone would miss it.
    */
@@ -719,10 +834,15 @@ export const api = {
   // --- Subagents the user owns ----------------------------------------------
   listUserSubagents: (query?: Pick<AgentCapabilityQuery, "level">) =>
     invoke<{ subagents: UserSubagentRecord[] }>(IPC.invoke.subagentList, query),
-  /** What `Task` would offer right now, merged across all three sources. */
+  /**
+   * What `Task` would offer right now, merged across the shipped builtins and
+   * the registry. `builtins` keeps a switched-off default in the list, flagged
+   * `enabled: false`, so Settings can still show that row and its switch.
+   */
   subagentCatalog: () =>
     invoke<{
       subagents: SubagentDefinition[];
+      builtins: Array<SubagentDefinition & { enabled: boolean }>;
       diagnostics: string[];
       projectPath: string | null;
     }>(IPC.invoke.subagentCatalog),
@@ -742,6 +862,15 @@ export const api = {
   removeUserSubagent: (id: string) => invoke(IPC.invoke.subagentRemove, id),
   setUserSubagentEnabled: (id: string, enabled: boolean) =>
     invoke(IPC.invoke.subagentSetEnabled, { id, enabled }),
+  /**
+   * Turn one shipped default off, or back on. The id is the `Task` handle
+   * (`explorer`), never a document id: a builtin has no file to switch.
+   */
+  setBuiltinSubagentEnabled: (id: string, enabled: boolean) =>
+    invoke<{ id: string; enabled: boolean }>(IPC.invoke.subagentSetBuiltinEnabled, {
+      id,
+      enabled,
+    }),
   setUserSubagentScope: (id: string, scope: ActivationScope) =>
     invoke(IPC.invoke.subagentSetScope, { id, scope }),
   /** Registry entries reveal by id; project documents pass their own path. */
@@ -751,6 +880,7 @@ export const api = {
   togglePluginLauncher: () => invoke(IPC.invoke.pluginLauncherToggle),
   dismissPluginLauncher: () => invoke(IPC.invoke.pluginLauncherDismiss),
   listPluginThemes: () => invoke<PluginTheme[]>(IPC.invoke.pluginThemes),
+  listPluginSettingsDestinations: () => invoke<PluginSettingsDestinationMeta[]>(IPC.invoke.pluginSettingsDestinations),
   listPluginServices: () => invoke<PluginServiceStatus[]>(IPC.invoke.pluginServices),
   /**
    * Work panel views, already filtered by permission, activation scope, and
@@ -783,6 +913,12 @@ export const api = {
       visible,
       sessionId,
     }),
+  pluginSettingsViewOpen: (pluginId: string, destinationId: string) =>
+    invoke(IPC.invoke.pluginSettingsViewOpen, { pluginId, destinationId }),
+  pluginSettingsViewSetBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
+    invoke(IPC.invoke.pluginSettingsViewSetBounds, bounds),
+  pluginSettingsViewSetVisible: (pluginId: string, destinationId: string, visible: boolean) =>
+    invoke(IPC.invoke.pluginSettingsViewSetVisible, { pluginId, destinationId, visible }),
   marketRefresh: (force = true) =>
     invoke<{
       providerId: string;
@@ -818,6 +954,9 @@ export const api = {
       IPC.invoke.marketApplyUpdates,
       { onlyAuto },
     ),
+  /** Ask the running install to stop. Only a download can be interrupted. */
+  marketCancelInstall: (id: string) =>
+    invoke<{ cancelled: boolean; id: string }>(IPC.invoke.marketCancelInstall, { id }),
   /** Import a pi CLI extension file or directory as a development plugin (spec 16 §3). */
   importPiExtension: () =>
     invoke<
@@ -897,6 +1036,16 @@ export const api = {
   fsReveal: (path: string) => invoke(IPC.invoke.fsReveal, { path }),
   fsOpen: (path: string) => invoke(IPC.invoke.fsOpen, { path }),
   fsIndex: () => invoke<FsIndexResult>(IPC.invoke.fsIndex),
+  /**
+   * Complete a file reference from chat text to a real file (D320 follow-up).
+   * The main process owns the root order — project, session scratch,
+   * attachments — because only it can see the scratch store.
+   */
+  fsResolveRef: (ref: string, sessionId?: string) =>
+    invoke<FsChatRefResolveResult>(IPC.invoke.fsResolveRef, {
+      ref,
+      ...(sessionId ? { sessionId } : {}),
+    }),
   composerCommands: () =>
     invoke<{ commands: ComposerCommand[] }>(IPC.invoke.composerCommands),
   setWorkPanelReservation: (width: number) =>
@@ -1105,12 +1254,25 @@ export const api = {
       listener(payload as UpdateState),
     );
   },
+  onPluginInstallProgress: (listener: (event: PluginInstallProgress) => void) => {
+    if (!window.piDesktop?.on) return () => undefined;
+    return window.piDesktop.on(IPC.event.pluginInstallProgress, (payload) =>
+      listener(payload as PluginInstallProgress),
+    );
+  },
+
   onPluginChanged: (
     listener: (event: { reason?: string; pluginId?: string }) => void,
   ) => {
     if (!window.piDesktop?.on) return () => undefined;
     return window.piDesktop.on(IPC.event.pluginChanged, (payload) =>
       listener((payload ?? {}) as { reason?: string; pluginId?: string }),
+    );
+  },
+  onSettingsChanged: (listener: (patch: Record<string, unknown>) => void) => {
+    if (!window.piDesktop?.on) return () => undefined;
+    return window.piDesktop.on(IPC.event.settingsChanged, (payload) =>
+      listener((payload ?? {}) as Record<string, unknown>),
     );
   },
   onPluginLauncherShown: (listener: () => void) => {

@@ -1,6 +1,6 @@
 {
   "name": "@pi-desktop/desktop",
-  "version": "0.14.8",
+  "version": "0.15.0",
   "desktopName": "pi-desktop.desktop",
   "private": true,
   "description": "PI-Desktop Electron application",
@@ -44,6 +44,7 @@
     "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.6.0",
     "dompurify": "^3.4.13",
     "electron": "^43.4.1",
@@ -68,10 +69,11 @@
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
     "vite": "^7.3.6",
+    "ws": "8.21.1",
     "zustand": "^5.0.15"
   },
   "build": {
-    "appId": "com.pi-desktop.app",
+    "appId": "net.aiuo.pi-desktop",
     "productName": "PI-Desktop",
     "directories": {
       "output": "release"
@@ -204,11 +206,15 @@
           ]
         }
       ],
-      "icon": "build/icon.png",
+      "icon": "build/icon.ico",
       "extraResources": [
         {
           "from": "../../target/release/pi-desktop-host-core.exe",
           "to": "bin/pi-desktop-host-core.exe"
+        },
+        {
+          "from": "build/icon.ico",
+          "to": "app-icon.ico"
         }
       ]
     },

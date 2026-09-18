@@ -23,7 +23,7 @@ export type ShutdownState = {
   closeBehavior: CloseBehavior;
   tray: Tray | null;
   pluginLauncherAccelerator: string | null;
-  summonWindowAccelerator: string | null;
+  toggleWindowAccelerator: string | null;
 };
 
 export type ShutdownDependencies = {
@@ -40,7 +40,8 @@ export type ShutdownDependencies = {
   userMcp: Pick<UserMcpRuntime, "disposeAll">;
   browserPane: Pick<BrowserPane, "dispose">;
   pluginViews: Pick<PluginViewHost, "dispose">;
-  updater: Pick<AppUpdaterController, "dispose">;
+  pluginSettingsViews: Pick<PluginViewHost, "dispose">;
+  updater: Pick<AppUpdaterController, "dispose" | "isInstallingUpdate">;
   logger: Pick<Logger, "app">;
   confirmQuitDialog: () => Promise<boolean>;
 };
@@ -60,6 +61,7 @@ export function registerShutdownHandlers({
   userMcp,
   browserPane,
   pluginViews,
+  pluginSettingsViews,
   updater,
   logger,
   confirmQuitDialog,
@@ -92,7 +94,13 @@ export function registerShutdownHandlers({
       process.env.PI_DESKTOP_BOOT_PROBE === "1" ||
       process.env.PI_DESKTOP_SUPERVISION_PROBE === "1" ||
       process.env.PI_DESKTOP_CAPTURE === "1";
-    if (!state.quitConfirmed && !isAutomatedMode) {
+    // Skip confirmation for the quit that an in-app update performs. The
+    // installer for that update was already spawned before app.quit(), and it
+    // aborts once the app stays alive for a few seconds, so deferring this quit
+    // behind a dialog fails the update. There is no decision left either: the
+    // user chose "restart to update" to get here.
+    const isUpdateRestart = updater.isInstallingUpdate();
+    if (!state.quitConfirmed && !isAutomatedMode && !isUpdateRestart) {
       state.quitConfirmed = true;
       void confirmQuitDialog().then((confirmed) => {
         if (confirmed) {
@@ -112,9 +120,9 @@ export function registerShutdownHandlers({
       globalShortcut.unregister(state.pluginLauncherAccelerator);
       state.pluginLauncherAccelerator = null;
     }
-    if (state.summonWindowAccelerator) {
-      globalShortcut.unregister(state.summonWindowAccelerator);
-      state.summonWindowAccelerator = null;
+    if (state.toggleWindowAccelerator) {
+      globalShortcut.unregister(state.toggleWindowAccelerator);
+      state.toggleWindowAccelerator = null;
     }
     state.shutdownPromise = (async () => {
       // Replies still streaming are stopped through the sidecar first so their
@@ -141,6 +149,7 @@ export function registerShutdownHandlers({
       userMcp.disposeAll();
       browserPane.dispose();
       pluginViews.dispose();
+      pluginSettingsViews.dispose();
       inflightCheckpointer.dispose();
       const sidecarShutdown = getSidecar()?.dispose();
 

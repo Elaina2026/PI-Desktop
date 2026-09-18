@@ -126,6 +126,38 @@ plugin runtime
  → response
 ```
 
+### 6.1 实时能力的白名单名称与审计操作
+
+代理的 `HOST_API_ALLOWLIST` 新增三个已实现的条目，全部由
+`keyboard.globalShortcut` 把关：
+
+- `keyboard.registerGlobalShortcut`
+- `keyboard.unregisterGlobalShortcut`
+- `keyboard.listGlobalShortcuts`
+
+对应的审计操作是 `keyboard.globalShortcut.register`、
+`keyboard.globalShortcut.unregister` 和 `keyboard.globalShortcut.trigger`
+（快捷键被触发）。注册与触发的条目会记录加速键和命令；按键事件与输入文本绝不记录。
+
+套接字能力已实现：`net.websocket.connect` / `net.websocket.send` /
+`net.websocket.close` 已注册进同一份白名单，由 `net.websocket` 把关。它的审计
+操作是 `net.websocket.connect` 与 `net.websocket.close`（记录插件 id 与结果，
+从不记录载荷、请求头或密钥），外加被拒绝的 `net.websocket.send`；成功的
+`send` 不记入审计。帧只回到持有它的插件，以宿主事件 `net:websocket:open`、
+`net:websocket:message`、`net:websocket:close` 和 `net:websocket:error` 的形式送达。
+
+音频能力的名字已注册进同一份白名单：`audio.getInputDevices`、
+`audio.openInput`、`audio.closeInput`、`audio.getCaptureState`、
+`audio.onInputFrame`、`audio.offInputFrame`、`audio.openOutput`、
+`audio.writeOutput`、`audio.stopOutput` 和 `audio.closeOutput`。权限把关先执行：
+没有授权的调用会与其他任何需要把关的 API 一样，以 `PERMISSION_DENIED` 拒绝，
+并归到 `audio.capture.background` / `audio.playback.background` 名下。当前宿主
+还没有设备后端，所以每个通过把关的调用都会作为 `UNSUPPORTED` 拒绝记入审计 ——
+`{ api: "audio.<method>", ok: false, errorCode: "UNSUPPORTED" }` —— 并以该错误码
+拒绝；两个同步注册辅助函数 `audio.onInputFrame` / `audio.offInputFrame` 会同步
+抛出它。为设备服务预留的审计操作名：`audio.input.open` / `audio.input.close`、
+`audio.output.open` / `audio.output.stop` / `audio.output.close`（ADR 0257）。
+
 ## 7. PanelHost交互
 
 - 打开面板时创建独立视图
@@ -172,7 +204,9 @@ toast 加上 `pluginChanged` 到渲染器。
 2. host-core 首先解析持久操作模式。在 Agent 中，它运行
    正常权限流程（风险、会话授予、120 秒超时），然后发出
    通知 `plugins.execute`
-   `{ executionId, sessionId, toolCallId, toolName, args }`。
+   `{ executionId, sessionId, toolCallId, toolName, args, turnId }`。`turnId` 是
+   运行时回合身份，原样转发，以便插件工具上下文能与
+   `session:turnEnded` 事件对应。
 3. Plan 调用在主机策略步骤失败并显示 `PLUGIN_DISABLED_IN_PLAN`；他们
    永远不会达到 Electron 或插件运行时。 Agent 呼叫继续
    Electron主要执行注册的插件工具JS并通过RPC应答

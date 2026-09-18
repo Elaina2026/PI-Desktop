@@ -37,7 +37,15 @@ test("plugins page styles use design tokens in both themes", () => {
   assert.match(section, /\.plugins-search\s*\{[\s\S]*?--ds-text-primary/);
   assert.match(section, /\.plugins-modal\s*\{[\s\S]*?--ds-bg-elevated-opaque/);
   assert.match(section, /\.plugins-installed-mark\s*\{[\s\S]*?--ds-success/);
-  assert.match(section, /:root\[data-theme="light"\] \.plugins-modal-backdrop/);
+  // The permission-review veil is a token now (issue #341): light's 32% ink sits
+  // in the light token block instead of a literal `:root[data-theme]` override,
+  // and dark reads the same token from the base rule.
+  assert.match(
+    section,
+    /\.plugins-modal-backdrop\s*\{[^}]*background:\s*var\(--ds-modal-veil\)/,
+  );
+  assert.equal((stylesSource.match(/^\s*--ds-modal-veil:/gm) ?? []).length, 2);
+  assert.doesNotMatch(stylesSource, /:root\[data-theme="light"\] \.plugins-modal-backdrop/);
   // D296: the header, title glyph and segmented control carry tone, not rules.
   assert.doesNotMatch(section, /\.plugins-page-header\s*\{[^}]*border-bottom/);
   assert.match(section, /\.plugins-title-icon\s*\{[^}]*background:\s*var\(--plugins-tile-deep\)/);
@@ -73,7 +81,7 @@ test("plugins page styles tier permission risk with semantic tokens", () => {
 
 // D296: installed rows are separate soft tiles stacked with a gap, not one
 // hairline-separated panel. Nothing clips, so the row overflow menu can overhang
-// the tile below, and rows near the viewport bottom still open upwards.
+// the tile below. AnchoredMenu owns viewport clamping for rows near the bottom.
 test("plugins installed rows are stacked tiles that let row menus overhang", () => {
   const section = pluginsSection(stylesSource);
 
@@ -82,7 +90,8 @@ test("plugins installed rows are stacked tiles that let row menus overhang", () 
   assert.match(section, /\.plugins-row\s*\{[^}]*border-radius:\s*var\(--radius-md-plus\)[^}]*background:\s*var\(--plugins-tile\)/);
   assert.doesNotMatch(section, /\.plugins-row \+ \.plugins-row/);
   assert.doesNotMatch(section, /\.plugins-row:(first|last)-child/);
-  assert.match(section, /\.plugins-menu\.is-up\s*\{[\s\S]*?bottom:\s*calc\(100% \+ 5px\)/);
+  assert.match(section, /\.plugins-menu\s*\{[\s\S]*?position:\s*fixed;/);
+  assert.doesNotMatch(section, /\.plugins-menu\.is-up/);
 });
 
 // D296: the whole page is divider-free. In-flow rules — border-top/bottom,

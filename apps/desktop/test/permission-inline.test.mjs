@@ -29,7 +29,7 @@ import {
 import { createNavigationIntentController } from "../src/lib/navigation-intent.ts";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
-const [appSource, chatSurfaceSource, sessionPaneSource, composerSource, transcriptSource, cardSource, askCardSource, storeSource, browserSource, messageStyleSource] =
+const [appSource, chatSurfaceSource, sessionPaneSource, composerSource, transcriptSource, cardSource, askCardSource, storeSource, browserSource, messageStyleSource, composerStyleSource] =
   await Promise.all([
     readAppSource(),
     read("../src/components/ChatSurface.tsx"),
@@ -41,6 +41,7 @@ const [appSource, chatSurfaceSource, sessionPaneSource, composerSource, transcri
     readStoreSource(),
     read("../src/components/workpanel/PluginViewTab.tsx"),
     read("../src/styles/messages.css"),
+    read("../src/styles/composer.css"),
   ]);
 
 const eventsSource = readStoreModuleSync("slices/events-slice.ts");
@@ -163,7 +164,7 @@ test("asktool card is a stepwise, non-expiring composer question surface", () =>
   assert.match(composerSource, /headAsk\(s\.pendingAsks/);
   assert.doesNotMatch(transcriptSource, /AskToolCard/);
   // Each retained pane subscribes to its own session's ask queue (ADR 0137).
-  assert.match(sessionPaneSource, /askPending=\{askPending\}/);
+  assert.match(sessionPaneSource, /askPending=\{transcript\.historical \? false : askPending\}/);
   assert.match(sessionPaneSource, /headAsk\(state\.pendingAsks, sessionId\)/);
   assert.match(storeSource, /event\.type === "asktool_request"/);
   assert.match(askCardSource, /current\.multiSelect/);
@@ -174,6 +175,22 @@ test("asktool card is a stepwise, non-expiring composer question surface", () =>
   assert.match(messageStyleSource, /\.asktool-options[\s\S]*?overflow-y:\s*auto/);
   assert.match(messageStyleSource, /\.asktool-options[\s\S]*?max-height:\s*min\(320px,\s*36dvh\)/);
   assert.match(messageStyleSource, /\.asktool-options[\s\S]*?overscroll-behavior-y:\s*contain/);
+  // The card is a dock surface, not an in-flow tile: it paints the composer
+  // plate with its shadow and its rows are inlaid on that plate (issue #360).
+  assert.match(
+    composerStyleSource,
+    /\.composer-stack > \.asktool-card \{[^}]*background: var\(--ds-bg-composer\)/,
+  );
+  assert.match(
+    composerStyleSource,
+    /\.composer-stack > \.asktool-card \{[^}]*box-shadow: var\(--ds-shadow-composer\)/,
+  );
+  assert.doesNotMatch(messageStyleSource, /\.asktool-option \{[^}]*--ds-raised/);
+  assert.match(messageStyleSource, /\.asktool-option \{[^}]*background: var\(--ds-tile-deep\)/);
+  assert.match(
+    messageStyleSource,
+    /\.asktool-custom-input \{[^}]*background: var\(--ds-tile-deep\)/,
+  );
 });
 
 test("permission countdown uses its absolute receipt time", () => {
@@ -193,7 +210,7 @@ test("permission approval is an inline transcript card, never a global dialog", 
   assert.match(chatSurfaceSource, /headPermission\(state\.pendingPermissions/);
   assert.match(
     sessionPaneSource,
-    /pendingPermission=\{pendingPermission\}/,
+    /pendingPermission=\{transcript\.historical \? undefined : pendingPermission\}/,
   );
   assert.match(
     sessionPaneSource,

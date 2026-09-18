@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type AnimationEvent as ReactAnimationEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useSidebarTransition } from "./useSidebarTransition";
 import { useTranslation } from "react-i18next";
 import {
   KEYBOARD_SHORTCUTS,
@@ -69,7 +70,10 @@ export function useAppShellRuntime() {
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth] = useState(() => loadSidebarWidth());
-  const [sidebarExiting, setSidebarExiting] = useState(false);
+  const { sidebarEntering, sidebarExiting, handleSidebarAnimationEnd } = useSidebarTransition(
+    sidebarCollapsed,
+    ready && page !== "settings",
+  );
   const [shellWidth, setShellWidth] = useState(0);
   const appShellRef = useRef<HTMLDivElement>(null);
   const sidebarCollapsedRef = useRef(sidebarCollapsed);
@@ -143,33 +147,6 @@ export function useAppShellRuntime() {
     autoCollapsedSidebarRef.current = true;
     setSidebarCollapsed(true);
   }, []);
-  // Keep the exit flag in sync with the collapsed state so collapsing plays
-  // the sidebar-out keyframe and expanding cancels it (mirrors the work-panel
-  // mount-then-animate-then-unmount machine).
-  //
-  // This is adjusted during render, not in an effect. An effect runs after the
-  // commit, so the collapsing render would evaluate `!collapsed || exiting` as
-  // `false || false` and unmount the dock outright; the effect then remounts it
-  // with `is-exiting`. That paints one frame with no dock at all — the whole
-  // sidebar blinks out and back before the collapse keyframe even starts.
-  const prevSidebarCollapsed = useRef(sidebarCollapsed);
-  if (prevSidebarCollapsed.current !== sidebarCollapsed) {
-    prevSidebarCollapsed.current = sidebarCollapsed;
-    setSidebarExiting(sidebarCollapsed);
-  }
-  const handleSidebarAnimationEnd = (event: ReactAnimationEvent<HTMLElement>) => {
-    if (event.target !== event.currentTarget) return;
-    if (!sidebarExiting) return;
-    if (!event.animationName.startsWith("sidebar-out")) return;
-    setSidebarExiting(false);
-  };
-
-  // Fallback in case animationend is skipped (e.g. display:none mid-flight).
-  useEffect(() => {
-    if (!sidebarExiting) return;
-    const timer = window.setTimeout(() => setSidebarExiting(false), 240);
-    return () => window.clearTimeout(timer);
-  }, [sidebarExiting]);
   const [presentedWorkPanelOpen, setPresentedWorkPanelOpen] = useState(false);
   const [workPanelMaximized, setWorkPanelMaximized] = useState(false);
   const [workPanelExiting, setWorkPanelExiting] = useState(false);
@@ -438,8 +415,23 @@ export function useAppShellRuntime() {
     if (!ready) return;
     void refreshPluginThemes();
     // Enabling, disabling or uninstalling a plugin changes which themes exist.
+    // Runtime `themes.upsert` / `themes.remove` also emit this event.
     return api.onPluginChanged(() => void refreshPluginThemes());
   }, [ready, refreshPluginThemes]);
+
+  useEffect(() => {
+    if (!ready) return;
+    // Host-originated settings writes (plugin `app.setTheme`) must reach the
+    // renderer store or the shell keeps painting the previous preference.
+    return api.onSettingsChanged((patch) => {
+      if (patch.theme === undefined) return;
+      const current = useAppStore.getState().settings;
+      if (!current) return;
+      useAppStore.setState({
+        settings: { ...current, theme: String(patch.theme) as typeof current.theme },
+      });
+    });
+  }, [ready]);
 
   useEffect(() => {
     if (!ready) return;
@@ -477,7 +469,7 @@ export function useAppShellRuntime() {
         // Appended last so plugin overrides win over the base token sheet.
         document.head.append(style);
       }
-      style.textContent = pluginTheme.css;
+      style.textContent = `${pluginTheme.css}\n${pluginTheme.variablesCss ?? ""}`;
       document.documentElement.dataset.pluginTheme = pluginTheme.id;
     } else {
       style?.remove();
@@ -645,6 +637,11 @@ export function useAppShellRuntime() {
     const onKey = (e: KeyboardEvent) => {
       const modifierOnly = MODIFIER_ONLY_KEYS.has(e.key);
       if (modifierOnly || e.isComposing || e.keyCode === 229) return;
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.code === "KeyP" || e.key.toLowerCase() === "p")) {
+        e.preventDefault();
+        setQuickOpenOpen(true);
+        return;
+      }
       const shortcut = KEYBOARD_SHORTCUTS.find((candidate) =>
         keybindingMatchesEvent(
           resolveKeybinding(
@@ -701,9 +698,6 @@ export function useAppShellRuntime() {
           case "openSearch":
             setSearchOpen(true);
             break;
-          case "openQuickOpen":
-            setQuickOpenOpen(true);
-            break;
           case "openCommandPalette":
             setSearchOpen(true);
             break;
@@ -721,8 +715,11 @@ export function useAppShellRuntime() {
           case "abort":
             void abort();
             break;
-          case "closeWindow":
-            void api.windowControl("close");
+          case "toggleWindow":
+            // The same native action the menu item runs (D438): hide the window
+            // the user is looking at, or bring it back. The window's own close
+            // button stays the only path into the close behaviour.
+            void api.nativeMenuAction("toggleMainWindow");
             break;
           case "resetZoom":
           case "zoomIn":
@@ -851,6 +848,7 @@ export function useAppShellRuntime() {
     setQuickOpenOpen,
     sidebarCollapsed,
     setSidebarCollapsed,
+    sidebarEntering,
     sidebarExiting,
     sidebarWidth,
     handleSidebarWidthChange,

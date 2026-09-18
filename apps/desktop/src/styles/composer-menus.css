@@ -8,7 +8,6 @@
 :root[data-theme="dark"] .composer-shell {
   /* Codex elevated-primary: #212121f5 / gray-800 96% (not flat solid) */
   background: var(--ds-bg-elevated-primary);
-  background-color: #212121f5;
   box-shadow: var(--ds-shadow-composer);
   border: 0;
   outline: 0;
@@ -16,9 +15,9 @@
 
 :root[data-theme="dark"] .composer-input::placeholder,
 :root[data-theme="dark"] .composer-placeholder {
-  /* Codex dark placeholder ~42% white */
-  color: color-mix(in oklab, var(--gray-0) 42%, transparent);
-  -webkit-text-fill-color: color-mix(in oklab, var(--gray-0) 42%, transparent);
+  /* Codex dark placeholder ink (--ds-placeholder-ink). */
+  color: var(--ds-placeholder-ink);
+  -webkit-text-fill-color: var(--ds-placeholder-ink);
   opacity: 1;
 }
 
@@ -409,9 +408,11 @@
 /* Plan approval mode menu. The split trigger lives in composer.css; this
    partial owns the floating menu surface and its keyboard-highlight states. */
 .plan-approval-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: auto;
+  bottom: auto;
   z-index: 25;
   width: max-content;
   min-width: 150px;

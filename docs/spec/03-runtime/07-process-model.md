@@ -58,7 +58,10 @@ applies it before spawning the agent sidecar (D340). Chromium sessions use
 the same config through `sidecar.configure` and `PI_DESKTOP_PROXY_JSON`.
 HTTP(S) provider requests use undici's proxy dispatcher; SOCKS5 provider
 requests use a buffered CONNECT tunnel so a proxy may coalesce the SOCKS
-handshake response without stalling the request.
+handshake response without stalling the request. Custom URLs with userinfo
+keep credentials for Node and curl; Chromium is pointed at a loopback SOCKS5
+relay that injects them, because `proxyRules` cannot carry userinfo (issue
+#490).
 host-core marketplace `curl` gets `--proxy` from the stored settings and does
 **not** inherit proxy env, so workspace Bash cannot see proxy credentials.
 Marketplace curl diagnostics prefer UTF-8 and fall back to the active Windows

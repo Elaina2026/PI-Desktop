@@ -92,6 +92,7 @@
 - [13-plugin-permissions-matrix.md](/zh-CN/spec/07-plugins/13-plugin-permissions-matrix)
 - [14-plugin-roadmap.md](/zh-CN/spec/07-plugins/14-plugin-roadmap)
 - [15-plugin-center.md](/zh-CN/spec/07-plugins/15-plugin-center)
+- [16-trusted-extensions.md](/zh-CN/spec/07-plugins/16-trusted-extensions)
 
 ## 8. 元数据
 - [README.md](/zh-CN/spec/08-meta/README)

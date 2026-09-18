@@ -1,4 +1,4 @@
-# 04. 数据存储（架构 v16）
+# 04. 数据存储（架构 v17）
 
 > **翻译说明：** 本页是与 [英文源规格](/spec/03-runtime/04-data-storage) 一一对应的机器辅助翻译。代码、协议字段和标识符保持原文；如翻译与英文源事实有歧义，以英文版本为准。
 
@@ -132,6 +132,9 @@ commit 不会删除历史审查证据。
   重启后的上下文。活动回合的 `retainedTail` 最多保存最新的用户消息；
   已完成回合的检查点尾部为空。`details.retainedTailMode`（`active_turn` 或
   `completed_turn`）持久化该边界；没有该字段的旧记录归一化为最新的用户消息。
+  当绑定模型需要 DeepSeek 风格推理回放时，`details.retainedReasoning` 可保存有界的
+  先前思考回合（仅 text + thinking），以便压缩后的 Completions 请求能回传可用推理
+  而不恢复 tool-call 对（ADR 0256 / #296）。
   活动消息超过保留限制时，将以标记、截断的形式存储；UI/diagnostics 的原始消息行
   保持完整和权威。
   自动压缩失败可能会存储 `details.fallback = "retained_tail"`
@@ -299,8 +302,14 @@ CREATE TABLE providers (
   default_model_id TEXT,
   config_json      TEXT NOT NULL DEFAULT '{}',
   created_at       INTEGER NOT NULL,
-  updated_at       INTEGER NOT NULL
+  updated_at       INTEGER NOT NULL,
+  -- 插件在 `contributes.providers` 中声明该行时的所属插件 id
+  --（架构 v17，ADR 0259）。NULL 表示用户自有的行：插件每次加载都会刷新
+  -- 自己的字段，而用户路径只能编辑或删除自己拥有的行。
+  owner_plugin_id  TEXT
 );
+CREATE INDEX idx_providers_owner ON providers(owner_plugin_id)
+  WHERE owner_plugin_id IS NOT NULL;
 ```
 
 ### 4.4 models — 目录缓存
@@ -545,6 +554,7 @@ CREATE TABLE turn_queue (
   attachments_json TEXT,
   permission_mode  TEXT NOT NULL,
   position         INTEGER NOT NULL,
+  priority         INTEGER,
   created_at       INTEGER NOT NULL
 );
 CREATE INDEX idx_turn_queue_session ON turn_queue(session_id, position);
@@ -554,11 +564,14 @@ CREATE UNIQUE INDEX idx_turn_queue_idempotency
 ```
 
 - 每条在活动回合之后准入的 prompt 一行（D375 / ADR 0213）。无头 Agent Host 模块是唯一
-  写入方，经 `session.queuePush`、`session.queueList`、`session.queueRemove` 操作；存储
-  本身绝不启动回合。
+  写入方，经 `session.queuePush`、`session.queueList`、`session.queueRemove`、
+  `session.queuePrioritize`、`session.queueReorder` 操作；存储本身绝不启动回合。
 - `position` 按会话只增不减，删除一条不会重排其余条目。`principal` 加 `idempotency_key`
   使重试的 push 返回同一行；同一 key 配不同 `input_hash` 则以 `IDEMPOTENCY_CONFLICT`
   失败。每个会话最多八条。
+- `priority`（架构 v18，ADR 0265）在被“立即发送”提升之前为 `NULL`；提升写入会话内的
+  `MAX(priority) + 1`，因此已优先条目按点击顺序最先投递，其余条目保持 `position` 顺序。
+  `queueReorder` 交换两个相邻的未优先条目的 `position`，并拒绝已优先条目。
 - `attachments_json` 保存 prompt 的附件引用；字节和其他 prompt 附件一样留在会话 scratch
   或项目根下。
 - 重启后模块列出全部条目，把每个会话的队列挂起到 controller 接入，并在活动回合终止事件
@@ -991,6 +1004,7 @@ CREATE INDEX idx_notifications_unread
 | 修订版开关 | 先为实时分支自身的变体追加刷新行，读取目标分支，原子转录重写并保留锚点仍存在的检查点 | 翻转 `is_active`，重建索引行并带上每条幸存消息所属的 `turn_id`，重置 `last_seq` |
 | 导入 | 写入转录文件 | 每个会话一笔交易：会话行 + 索引行；失败时文件将被删除 |
 | 会话删除 | 行删除后删除两个会话文件 | `DELETE FROM sessions`（级联）；Electron 主进程会丢弃该会话的 outbox 条目（D318） |
+| 删除项目（`projects.remove`） | 在删除各自的行之后移除每个所属会话的文件 | 每个会话一笔交易（`DELETE FROM sessions`，级联），外加项目行及其 `projectMemory` kv 条目；磁盘上的项目文件夹从不被触碰 |
 | 孤立会话恢复（启动 / `session.appendMessage`，D318） | 保留现有的 JSONL 文件 | 重新插入缺失的 `sessions` 行，并依据该文件重建索引行；若文件也已不存在，追加操作会在现有 id 下插入一个占位行，使 outbox 能够排空 |
 
 规则：回合开始前用户消息持久（fsync'd 文件行）；
@@ -1084,7 +1098,11 @@ outbox 排空。渲染器侧的停止绝不重写已有已开始回复的转录
 - **架构 v16 是增量的。** 它增加会话协作 link 和投递表、生命周期索引，以及可为空的
   `turn_queue.session_message_id` 绑定（D409 / ADR 0239）。既有会话、回合、队列条目和
   插件数据保持有效。迁移前保留 `pi.sqlite.v15.bak`；启动恢复保留持久排队投递，但不会
-  自动重放已中断工作。
+- **架构 v17 是增量的。** 它增加可为空的 `providers.owner_plugin_id` 归属列及其部分索引
+  （ADR 0259），从而把插件在 `contributes.providers` 中声明的 provider 行与用户创建的行区分开
+  —— 所有 v17 之前的行保持 NULL 归属。该步骤之前保留 `pi.sqlite.v16.bak` 副本。
+  v15→v16 会话协作步骤现在写入 `16`（它自己的版本）而不是最新的架构常量，
+  因此 v15 文件可以在一次启动中走完两个步骤。
 - **架构 v7 首先到达 v8，然后使用受保护的路径。** v7→v8
   迁移之后是相同的受保护的 v8→v15 迁移；架构-v9 和
   schema-v10 数据库采用相同的受保护路径并接收精确的可读数据

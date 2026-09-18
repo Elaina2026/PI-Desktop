@@ -61,7 +61,6 @@ export const BUILTIN_SUBAGENT_DOCUMENTS: readonly string[] = [
 name: explorer
 description: Fast codebase search and pattern matching — find files, locate implementations and answer "where is X?" / "how does Y work?". Use when answering needs a sweep over many files and you only want the conclusion.
 tools: [Read, Glob, Grep, Bash]
-maxTurns: 60
 ---
 
 You are Explorer — a fast codebase navigation specialist.
@@ -88,7 +87,6 @@ than a guess.
 name: code-reviewer
 description: Review specific code or a specific change for defects. Use for a second opinion on correctness, edge cases and missing tests before you commit.
 tools: [Read, Glob, Grep]
-maxTurns: 50
 ---
 
 Review only what the task names, and read enough surrounding code to judge it.
@@ -107,7 +105,6 @@ the cases you checked — an empty review with no evidence is not a review.`,
 name: test-runner
 description: Run a specific test or build command and report what failed and why. Use when a command's output is long and only the failures matter.
 tools: [Read, Glob, Grep, Bash]
-maxTurns: 40
 ---
 
 Run the command the task names. Do not invent a different one, and do not fix
@@ -125,7 +122,6 @@ raw output out of the report except for the lines that carry the failure.`,
 name: fixer
 description: Implement a complete multi-file change from a spec. Use when a feature or fix spans several files and the work is separable — it can write files inside the workspace while you keep working.
 tools: [Read, Glob, Grep, Edit, Write, Bash]
-maxTurns: 80
 ---
 
 You are Fixer — a fast, focused implementation specialist. The main agent
@@ -160,7 +156,6 @@ Report in this shape:
 name: ui-designer
 description: Design and implement a web interface from a brief — visual system, motion and complete interaction states, inspected in the browser preview or project browser tests. Use for building or restyling a UI when the visual work should run in its own context.
 tools: [Read, Glob, Grep, BrowserPreview, Bash, Edit, Write]
-maxTurns: 80
 ---
 
 You are UI designer — a senior UI/UX designer and frontend engineer. The main
@@ -283,6 +278,12 @@ export type LoadSubagentOptions = {
   overrideDir?: string;
   /** Documents already scanned by host-core from `~/.agents/subagents`. */
   userDocuments?: readonly UserSubagentDocument[];
+  /**
+   * Handles whose shipped definition the user turned off (D202 activation for
+   * builtins, which are constants rather than documents). Their definitions
+   * stay out of `definitions` but still reach `builtins`.
+   */
+  disabledBuiltins?: readonly string[];
 };
 
 function loadUserSubagents(documents: readonly UserSubagentDocument[]): {
@@ -307,13 +308,22 @@ function loadUserSubagents(documents: readonly UserSubagentDocument[]): {
 
 /**
  * Definitions offered to a session: the user's global documents and the
- * builtins. Load failures degrade to diagnostics: a malformed document must not
- * cost the session its other delegates, let alone its turn.
+ * builtins, minus the builtins the user turned off. Load failures degrade to
+ * diagnostics: a malformed document must not cost the session its other
+ * delegates, let alone its turn.
+ *
+ * `builtins` carries every shipped definition that still wins its handle,
+ * whether or not it is switched on, so Settings can render an off builtin as a
+ * row with its own switch; `definitions` is what `Task` may actually offer.
  */
 export async function loadSubagentDefinitions(
   workspaceRoot: string | null | undefined,
   options: LoadSubagentOptions = {},
-): Promise<{ definitions: SubagentDefinition[]; diagnostics: string[] }> {
+): Promise<{
+  definitions: SubagentDefinition[];
+  builtins: SubagentDefinition[];
+  diagnostics: string[];
+}> {
   const builtin = builtinSubagents();
   const dir =
     options.overrideDir ??
@@ -338,12 +348,28 @@ export async function loadSubagentDefinitions(
       `dropped subagents past the catalog cap: ${merged.dropped.join(", ")}`,
     );
   }
-  return { definitions: merged.definitions, diagnostics };
+  // A switched-off builtin is excluded from the delegation catalog and from
+  // nothing else: a user document of the same name still shadows it, and a
+  // handle the user re-enables needs no document of its own to come back.
+  const disabled = new Set(options.disabledBuiltins ?? []);
+  const builtins = merged.definitions.filter(
+    (definition) => definition.source === "builtin",
+  );
+  return {
+    definitions: merged.definitions.filter(
+      (definition) =>
+        !(definition.source === "builtin" && disabled.has(definition.name)),
+    ),
+    builtins,
+    diagnostics,
+  };
 }
 
 /** The stored-provider fields a pin can be resolved against. */
 export type SubagentProviderSource = {
   id: string;
+  enabled?: boolean;
+  headers?: Record<string, string>;
   name: string;
   vendorKey?: string;
   baseUrl?: string;
@@ -432,21 +458,23 @@ export async function resolveSubagentProviders(input: {
   const allowed = subagentPinnedProviders(input.definitions);
   const secrets = new Map<string, string | undefined>();
 
-  for (const definition of input.definitions) {
-    const pin = definition.model;
-    if (!pin) continue;
+  const pins = input.definitions.flatMap((definition) =>
+    [definition.model, ...(definition.fallbackModels ?? [])]
+      .flatMap((pin) => pin ? [{ name: definition.name, pin }] : []),
+  );
+  for (const { name, pin } of pins) {
     const key = subagentModelKey(pin);
     if (resolved[key]) continue;
     if (!allowed.includes(pin.providerId)) {
       diagnostics.push(
-        `${definition.name}: too many pinned providers, ignoring "${key}"`,
+        `${name}: too many pinned providers, ignoring "${key}"`,
       );
       continue;
     }
     const provider = findSubagentProviderSource(pin.providerId, input.providers);
-    if (!provider) {
+    if (!provider || provider.enabled === false) {
       diagnostics.push(
-        `${definition.name}: no enabled provider matches "${pin.providerId}"`,
+        `${name}: no enabled provider matches "${pin.providerId}"`,
       );
       continue;
     }
@@ -460,7 +488,7 @@ export async function resolveSubagentProviders(input: {
     }
     const apiKey = secrets.get(provider.id) ?? "";
     if (!apiKey && !isVendorAccount && provider.authKind !== "none") {
-      diagnostics.push(`${definition.name}: provider "${provider.name}" has no API key`);
+      diagnostics.push(`${name}: provider "${provider.name}" has no API key`);
       continue;
     }
     // A vendor account resolves the pinned model against the signed-in
@@ -475,7 +503,7 @@ export async function resolveSubagentProviders(input: {
       }
       if (!binding) {
         diagnostics.push(
-          `${definition.name}: vendor account "${provider.name}" does not offer "${pin.modelId}"`,
+          `${name}: vendor account "${provider.name}" does not offer "${pin.modelId}"`,
         );
         continue;
       }
@@ -494,6 +522,8 @@ export async function resolveSubagentProviders(input: {
     resolved[key] = {
       id: provider.id,
       name: provider.name,
+      ...(provider.vendorKey ? { vendorKey: provider.vendorKey } : {}),
+      ...(provider.headers ? { headers: { ...provider.headers } } : {}),
       ...(binding?.baseUrl ?? provider.baseUrl
         ? { baseUrl: binding?.baseUrl ?? provider.baseUrl }
         : {}),

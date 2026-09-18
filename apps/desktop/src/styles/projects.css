@@ -441,15 +441,26 @@
 }
 
 .projects-menu {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 5px);
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: auto;
+  bottom: auto;
   z-index: 20;
   min-width: 196px;
   border-radius: var(--radius-md-plus);
   background: var(--ds-bg-elevated-opaque, var(--ds-bg-primary));
   box-shadow: 0 0 0 0.5px var(--ds-border-default), 0 12px 32px rgba(0, 0, 0, 0.2);
   padding: 5px;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.projects-menu.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
   animation: projects-menu-in var(--motion-duration-fast) var(--motion-ease-out) both;
 }
 
@@ -465,7 +476,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .projects-menu {
+  .projects-menu.is-open {
     animation: none;
   }
 }
@@ -501,6 +512,11 @@
   background: color-mix(in oklab, var(--ds-error) 12%, transparent);
 }
 
+/* An armed delete item names its second click, so the swap stays obvious. */
+.projects-menu button.danger.is-armed {
+  background: color-mix(in oklab, var(--ds-error) 14%, transparent);
+}
+
 /* Menu sections are separated by space, not a rule (D297). */
 .projects-menu-sep {
   height: 6px;
@@ -514,6 +530,28 @@
 */
 .projects-row-detail {
   padding: 0 14px 14px 85px;
+}
+
+.projects-detail-roots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 8px;
+}
+
+.projects-detail-root {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 5px;
+  color: var(--ds-text-muted);
+  font-size: var(--text-xs);
+}
+
+.projects-detail-root span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .projects-detail-header {
@@ -706,4 +744,69 @@
   .projects-toolbar-actions {
     margin-left: 0;
   }
+}
+
+/*
+  Destructive project deletion reuses the project-instructions dialog shell;
+  only the width, the warning line, and the confirm button are specific here.
+  The width rule is compound because providers.css imports later.
+*/
+.dialog.project-delete-dialog {
+  width: min(100%, 480px);
+}
+
+.project-delete-dialog .project-instructions-dialog-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.project-delete-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.project-delete-dialog-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  color: var(--ds-error);
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+}
+
+.project-delete-dialog-warning svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+/*
+  The running-session line is a "these will be stopped" notice, not the
+  destructive warning above it, so it carries the warning tone.
+*/
+.project-delete-dialog-running {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  color: var(--ds-warning);
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+}
+
+.project-delete-dialog-running svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.project-delete-dialog-confirm {
+  background: var(--ds-error);
+  border-color: var(--ds-error);
+  color: var(--ds-bg-primary);
+}
+
+.project-delete-dialog-confirm:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--ds-error) 85%, #000);
 }

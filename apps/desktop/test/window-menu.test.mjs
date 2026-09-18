@@ -6,6 +6,10 @@ import { loadStyles } from "./helpers/styles.mjs";
 import { readMainSource } from "./helpers/main-source.mjs";
 
 const mainSource = await readMainSource();
+const activationSource = await readFile(
+  new URL("../electron/main/bootstrap/app-activation.ts", import.meta.url),
+  "utf8",
+);
 const menuSource = await readFile(
   new URL("../electron/main/application-menu.ts", import.meta.url),
   "utf8",
@@ -91,7 +95,18 @@ test("macOS application menu routes shell commands and preserves native roles", 
     assert.match(menuSource, new RegExp(`role: "${role}"`));
   }
   assert.match(menuSource, /function nativeAction\(/);
-  for (const action of ["close", "resetZoom", "zoomIn", "zoomOut", "toggleFullScreen"]) {
+  // The File menu's window item is the merged visibility toggle (D438): its
+  // accelerator is the toggle's own binding (D438, rebound by D439) and its
+  // click is that native action.
+  assert.match(menuSource, /accelerator\("toggleWindow"\)/);
+  assert.match(menuSource, /labels\.menu\.toggleWindow/);
+  for (const action of [
+    "toggleMainWindow",
+    "resetZoom",
+    "zoomIn",
+    "zoomOut",
+    "toggleFullScreen",
+  ]) {
     assert.match(menuSource, new RegExp(`"${action}"`));
   }
   assert.match(menuSource, /A plain item keeps the command clickable/);
@@ -320,14 +335,18 @@ test("Windows taskbar minimize keeps the taskbar entry", () => {
 });
 
 test("macOS activation resurfaces a tray-hidden window", () => {
-  assert.match(mainSource, /app\.on\("activate", \(\) => \{\s*restoreMainWindow\(\);/);
   assert.match(
     mainSource,
+    /registerApplicationActivation\(\{[\s\S]*restoreMainWindow,/,
+  );
+  assert.match(activationSource, /app\.on\("activate", restoreMainWindow\)/);
+  assert.match(
+    activationSource,
     /app\.on\("did-become-active", \(\) => \{[\s\S]*restoreMainWindow\(\);/,
   );
   assert.match(
-    mainSource,
-    /if\s*\(\s*quitting\s*\|\|\s*!applicationLifecycleState\.applicationBooted\s*\|\|\s*hasVisibleWindow\(\)\s*\)\s*return;/,
+    activationSource,
+    /if\s*\(\s*isQuitting\(\)\s*\|\|\s*!isApplicationBooted\(\)\s*\|\|\s*hasVisibleWindow\(\)\s*\)\s*return;/,
   );
   assert.match(
     mainSource,

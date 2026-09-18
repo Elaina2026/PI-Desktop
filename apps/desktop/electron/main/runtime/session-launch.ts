@@ -4,6 +4,8 @@ import {
   isActiveInProject,
   isCommandShellCatalog,
   normalizeMode,
+  resolveBindingContextWindow,
+  trustedExtensionAgentKeyFromProviderId,
   type CommandShellCatalog,
   type McpServerRecord,
   type ModelBinding,
@@ -187,6 +189,31 @@ export function createSessionLaunchRuntime({
   }
 
   /**
+   * Handles whose shipped definition the user turned off (D202 activation for
+   * builtins, which are constants and so have no document to scan).
+   *
+   * host-core owns the state. An unavailable host, or a failed read, contributes
+   * no exclusions: losing a delegate the user kept is worse than offering one
+   * they switched off.
+   */
+  async function disabledBuiltinSubagents(): Promise<string[]> {
+    if (!runtimeState.host?.isAvailable()) return [];
+    try {
+      const result = await runtimeState.host!.call<{ disabled: string[] }>(
+        "agents.disabledBuiltins",
+      );
+      return result.disabled ?? [];
+    } catch (error) {
+      if (!isHostUnavailable(error)) {
+        logger.app("plugin", "warn", "builtin subagent state failed", {
+          data: String(error),
+        });
+      }
+      return [];
+    }
+  }
+
+  /**
    * Load one of the user's own skill documents by id, or `null` if there is no
    * such skill — so the caller can fall through to the plugin catalog.
    *
@@ -248,34 +275,45 @@ export function createSessionLaunchRuntime({
       { includeDisabled: false },
     );
     const requestedProviderId = overrides.providerId ?? session.providerId;
-    const provider =
-      providers.providers.find((item) => item.id === requestedProviderId) ||
-      providers.providers.find((item) => item.id === settings.defaultProviderId) ||
-      providers.providers.find(
-        (item) => item.hasSecret || item.hasOauth || item.authKind === "none",
-      ) ||
-      providers.providers[0];
+    const extensionAgentKey = requestedProviderId
+      ? trustedExtensionAgentKeyFromProviderId(requestedProviderId)
+      : undefined;
+    const provider: RuntimeProvider = extensionAgentKey
+      ? {
+          id: requestedProviderId!,
+          name: "Plugin agent",
+          modelId: overrides.modelId ?? session.modelId,
+          authKind: "none",
+          extensionAgentKey,
+        }
+      : providers.providers.find((item) => item.id === requestedProviderId) ||
+        providers.providers.find((item) => item.id === settings.defaultProviderId) ||
+        providers.providers.find(
+          (item) => item.hasSecret || item.hasOauth || item.authKind === "none",
+        ) ||
+        providers.providers[0];
     if (!provider) {
       throw Object.assign(new Error("No provider configured"), {
         errorCode: ErrorCodes.MODEL_NOT_CONFIGURED,
       });
     }
-    // A vendor account has no long-lived key to read: the sidecar asks main for
-    // short-lived request auth instead (see `provider.resolveAuth`), so the
-    // launch payload deliberately carries no credential at all.
-    const isVendorAccount = provider.authKind === OAUTH_AUTH_KIND;
-    const secret = isVendorAccount
+    // Plugin-owned agents resolve credentials and transport inside the trusted
+    // extension; the host never reads or injects a secret for them.
+    const isExtensionAgent = Boolean(extensionAgentKey);
+    const isVendorAccount = !isExtensionAgent && provider.authKind === OAUTH_AUTH_KIND;
+    const secret = isExtensionAgent || isVendorAccount
       ? { value: undefined }
       : await runtimeState.host!.call<{ value?: string }>("providers.getSecret", {
           id: provider.id,
         });
-    if (!secret.value && !isVendorAccount && provider.authKind !== "none") {
+    if (!secret.value && !isExtensionAgent && !isVendorAccount && provider.authKind !== "none") {
       throw Object.assign(new Error("Provider API key missing"), {
         errorCode: ErrorCodes.PROVIDER_SECRET_MISSING,
       });
     }
-    const modelId =
-      (provider.id === requestedProviderId
+    const modelId = isExtensionAgent
+      ? overrides.modelId ?? session.modelId
+      : (provider.id === requestedProviderId
         ? overrides.modelId ?? session.modelId
         : undefined) ||
       (provider.id === settings.defaultProviderId
@@ -310,7 +348,11 @@ export function createSessionLaunchRuntime({
       (modelsDevModel
         ? modelConfigFromModelsDev(modelsDevModel, baseUrl)
         : genericModelConfig(modelId, baseUrl ?? ""));
-    const modelConfig = modelConfigWithBinding(catalogModelConfig, storedModel);
+    const resolvedLimits = resolveBindingContextWindow(catalogModelConfig, storedModel);
+    const modelConfig = modelConfigWithBinding(
+      resolvedLimits.catalogConfig,
+      resolvedLimits.binding,
+    );
     const thinkingCapabilities = capabilitiesFromModelConfig(modelConfig);
     const thinkingLevel = clampThinkingLevel(
       thinkingCapabilities,
@@ -349,17 +391,59 @@ export function createSessionLaunchRuntime({
         : getWorkspacePath()) ??
       undefined;
     const projectPath = effectiveProjectPath;
-    const projectInstructions = await loadInstructionChain(projectPath);
+    let projectInstructions = await loadInstructionChain(projectPath);
     let projectMemory: string | undefined;
     if (projectPath) {
       try {
         const result = await runtimeState.host!.call<{
-          memory?: { content?: string };
-        }>("project.memory.get", { path: projectPath });
-        const content = result.memory?.content?.trim();
-        if (content) projectMemory = content;
+          context?: {
+            roots?: Array<{ path?: string }>;
+            instructions?: string;
+            memory?: { content?: string };
+          } | null;
+        }>("project.group.context", { path: projectPath });
+        const groupRoots = result.context?.roots ?? [];
+        const groupRootGuide = groupRoots.length > 1
+          ? [
+              `Primary root: ${groupRoots[0]?.path ?? projectPath}`,
+              ...groupRoots.slice(1).map((root) => `Additional root: ${root.path}`),
+              "Use an absolute path when reading or editing an additional root.",
+            ].join("\n")
+          : "";
+        const groupInstructions = result.context?.instructions?.trim();
+        if (groupRootGuide || groupInstructions) {
+          projectInstructions = {
+            entries: [
+              ...(projectInstructions?.entries ?? []),
+              ...(groupRootGuide
+                ? [{ source: "ChatGPT Project folders", content: groupRootGuide }]
+                : []),
+              ...(groupInstructions
+                ? [{ source: "ChatGPT Project instructions", content: groupInstructions }]
+                : []),
+            ],
+          };
+        }
+        const groupMemory = result.context?.memory?.content?.trim();
+        if (groupMemory) projectMemory = groupMemory;
+        if (!result.context) {
+          const legacy = await runtimeState.host!.call<{
+            memory?: { content?: string };
+          }>("project.memory.get", { path: projectPath });
+          const content = legacy.memory?.content?.trim();
+          if (content) projectMemory = content;
+        }
       } catch {
-        // Project memory is best effort; it must never prevent a session launch.
+        // Project context is best effort; it must never prevent a session launch.
+        try {
+          const legacy = await runtimeState.host!.call<{
+            memory?: { content?: string };
+          }>("project.memory.get", { path: projectPath });
+          const content = legacy.memory?.content?.trim();
+          if (content) projectMemory = content;
+        } catch {
+          // Legacy memory is also best effort.
+        }
       }
     }
     sessionProjects.set(sessionId, projectPath ?? null);
@@ -406,6 +490,8 @@ export function createSessionLaunchRuntime({
     // skills above; a delegate the model can see is one it will try to call.
     const subagentCatalog = await loadSubagentDefinitions(projectPath, {
       userDocuments: await activeUserSubagentDocuments(projectPath),
+      // A switched-off builtin is dropped from what this prompt may delegate to.
+      disabledBuiltins: await disabledBuiltinSubagents(),
     });
     const subagentBindings = await resolveSubagentProviders({
       definitions: subagentCatalog.definitions,
@@ -566,6 +652,7 @@ export function createSessionLaunchRuntime({
           modelId,
           apiKey: secret.value || "",
           authKind: provider.authKind,
+          extensionAgentKey: provider.extensionAgentKey,
           apiStyle,
           ...optionalProviderHeaders(provider.headers),
           supportsReasoning: thinkingCapabilities.supportsReasoning,
@@ -622,6 +709,7 @@ export function createSessionLaunchRuntime({
     refreshUserMcp,
     activeUserSkills,
     activeUserSubagentDocuments,
+    disabledBuiltinSubagents,
     loadUserSkillBody,
     resolveEffectiveCommandShell,
     resolveAgentRuntimeLaunch,

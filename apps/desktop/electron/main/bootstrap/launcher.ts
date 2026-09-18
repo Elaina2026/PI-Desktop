@@ -16,7 +16,7 @@ import type { WindowLifecycleState } from "./window";
 export type LauncherState = {
   creationPromise: Promise<BrowserWindow> | null;
   pluginLauncherAccelerator: string | null;
-  summonWindowAccelerator: string | null;
+  toggleWindowAccelerator: string | null;
 };
 
 export type LauncherDependencies = {
@@ -26,8 +26,26 @@ export type LauncherDependencies = {
   getHost: () => HostProcess | null;
   logger: Pick<Logger, "app">;
   safeOpenExternal: (rawUrl: unknown) => Promise<void>;
-  restoreMainWindow: () => void;
+  toggleMainWindow: () => void;
 };
+
+/**
+ * Bindings the app currently spends on a process-wide accelerator, keyed by the
+ * shortcut id that owns them. The plugin shortcut registry reads this, so a
+ * plugin is refused an accelerator the app already holds and gets it back once
+ * the user rebinds the app shortcut away.
+ */
+const hostGlobalBindings = new Map<string, string>();
+
+/** Live view of the app's own global accelerators, for the plugin runtime. */
+export function hostGlobalShortcutBindings(): string[] {
+  return [...hostGlobalBindings.values()];
+}
+
+function recordHostGlobalBinding(id: string, binding: string | null): void {
+  if (binding) hostGlobalBindings.set(id, binding);
+  else hostGlobalBindings.delete(id);
+}
 
 export function createLauncher({
   state,
@@ -36,7 +54,7 @@ export function createLauncher({
   getHost,
   logger,
   safeOpenExternal,
-  restoreMainWindow,
+  toggleMainWindow,
 }: LauncherDependencies) {
 
   const PLUGIN_LAUNCHER_WIDTH = 620;
@@ -199,6 +217,7 @@ export function createLauncher({
     const binding = resolveKeybinding(shortcut, keybindings, platform);
     const accelerator = keybindingToElectronAccelerator(binding, platform);
     state.pluginLauncherBinding = binding;
+    recordHostGlobalBinding("openPluginLauncher", binding);
 
     if (process.platform === "win32" && getHost()?.isAvailable()) {
       void getHost()!
@@ -237,13 +256,16 @@ export function createLauncher({
   }
 
   /**
-   * Register the summon-window shortcut (D384). The default `Mod+Shift+W`
-   * brings a hidden/minimized-to-tray window back into focus; this is the
-   * symmetrical counterpart to `closeWindow` (`Mod+W`).
+   * Register the merged window toggle (D438, rebound by D439). The default
+   * `Alt+Shift+W` runs the same toggle the menu item and the renderer run: it
+   * hides the window the user is looking at, or brings a hidden/minimized-to-tray
+   * window back into focus. The key is process-wide, so it deliberately avoids
+   * `Mod+W` — macOS spends that chord on its own close-window command. The
+   * retired `Mod+Shift+W` summon binding is not registered either.
    */
-  function applySummonWindowShortcut(keybindings?: KeybindingOverrides) {
+  function applyToggleWindowShortcut(keybindings?: KeybindingOverrides) {
     const shortcut = KEYBOARD_SHORTCUTS.find(
-      (candidate) => candidate.id === "summonWindow",
+      (candidate) => candidate.id === "toggleWindow",
     );
     if (!shortcut || !app.isReady()) return;
     const platform: ShortcutPlatform =
@@ -254,20 +276,21 @@ export function createLauncher({
           : "linux";
     const binding = resolveKeybinding(shortcut, keybindings, platform);
     const accelerator = keybindingToElectronAccelerator(binding, platform);
+    recordHostGlobalBinding("toggleWindow", binding);
 
-    if (launcherState.summonWindowAccelerator && launcherState.summonWindowAccelerator !== accelerator) {
-      globalShortcut.unregister(launcherState.summonWindowAccelerator);
-      launcherState.summonWindowAccelerator = null;
+    if (launcherState.toggleWindowAccelerator && launcherState.toggleWindowAccelerator !== accelerator) {
+      globalShortcut.unregister(launcherState.toggleWindowAccelerator);
+      launcherState.toggleWindowAccelerator = null;
     }
 
-    if (!accelerator || accelerator === launcherState.summonWindowAccelerator) return;
+    if (!accelerator || accelerator === launcherState.toggleWindowAccelerator) return;
     const registered = globalShortcut.register(accelerator, () => {
-      restoreMainWindow();
+      toggleMainWindow();
     });
     if (registered) {
-      launcherState.summonWindowAccelerator = accelerator;
+      launcherState.toggleWindowAccelerator = accelerator;
     } else {
-      logger.app("diagnostics", "warn", "summon window shortcut unavailable", {
+      logger.app("diagnostics", "warn", "window toggle shortcut unavailable", {
         data: { accelerator, platform: process.platform },
       });
     }
@@ -281,6 +304,6 @@ export function createLauncher({
     showPluginLauncher,
     togglePluginLauncher,
     applyPluginLauncherShortcut,
-    applySummonWindowShortcut,
+    applyToggleWindowShortcut,
   };
 }

@@ -16,6 +16,7 @@
 |---|---|---|
 | 命令 | 全局搜索中的显式操作 | `contributes.commands`、`pi.commands.register` |
 | 面板 | 一个小的独立的 HTML 界面 | `ui.panel`、`ui.panel` 权限、`window.pluginBridge` |
+| 悬浮挂件 | 透明无边框的小挂件窗口——例如一个圆形球体 | `ui.panel` 权限、`"ui": { "shape": "widget" }`、`window.pluginBridge` |
 | Agent 工具 | Agent 可以调用的函数 | `contributes.agentTools`、`pi.agent.registerTool` |
 | 技能 | Agent 按需加载指令 | `contributes.skills`、`agent.prompt.inject` 权限 |
 | 主题 | 设计令牌覆盖 | `contributes.themes`、`ui.theme` 权限 |
@@ -216,6 +217,23 @@ PI-Desktop 在 macOS、Windows 和 Linux 上都使用无边框窗口承载面板
 
 计算视口高度时也要扣除同一个 46px：
 `height: calc(100dvh - var(--pi-plugin-titlebar-height, 46px))`。
+
+### 悬浮挂件
+
+如果一个插件的全部界面就是一个小小的悬浮形状——语音球、计时器、状态灯——
+就在清单里声明 `"ui": { "shape": "widget" }`，而不是接受一个带工具栏条的矩形。
+面板此时会以透明、无边框的窗口打开：
+
+- 没有 46px 拖拽带，也没有胶囊；`--pi-plugin-titlebar-height` 为 `0px`
+- 空白处拖动窗口；标准控件或任何带 `data-pi-plugin-no-drag` 标记的元素保持可点击
+- 在挂件上右键打开宿主菜单：关闭、最小化、始终置顶
+- `ui.width` / `ui.height` 最小可到 120×120，`ui.alwaysOnTop` 让挂件浮在其他窗口之上
+- 页面可读取 `document.documentElement.dataset.piPluginPanelShape`
+  （`panel` | `widget` | `view`），让同一份 HTML 适配三种位置
+
+自己绘制轮廓——`border-radius: 50%`、自定义阴影、溢出到形状之外的辉光——并让
+页面背景在轮廓之外保持透明，窗口就会隐没在形状之后。其余部分（`window.pluginBridge`、
+权限、设置）与面板完全一致。
 
 ```html
 <!doctype html>
@@ -471,6 +489,10 @@ root 本身。`net.fetch` 接受 HTTP(S)，并且只能到达 `manifest.net.doma
 一个你没声明的主机上。请把资源打进插件包，而不是从一个你还得额外声明的 CDN
 上加载。
 
+`fetch` 返回服务器实际给出的内容，`429` 和 `Retry-After` 都在内：宿主从不重试
+你的插件发出的请求，所以遇到限流之后的退避是你自己的策略，而不是主机隐藏的
+行为。返回 `>= 400` 的调用依然会进审计，记为 `ok: false` 并带上它通告的延迟。
+
 ### 6.7 主题
 
 声明 CSS 文件和 `ui.theme`：
@@ -651,8 +673,13 @@ export default function (pi) {
 | 风险 | 权限 |
 |---|---|
 | 低 | `ui.panel`、`ui.theme`、`notify` |
-| 中等 | `clipboard.read`、`clipboard.write`、`fs.read`、`shell.openExternal`、`background.service`、`bus.publish`、`bus.subscribe` |
-| 高 | `fs.write`、`fs.delete`、`agent.tool.register`、`agent.prompt.inject`、`net.fetch`、`mcp.server.local`、`mcp.server.remote` |
+| 中等 | `clipboard.read`、`clipboard.write`、`fs.read`、`shell.openExternal`、`background.service`、`bus.publish`、`bus.subscribe`、`audio.playback.background`、`keyboard.globalShortcut` |
+| 高 | `fs.write`、`fs.delete`、`agent.tool.register`、`agent.prompt.inject`、`net.fetch`、`mcp.server.local`、`mcp.server.remote`、`audio.capture.background`、`net.websocket` |
+
+`keyboard.globalShortcut` 与 `net.websocket` 已实现。`pi.audio.*` 已经存在并且
+可以调用，其方法仍由权限把关，但当前宿主还没有设备后端：获得授权的调用会以
+带错误码的 `UNSUPPORTED` 拒绝并记入审计，`onInputFrame` / `offInputFrame` 则
+同步抛出同一个错误码，直到设备服务落地并用真实的采集与播放取代这个拒绝。
 
 有两个权限除了名字之外还带一个声明出来的范围，并且两者都会展示给用户：
 文件模式看 `manifest.fs`（§6.5），出网看 `manifest.net.domains`（§6.6）。

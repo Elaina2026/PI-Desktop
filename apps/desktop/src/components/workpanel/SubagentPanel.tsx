@@ -15,22 +15,15 @@ import {
   type SubagentOutcome,
   type SubagentTiming,
 } from "../../lib/subagent-topology";
-import { toolResultPayload } from "../../lib/tool-presentation";
-import type { SubagentPanelSelection } from "../../lib/subagent-panel";
+import { delegationIdForMessage, type SubagentPanelSelection } from "../../lib/subagent-panel";
 import { useAppStore } from "../../stores/app-store";
 import { useFollowScroll } from "../../hooks/use-follow-scroll";
+import { useTranscriptView } from "../../hooks/use-transcript-view";
+import { useTranscriptSearchFocus } from "../../hooks/use-transcript-search-focus";
 import { IconArrowDown } from "../icons";
+import { DisclosureAnchorContext } from "../../lib/disclosure-anchor-context";
 import { TooltipButton } from "../ui";
 import { SubagentDetail } from "../ChatTranscript";
-
-function delegationIdForMessage(message: UiMessage): string {
-  const payload = toolResultPayload(message);
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const delegationId = (payload as { delegationId?: unknown }).delegationId;
-    if (typeof delegationId === "string" && delegationId) return delegationId;
-  }
-  return message.toolCallId || message.id;
-}
 
 type SelectedSubagent = {
   item: DelegationActivityItem;
@@ -60,11 +53,9 @@ function findSelectedSubagent(
 export function SubagentPanel({ selection }: { selection: SubagentPanelSelection }) {
   const { t } = useTranslation();
   const activeSessionId = useAppStore((state) => state.activeSessionId);
-  const messages = useAppStore((state) =>
-    state.activeSessionId === selection.sessionId
-      ? state.messages
-      : state.retainedTranscripts[selection.sessionId] ?? [],
-  );
+  const transcript = useTranscriptView(selection.sessionId);
+  const { messages } = transcript;
+  const searchTarget = selection.searchRequestId === transcript.focus?.requestId ? transcript.focus : null;
   const isRunning = useAppStore(
     (state) => state.runningSessions[selection.sessionId] ?? false,
   );
@@ -102,17 +93,29 @@ export function SubagentPanel({ selection }: { selection: SubagentPanelSelection
     handleScroll,
     jumpToLatest,
     scheduleFollowScroll,
+    releaseFollow,
+    disclosureAnchorNotifier,
   } = useFollowScroll();
 
   useLayoutEffect(() => {
-    jumpToLatest();
-  }, [jumpToLatest, selection.delegationId]);
+    if (!searchTarget) jumpToLatest();
+  }, [jumpToLatest, selection.delegationId, searchTarget]);
 
   useLayoutEffect(() => {
     scheduleFollowScroll();
   }, [messages, scheduleFollowScroll]);
 
+  useTranscriptSearchFocus({
+    target: searchTarget,
+    source: messages.find((message) => message.id === searchTarget?.messageId)?.content ?? "",
+    scrollRef,
+    contentRef,
+    contentVersion: messages,
+    onNavigate: releaseFollow,
+  });
+
   return (
+    <DisclosureAnchorContext.Provider value={disclosureAnchorNotifier}>
     <section
       id="subagent-panel"
       className="subagent-panel"
@@ -122,6 +125,7 @@ export function SubagentPanel({ selection }: { selection: SubagentPanelSelection
     >
       <div
         ref={scrollRef}
+        data-scroll-owner="follow"
         className="subagent-panel-scroll"
         onScroll={handleScroll}
         role="log"
@@ -163,5 +167,6 @@ export function SubagentPanel({ selection }: { selection: SubagentPanelSelection
           : t("panel.subagentEmpty")}
       </span>
     </section>
+    </DisclosureAnchorContext.Provider>
   );
 }

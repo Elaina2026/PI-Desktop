@@ -190,6 +190,10 @@ test("packaging keeps only shipped locales and excludes non-runtime artifacts", 
     ),
     "third-party license and notice files must remain packageable",
   );
+  // The agent-runtime dist-bundle mapping must remain a directory copy: the
+  // bundle emits dist-bundle/package.json with "type":"module" so the ESM
+  // sidecar.js loads in packaged installs (issue #507). Contract tests live
+  // in agent-runtime-bundle-package.test.mjs.
   assert.deepEqual(packageJson.build.extraResources, [
     {
       from: "build/icon.png",
@@ -278,7 +282,7 @@ test("macOS installers expose DMG guidance and retain the ZIP helper", () => {
   assert.match(macOpenFixNote, /PI-Desktop-macOS-open\.command/);
   assert.match(macOpenScript, /\/Applications\/\$\{APP_BUNDLE_NAME\}/);
   assert.match(macOpenScript, /CFBundleIdentifier/);
-  assert.match(macOpenScript, /com\.pi-desktop\.app/);
+  assert.match(macOpenScript, /net\.aiuo\.pi-desktop/);
   assert.match(macOpenScript, /\/usr\/bin\/xattr -r -d com\.apple\.quarantine/);
   assert.match(macOpenScript, /\/usr\/bin\/open/);
   assert.doesNotMatch(macOpenScript, /\bsudo\s+\//);

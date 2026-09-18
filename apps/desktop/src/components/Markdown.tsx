@@ -39,8 +39,18 @@ import {
 import { TooltipButton } from "./ui";
 import { createPortal } from "react-dom";
 import { api } from "../lib/api";
+import {
+  rehypeSourcePositions,
+  sourcePositionProps,
+  type SourcePositionProps,
+} from "../lib/markdown-source";
+import {
+  normalizeLatexMathDelimiters,
+  remarkLatexBracketDisplay,
+} from "../lib/latex-math";
 import { useAppStore } from "../stores/app-store";
 import { useReferencedImageDataUrl } from "../lib/use-referenced-image-data-url";
+import { useOpenChatFileRef } from "../hooks/use-preview-target";
 import {
   remarkChatFileLinks,
   resolvePreviewTarget,
@@ -192,11 +202,11 @@ export function HighlightedCode({
   );
 }
 
-function CodeBlock({ code, lang }: { code: string; lang: string }) {
+function CodeBlock({ code, lang, ...position }: { code: string; lang: string } & SourcePositionProps) {
   const { t } = useTranslation();
   const { copied, copy } = useCopy();
   return (
-    <div className="code-block">
+    <div className="code-block" {...position}>
       <div className="code-block-head">
         <span className="code-block-lang">{lang || "text"}</span>
         <TooltipButton
@@ -240,7 +250,7 @@ function useNearViewport(ref: RefObject<HTMLDivElement | null>): boolean {
   return nearViewport;
 }
 
-function MermaidBlock({ code }: { code: string }) {
+function MermaidBlock({ code, ...position }: { code: string } & SourcePositionProps) {
   const { t } = useTranslation();
   const theme = useThemeMode();
   const reactId = useId();
@@ -303,6 +313,7 @@ function MermaidBlock({ code }: { code: string }) {
   return (
     <div
       ref={rootRef}
+      {...position}
       className={`mermaid-block${error ? " error" : ""}`}
       aria-busy={loading}
     >
@@ -410,7 +421,7 @@ function PreBlock({
   node: _node,
   children,
   ...rest
-}: ComponentProps<"pre"> & { node?: unknown }) {
+}: ComponentProps<"pre"> & SourcePositionProps & { node?: unknown }) {
   const { closedFence, renderDiagrams } = useContext(MarkdownBlockContext);
   const info = extractCode(children);
   if (!info) return <pre {...rest}>{children}</pre>;
@@ -419,9 +430,9 @@ function PreBlock({
     closedFence &&
     info.lang.toLowerCase() === "mermaid"
   ) {
-    return <MermaidBlock code={info.code} />;
+    return <MermaidBlock code={info.code} {...sourcePositionProps(rest)} />;
   }
-  return <CodeBlock code={info.code} lang={info.lang} />;
+  return <CodeBlock code={info.code} lang={info.lang} {...sourcePositionProps(rest)} />;
 }
 
 /** Preview-in-panel tooltip for file and URL chat references. */
@@ -443,8 +454,8 @@ function InlineCode({
 }: ComponentProps<"code"> & { node?: unknown }) {
   const root = useAppStore((s) => s.workspace?.path);
   const baseDir = useContext(MarkdownBaseDirContext);
-  const openFile = useAppStore((s) => s.openFileInWorkPanel);
   const openUrl = useAppStore((s) => s.openUrlInWorkPanel);
+  const openFileRef = useOpenChatFileRef();
   const text = typeof children === "string" ? children : null;
   const target =
     text && !className && !text.includes("\n")
@@ -465,7 +476,9 @@ function InlineCode({
       className="chat-code-link"
       title={target.kind === "file" ? fileTitle : urlTitle}
       onClick={() =>
-        target.kind === "file" ? openFile(target.path) : openUrl(target.url)
+        target.kind === "file"
+          ? openFileRef(text ?? target.path, baseDir)
+          : openUrl(target.url)
       }
     >
       <code className={className} {...rest}>
@@ -484,7 +497,7 @@ function Anchor({
   const { t } = useTranslation();
   const root = useAppStore((s) => s.workspace?.path);
   const baseDir = useContext(MarkdownBaseDirContext);
-  const openFile = useAppStore((s) => s.openFileInWorkPanel);
+  const openFileRef = useOpenChatFileRef();
   const openUrl = useAppStore((s) => s.openUrlInWorkPanel);
   const showToast = useAppStore((s) => s.showToast);
   const linkOpenTarget = useAppStore((s) => s.settings?.linkOpenTarget ?? "workpanel");
@@ -584,7 +597,7 @@ function Anchor({
     const rel = toWorkspaceRel(safeDecodeUri(href), root, baseDir);
     if (rel) {
       e.preventDefault();
-      openFile(rel);
+      openFileRef(rel, baseDir);
     }
   };
   return (
@@ -661,10 +674,10 @@ function MarkdownImage({
   src,
   alt,
   ...rest
-}: ComponentProps<"img"> & { node?: unknown }) {
+}: ComponentProps<"img"> & SourcePositionProps & { node?: unknown }) {
   const root = useAppStore((s) => s.workspace?.path);
   const baseDir = useContext(MarkdownBaseDirContext);
-  const openFile = useAppStore((s) => s.openFileInWorkPanel);
+  const openFileRef = useOpenChatFileRef();
   const openUrl = useAppStore((s) => s.openUrlInWorkPanel);
   const openLightbox = useAppStore((s) => s.openLightbox);
   const fileTitle = usePreviewTitle("file");
@@ -710,8 +723,9 @@ function MarkdownImage({
       <button
         type="button"
         className="chat-image-chip"
+        {...sourcePositionProps(rest)}
         title={fileTitle}
-        onClick={() => openFile(localRef)}
+        onClick={() => openFileRef(localRef, baseDir)}
       >
         <IconImage size={14} aria-hidden />
         <span>{alt || localRef.split("/").pop()}</span>
@@ -773,11 +787,15 @@ const markdownComponents: Components = {
 
 const staticRemarkPlugins = [remarkGfm, remarkMath];
 
-// Extend the default schema only for the media elements rendered above.
+// Extend the default schema only for the media elements rendered above, plus
+// `remark-math`'s math classes on `<code>`: the default `language-*` allow list
+// drops `math-display`, which leaves `rehype-katex` rendering TeX `\[ … \]`
+// (single-line or mid-paragraph) as inline math instead of display math.
 const sanitizeSchema = {
   ...defaultSchema,
   attributes: {
     ...defaultSchema.attributes,
+    code: [["className", /^language-./, "math-inline", "math-display"]],
     img: [...(defaultSchema.attributes?.img || []), "src", "alt", "title", "className"],
     audio: ["src", "controls", "preload", "className"],
     video: ["src", "controls", "preload", "className", "poster"],
@@ -797,9 +815,21 @@ const rehypePlugins = [rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]
 
 function parseBlocks(source: string): string[] {
   const blocks: string[] = [];
+  let sourceOffset = 0;
+  const hasWindowsLines = source.includes("\r\n");
   for (const token of lexer(source)) {
-    const raw = token.raw;
-    if (!raw) continue;
+    if (!token.raw) continue;
+    const start = sourceOffset;
+    // Marked normalizes CRLF before tokenizing. Preserve original slices so
+    // parser offsets and incremental block lengths still refer to stored text.
+    if (hasWindowsLines) {
+      for (let i = 0; i < token.raw.length; i++, sourceOffset++) {
+        if (source[sourceOffset] === "\r" && source[sourceOffset + 1] === "\n") sourceOffset++;
+      }
+    } else {
+      sourceOffset += token.raw.length;
+    }
+    const raw = source.slice(start, sourceOffset);
     // Fold blank-line runs into the previous block so joining blocks
     // reconstructs the source and block boundaries stay append-stable.
     if (token.type === "space" && blocks.length > 0) {
@@ -840,11 +870,13 @@ function useBlocks(source: string): string[] {
 
 const Block = memo(function MarkdownBlock({
   raw,
+  sourceOffset,
   renderDiagrams,
   workspaceRoot,
   baseDir,
 }: {
   raw: string;
+  sourceOffset: number;
   renderDiagrams: boolean;
   workspaceRoot?: string | null;
   baseDir?: string;
@@ -856,21 +888,27 @@ const Block = memo(function MarkdownBlock({
     }),
     [raw, renderDiagrams],
   );
+  const normalized = useMemo(() => normalizeLatexMathDelimiters(raw), [raw]);
   const remarkPlugins = useMemo(
     () => [
       ...staticRemarkPlugins,
+      remarkLatexBracketDisplay(raw),
       remarkChatFileLinks(workspaceRoot, baseDir),
     ],
-    [workspaceRoot, baseDir],
+    [raw, workspaceRoot, baseDir],
+  );
+  const positionedRehypePlugins = useMemo(
+    () => [...rehypePlugins!, [rehypeSourcePositions, { offset: sourceOffset }]] as Options["rehypePlugins"],
+    [sourceOffset],
   );
   return (
     <MarkdownBlockContext.Provider value={context}>
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
-        rehypePlugins={rehypePlugins}
+        rehypePlugins={positionedRehypePlugins}
         components={markdownComponents}
       >
-        {raw}
+        {normalized}
       </ReactMarkdown>
     </MarkdownBlockContext.Provider>
   );
@@ -913,17 +951,23 @@ export const Markdown = memo(function Markdown({
   const workspaceRoot = useAppStore((s) => s.workspace?.path);
   const sanitizedSource = useMemo(() => sanitizeSubagentXmlTags(source), [source]);
   const blocks = useBlocks(sanitizedSource);
+  let sourceOffset = 0;
   return (
     <MarkdownBaseDirContext.Provider value={baseDir ?? ""}>
-      {blocks.map((raw, i) => (
-        <Block
-          key={i}
-          raw={raw}
-          renderDiagrams={renderDiagrams}
-          workspaceRoot={workspaceRoot}
-          baseDir={baseDir}
-        />
-      ))}
+      {blocks.map((raw, i) => {
+        const start = sourceOffset;
+        sourceOffset = start + raw.length;
+        return (
+          <Block
+            key={i}
+            raw={raw}
+            sourceOffset={start}
+            renderDiagrams={renderDiagrams}
+            workspaceRoot={workspaceRoot}
+            baseDir={baseDir}
+          />
+        );
+      })}
     </MarkdownBaseDirContext.Provider>
   );
 });

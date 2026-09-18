@@ -56,9 +56,9 @@ destination, chat as the home surface, tools and permissions inline.
   pane (they are pages, not modals). Once Settings or Extensions is selected,
   bootstrap completion and background refreshes must not replace that
   destination with the chat home; only an explicit navigation action may do so.
-  The outer pane stays fluid while the sidebar is collapsed, but the centered
-  chat content band tightens to 640px from its expanded 760–768px ceiling so
-  the wider shell does not create an over-wide, low-density reading surface.
+  The outer pane stays fluid while the sidebar is collapsed. The centered chat
+  content band defaults to 760px and is user-resizable (D439); it compresses
+  with `min(available pane, preferred)` instead of tightening to a 640px ceiling.
 - **Titlebar**: platform-native desktop chrome (D118). macOS uses
   `hiddenInset` traffic lights and the system application menu. The expanded
   sidebar keeps Collapse sidebar in the same 46px row, aligned to
@@ -73,21 +73,31 @@ destination, chat as the home surface, tools and permissions inline.
   left and accessible minimize / maximize-or-restore / close controls at the
   right edge of the conversation pane when the panel is closed (D129). When
   the work panel is open, those controls stay viewport-fixed over the panel
-  header rather than travelling with MainPane. Destination history is shortcut-only (`Cmd/Ctrl+[` and
-  `Cmd/Ctrl+]`); no back/forward buttons are rendered. The main titlebar has no
+  header rather than travelling with MainPane. Destination history is
+  shortcut-first (`Cmd/Ctrl+[` and `Cmd/Ctrl+]`) with no dedicated back/forward
+  chrome; while Extensions is active, the footer Plugins button performs one
+  Back step as the only pointer affordance. The main titlebar has no
   notification action; the durable local inbox opens from the sidebar footer
   bell instead (D130/D117). In work-panel preview mode, MainChat is unmounted
   and a window-level 46px chrome row keeps New Task, sidebar, and native window
-  controls available. In macOS collapsed-sidebar preview, the panel header
-  reserves the 76px windowed (8px fullscreen) traffic-light inset plus the
-  preview action lane and an 8px gap, so its first tab never overlaps either
-  the traffic lights or the preview controls.
+  controls available without owning a drag or no-drag rectangle across the
+  panel. The panel header alone owns dragging in the preview pane; its actual
+  border box starts after the shell action lane plus an 8px gap, including the
+  expanded-sidebar New Task button, on every platform. The left inset is 8px,
+  or 88px for collapsed-sidebar windowed macOS. Its right native-control
+  exclusion is unchanged. Header paint fills the excluded lane without an
+  opaque overlay hiding tabs or panel actions. The macOS inset uses the shared
+  `--ds-window-lead-inset` token — the cluster's 76px right edge (from
+  `@pi-desktop/shared`) plus a 12px gap — and the main process positions the
+  buttons from that same shared geometry.
 - **Work panel**: docked right column (not an overlay) opened by an artifact,
   the viewport-fixed toggle, or `Cmd/Ctrl + J`. File, URL, browser-preview, and
   successful workspace-edit artifacts create their resources atomically. The
   46px content header exposes a tablist and a fixed `+` trigger. Its tokenized
-  60px right-side safe lane plus separated action rail keep the trigger distinct
-  from the viewport-fixed work-panel toggle. Clicking `+` creates and activates
+  44px right-side safe lane (the 28px control, its 12px viewport inset, and the
+  header's 4px control gap) keeps the `+`, maximize, and viewport-fixed
+  work-panel toggle one button group, spaced by that same gap, while the trigger
+  keeps a distinct hit target. Clicking `+` creates and activates
   a unique New launcher tab; its body presents the same data-driven Review and
   plugin-view rows as buttons, so the user chooses a destination in the page
   instead of opening a dropdown. Selecting a row replaces that launcher tab with
@@ -174,26 +184,31 @@ destination, chat as the home surface, tools and permissions inline.
   toolbar places sorting before new-session creation. Both headings keep quiet
   glyph actions and also accept a right-click create menu on the heading or empty
   list chrome so section creation stays discoverable
-  without extra chrome. Its list shows at most five compact rows (140px) before
+  without extra chrome. Its list shows at most five compact rows (146px) before
   scrolling internally, so standalone work stays visible without displacing
   project navigation. The following `Projects` heading exposes the
   folder-picker action; retained project groups use the remaining height and
   scroll independently.
-- **Identity**: each group is keyed by the normalized full project path, never
-  by a potentially ambiguous folder basename.
-- **Header**: project name, active state, disclosure, new-task action, and an
-  overflow menu. The directory title is one full-row disclosure target;
+- **Identity**: each project group is keyed by a host-owned logical group id;
+  each root path remains canonical and is never inferred from an ambiguous
+  folder basename. Legacy single-folder projects are compatibility groups.
+- **Header**: project name, current-workspace dot, disclosure, new-task action,
+  and an overflow menu. Workspace context is not navigation selection: project
+  headers have no persistent selected background, including when no conversation
+  is selected. Only the current conversation on the chat page receives selected
+  row paint. Project and conversation rows share full-row hover feedback; the
+  project title itself stays transparent. The directory title is one full-row disclosure target;
   collapse/expand affects only child visibility, and adjacent groups form one
   dense tree rather than detached cards. Hovering or focusing the project title
   reveals the full project path. Pressing the title and moving 8px reorders
   the group.
-- **Project actions**: open folder reveals the project directory; rename edits
-  the renderer-local display name while the normalized path remains the
-  project identity; pin/unpin changes presentation priority; archive/restore
-  hides or restores the group in the default view; close removes the retained
-  tab without deleting or archiving project/session data. Custom display names
-  are stored with sidebar preferences and are used by both the sidebar and
-  Project archive after restart.
+- **Project actions**: open folder reveals the primary project directory; Edit
+  project changes the host-owned logical group name and adjusts eligible
+  non-primary roots (keeping renderer metadata in sync); pin/unpin changes
+  presentation priority; archive/restore hides or restores the group in the
+  default view; close removes the retained primary tab without deleting or
+  archiving group roots, sessions, or memory. Expanded Project archive details
+  list every group root.
 - **Conversation actions**: rename, pin/unpin, archive/restore, fork, and
   delete remain separate actions. Rename edits the task label only; archive
   never removes the transcript. Open folder is a project action, not a
@@ -307,7 +322,9 @@ shared capability contract:
   conversation-surface route, not an operating mode. The project
   archive is the `projects` settings tab rather than a standalone page.
 - Destination history is linear; `Cmd/Ctrl+[` and `Cmd/Ctrl+]` traverse it
-  without persistent back/forward chrome.
+  without persistent back/forward chrome. While Extensions is active, the
+  footer Plugins button reuses one Back step (§2 shell regions); no separate
+  back or forward control is added.
 - Selecting a project tab reuses `project.set` when its path differs from the
   selected host workspace and keeps the other tabs retained.
 - Selecting a project-scoped thread activates its project before switching to

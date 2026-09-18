@@ -100,11 +100,17 @@ replace an artifact.
 
 The renderer does not fetch skill catalogs or SKILL.md documents. Electron
 main performs those HTTPS requests under the public-network policy (ADR 0243 /
-D413): `https` only, a shared syntactic public-host check, DNS classification
-of every resolved address, and `redirect: "manual"` with per-hop
-re-validation. Loopback, RFC1918, ULA, link-local, and mapped IPv6 targets
-are rejected. Install writes markdown only through `skills.create`. The host
-document cap remains 128 KiB after sibling markdown is inlined.
+D413, amended by ADR 0272 / D436): `https` only, a shared syntactic public-host
+check, `redirect: "manual"`, and a per-hop verdict that follows the route the
+request will actually take. Before each hop the client asks the session that
+carries `net.fetch` for its own proxy decision (`Session.resolveProxy`): on a
+proxied route the hop is judged on its route rather than on a local address the
+app would never dial, so only the resolver-artifact class (`benchmark`, a TUN
+fake-IP) is tolerated there, while a direct or unreadable route keeps the full
+local classification and rejects loopback, RFC1918, ULA, link-local, mapped
+IPv6, and every other non-public class. Install writes markdown only through
+`skills.create`. The host document cap remains 128 KiB after sibling markdown
+is inlined.
 
 ## 4.2 MCP market egress
 
@@ -182,7 +188,7 @@ explicit local/LAN endpoints; the market path does not widen that policy.
   the manual `com.apple.quarantine` command and says signed/notarized builds do
   not need it. The ZIP package also includes the executable helper, which
   searches only `/Applications/PI-Desktop.app` and `~/Applications/PI-Desktop.app`,
-  verifies `CFBundleIdentifier` is `com.pi-desktop.app`, removes only
+  verifies `CFBundleIdentifier` is `net.aiuo.pi-desktop`, removes only
   `com.apple.quarantine` recursively when present, and opens the app. It accepts
   no arbitrary path, uses no privilege escalation, and is not a substitute for
   Developer ID signing or notarization.
@@ -278,3 +284,37 @@ host-core. They do not change the loopback-only rule above.
 10. Local MCP control is loopback-only, bearer-authenticated, opt-in, bounded,
     excludes secret writes and native pickers, and requires confirmation for
     session permission-mode changes
+
+## 12. Native Pi session boundary (ADR 0254)
+
+Native session paths remain sidecar-private. Renderer-visible ids are opaque
+hashes of canonical path plus verified header id. Every discovery/open resolves
+the real path below the configured Pi session root and revalidates header id and
+cwd; path traversal and symlink escape are rejected.
+
+Writable continuation requires a mode-0600 cooperative PI-Desktop lease beside
+the session and full-byte identity checks before each SDK append. After an
+append, the adapter accepts only the unchanged prior prefix plus exactly one
+entry whose id and parent match the SDK operation. Any foreign/interleaved
+change disposes the runtime and requires reload. A stale lease is reclaimed only
+for a provably dead process on the same host when the target is unchanged or is a
+complete same-file append-only extension with the original byte prefix and a
+continuous parent chain. This lease is not treated as proof that Pi Web/CLI is absent because those
+clients do not yet share its protocol.
+
+Native continuation passes `noTools: "all"` to the SDK: no built-in or extension
+model tools are exposed, including filesystem/shell tools. `permissionMode:
+"inherit"` is not a permission bridge. Enabling native tools requires an
+explicit Desktop permission integration and updated security decision. Native
+Pi extensions still execute as trusted local code with the native resource
+lifecycle; they are not Desktop plugins and this is not a sandbox claim.
+Capability checks recognize this service's owned lease and reclaimable dead
+local owners without stealing live, remote, malformed, or uncertain leases.
+Native fork reuses the same source ownership gate: an owned idle runtime keeps
+its lease, an unowned source is held under a short-lived lease for the snapshot
+window, and a live/remote/malformed foreign lease or a changed source refuses
+the fork. The child is written as a private mode-0600 non-jsonl staging file in
+the parent's session directory (fsync, then a no-clobber hardlink to the final
+name); cleanup removes only files whose device/inode and content still match
+what this operation created, and unexpected filesystem failures cross the
+preload boundary only as a path-free classified error.

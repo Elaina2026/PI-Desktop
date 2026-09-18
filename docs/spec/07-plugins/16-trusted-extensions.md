@@ -16,6 +16,12 @@ which PI-Desktop adopts alongside the `pi-ai` and `pi-agent-core` kernel
 contributes. D388 folded the earlier standalone "trusted extensions"
 registry into this contribution; the engine below is unchanged.
 
+Provider declarations are a separate manifest surface rather than part of this
+contract: `contributes.providers` materializes Host-owned provider rows
+([02-plugin-manifest-schema.md](02-plugin-manifest-schema.md) §5.4, ADR 0259),
+so it is neither an `ExtensionAPI` member nor a row in the §5 support matrix.
+`registerProvider` (§5) remains the session-scoped extension counterpart.
+
 | Term | Meaning |
 |---|---|
 | Agent extension | One module a plugin lists in `contributes.agentExtensions`, written against `ExtensionAPI`, running with the trust level of the Agent sidecar |
@@ -195,10 +201,28 @@ unsupported ones.
 
 | Class | Members |
 |---|---|
-| Supported | `registerTool`, `registerCommand`, `on(...)` for every event in §6, `exec`, `getActiveTools`, `getAllTools`, `setActiveTools`, `getCommands`, `setModel` (v1 note: returns `false`, the desktop owns the session's provider binding), `getThinkingLevel`, `setThinkingLevel`, `setSessionName`, `getSessionName`, `sendUserMessage` (Host-owned queue, D386), `getFlag` |
+| Supported | `registerTool`, `registerCommand`, `registerAgent`, `registerProvider` (plugin-owned compatibility alias; same shape as `registerAgent`), `unregisterAgent`, `unregisterProvider`, `on(...)` for every event in §6, `exec`, `getActiveTools`, `getAllTools`, `setActiveTools`, `getCommands`, `setModel` (configured models and plugin agents; idle-only; persists the current session binding), `getThinkingLevel`, `setThinkingLevel`, `setSessionName`, `getSessionName`, `sendUserMessage` (Host-owned queue, D386), `getFlag` |
 | Supported on context | `ui.notify`, `ui.confirm`, `ui.select`, `ui.input`, `ui.setStatus`, `ui.setWorkingMessage`, `cwd`, `modelRegistry`, `isIdle`, `abort`, `hasPendingMessages`, `getContextUsage`, `compact`, `getSystemPrompt`, `waitForIdle`, `newSession`, `fork` |
 | Deferred to v2 | `sendMessage`, `appendEntry`, `setLabel`, `sessionManager` read API, `switchSession`, `registerShortcut`, `registerMarkdownTransformer`, `ui.setEditorText`, `ui.getEditorText`, `ui.addAutocompleteProvider`, `registerFlag` value editing |
 | Unsupported | `ui.setWidget`, `ui.setFooter`, `ui.setHeader`, `ui.setTitle`, `ui.custom`, `ui.overlay`, `ui.onTerminalInput`, `ui.setWorkingVisible`, `ui.setWorkingIndicator`, `ui.setHiddenThinkingLabel`, `ui.pasteToEditor`, `ui.editor`, `registerMessageRenderer`, `registerEntryRenderer`, `navigateTree`, `shutdown` |
+
+`registerAgent({ id, name?, models, stream? | complete? })` registers a
+session-scoped plugin-owned LLM integration. Each model declares bounded public
+metadata (`id`, display name, API label, modalities, reasoning and limits). The
+plugin callback receives the pi-ai model/context/options and owns endpoint,
+authentication, request serialization, and response conversion. It must honor
+`options.signal` for cancellation. `complete` is adapted to a one-result stream.
+
+The host assigns `extension-agent:<encoded-agent-key>` as the provider id. A
+successful idle `setModel` persists that provider/model pair through
+`session.configure`; the next turn reloads the trusted extension and restores the
+agent implementation. `modelRegistry` exposes only models and auth availability;
+it never exposes Host API keys, secret refs, OAuth tokens, arbitrary Host headers,
+or Host provider internals. `registerProvider` and its unregister counterpart
+accept the same plugin-owned shape as a compatibility alias — a `stream` or
+`complete` implementation, in the upstream `(id, config)` form and in the object
+form; provider credentials in the upstream config are ignored by Host and are
+not persisted.
 
 Neutral values: `getFlag` returns the declared default; `registerFlag` records
 the declaration so `getFlag` works but exposes no CLI or UI in v1;
@@ -299,6 +323,7 @@ No host-core RPC method, protocol version, or SQLite schema changes in v1.
 | `extensions.commands.publish` | Replace the session's registered command list |
 | `extensions.ui.request` | One interactive or status call from §9 |
 | `extensions.diagnostics.publish` | Replace the session's diagnostics list |
+| `extensions.model.configure` | Validate and persist a plugin-owned provider/model binding through `session.configure`, then broadcast `session:modelChanged` |
 | `session.rename`, `session.create`, `session.fork`, `session.queuePush`, `session.queuePrioritize` | Existing methods, now reachable from the adapter |
 
 ### 10.2 Main ↔ renderer (Electron IPC)
@@ -310,8 +335,8 @@ No host-core RPC method, protocol version, or SQLite schema changes in v1.
 | `extensions/ui/respond` | request | Answer a pending prompt |
 | `extensions/ui/prompt` | event | A prompt is pending |
 | `extensions/event/status` | event | `ui.setStatus` / `ui.setWorkingMessage` text changed |
-| `plugin/list` | request | Plugin rows carry `agentExtension` state, tool and command names, and diagnostics |
-| `event/pluginChanged` | event | Also fires when a session publishes commands or diagnostics |
+| `plugin/list` | request | Plugin rows carry `agentExtension` state, tool, command, custom-agent names, and diagnostics |
+| `event/pluginChanged` | event | Also fires when a session publishes commands, diagnostics, or model binding changes |
 
 All channels are sender-validated like other plugin channels. The MCP
 control plane exposes `extensions/commands/run` (write) and
@@ -325,9 +350,9 @@ The Plugins page shows agent extensions on the owning plugin's row:
 - The `agentExtension` capability chip and the `agent.extension` permission
   chip (high risk) beside the other capabilities and permissions.
 - A details section with a state chip (`enabled` until a session loads the
-  modules in this app run, `loaded`, `error`), the registered tool and slash
-  command names, and the diagnostics: load errors, unsupported API calls
-  with counts, rejected registrations, handler timeouts.
+  modules in this app run, `loaded`, `error`), the registered tool, slash
+  command and custom-agent names, and the diagnostics: load errors, unsupported
+  API calls with counts, rejected registrations, handler timeouts.
 - "Import pi extension" in the page's overflow actions, guarded by a confirm
   that states what the grant means.
 
@@ -337,6 +362,7 @@ The Plugins page shows agent extensions on the owning plugin's row:
 |---|---|---|
 | v1 | Loader, Runner per session, support matrix, events, tools, commands, UI bridge | Shipped (D387) |
 | v1.1 | Modules become `contributes.agentExtensions` with the `agent.extension` grant; import of pi CLI extensions as development plugins; the standalone registry and settings tab are removed | Shipped (D388) |
+| v1.1 amendment | Plugin-owned custom agents via `registerAgent`, provider compatibility alias, redacted model registry, idle-only session binding and restore through `extension-agent:` ids | Implemented (D426 / ADR 0258) |
 | v2 | Custom session entries (`sendMessage`, `appendEntry`) with a schema bump and a generic renderer, `sessionManager` read shim, `switchSession`, editor read and write, autocomplete providers, `registerShortcut`, markdown transformers | Planned, needs a decision on entry persistence and compaction |
 | v3 | `pi` package manifests and installation, read-only hints from the pi CLI's `settings.json`, unified skill and prompt discovery, remote-control routing for prompts, marketplace listing | Not scheduled |
 

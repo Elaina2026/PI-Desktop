@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import type {
   AppSettings,
   GlobalPermissionMode,
+  PluginSettingsDestinationMeta,
   ShortcutPlatform,
 } from "@pi-desktop/shared";
 import { useAppStore } from "../../stores/app-store";
@@ -37,6 +38,7 @@ import { KeyboardShortcutsSection } from "../../components/settings/KeyboardShor
 import { FontFamilyRow } from "../../components/settings/FontFamilyRow";
 import { FontSizeRow } from "../../components/settings/FontSizeRow";
 import { LanguageRow } from "../../components/settings/LanguageRow";
+import { SettingsMenuSelect } from "../../components/settings/SettingsMenuSelect";
 import { ThemeRow } from "../../components/settings/ThemeRow";
 import { NetworkProxySection } from "../../components/settings/NetworkProxySection";
 import { ProjectsPage } from "../../pages/ProjectsPage";
@@ -57,6 +59,7 @@ import {
   UpdatesRow,
 } from "./agent-sections";
 import { CloseBehaviorSection, DeveloperSection } from "./developer-sections";
+import { PluginSettingsDestination } from "../../components/settings/PluginSettingsDestination";
 
 type SettingsTab = ReturnType<typeof useAppStore.getState>["settingsTab"];
 
@@ -87,6 +90,21 @@ export function SettingsPage() {
   const [defaultPermissionMenuOpen, setDefaultPermissionMenuOpen] = useState(false);
   const [recoveringSettings, setRecoveringSettings] = useState(!settings);
   const [settingsRecoveryFailed, setSettingsRecoveryFailed] = useState(false);
+  const [extensions, setExtensions] = useState<PluginSettingsDestinationMeta[]>([]);
+  const [activeExtension, setActiveExtension] = useState<PluginSettingsDestinationMeta | null>(null);
+
+  useEffect(() => {
+    const refresh = () => void api.listPluginSettingsDestinations().then(setExtensions, () => setExtensions([]));
+    refresh();
+    return api.onPluginChanged(refresh);
+  }, []);
+
+  useEffect(() => {
+    if (activeExtension && !extensions.some((entry) => entry.ref === activeExtension.ref)) {
+      setActiveExtension(null);
+      setSettingsTab("general");
+    }
+  }, [activeExtension, extensions, setSettingsTab]);
 
   const recoverSettings = useCallback(async () => {
     setRecoveringSettings(true);
@@ -216,16 +234,8 @@ export function SettingsPage() {
   return (
     <div className="settings-shell settings-shell-full">
       <div className="settings-titlebar" aria-hidden="true" />
-      <aside className="settings-nav" aria-label={t("settings.title")}>
+      <aside className="settings-nav sidebar-surface" aria-label={t("settings.title")}>
         <div className="settings-nav-top drag">
-          <button
-            type="button"
-            className="settings-back no-drag"
-            onClick={() => setPage("chat")}
-          >
-            <IconChevronLeft size={15} />
-            <span>{t("settings.backToApp")}</span>
-          </button>
           <div className="settings-search-wrap no-drag">
             <IconSearch size={14} />
             <input
@@ -263,12 +273,46 @@ export function SettingsPage() {
               </div>
             ))
           )}
+          {extensions.length > 0 && (
+            <div className="settings-nav-group">
+              <div className="settings-nav-group-label">{t("settings.groupExtensions")}</div>
+              {extensions.filter((entry) => {
+                const q = query.trim().toLowerCase();
+                return !q || [entry.label, ...entry.keywords].some((value) => value.toLowerCase().includes(q));
+              }).map((entry) => (
+                <button key={entry.ref} className={cx("settings-nav-item", activeExtension?.ref === entry.ref && "active")} onClick={() => setActiveExtension(entry)}>
+                  <span className="settings-nav-icon"><IconBookOpen size={14} /></span>
+                  <span className="settings-nav-label">{entry.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Pinned to the rail's bottom so it lands on the same line as the
+            main shell's sidebar footer icon row. Both the band and the control
+            stay explicitly non-draggable, like the rail's other controls. */}
+        <div className="settings-nav-footer no-drag">
+          <button
+            type="button"
+            className="settings-back no-drag"
+            data-nav="back-to-app"
+            onClick={() => setPage("chat")}
+          >
+            <IconChevronLeft size={15} />
+            <span>{t("settings.backToApp")}</span>
+          </button>
         </div>
       </aside>
 
       <div className="settings-content">
         <div className="settings-content-inner">
-          <h1 className="settings-section-title">{t(activeTitleKey)}</h1>
+          <div className="settings-content-enter">
+          <h1 className="settings-section-title">{activeExtension?.label ?? t(activeTitleKey)}</h1>
+
+          {activeExtension ? (
+            <PluginSettingsDestination pluginId={activeExtension.pluginId} destinationId={activeExtension.destinationId} label={activeExtension.label} />
+          ) : <>
 
           {tabNeedsSettings && !settings ? (
             <div className="settings-recovery" role="status" aria-live="polite">
@@ -310,98 +354,24 @@ export function SettingsPage() {
                   title={t("settings.permissionMode")}
                   description={t("settings.permissionModeDesc")}
                 >
-                  <AnchoredMenu
-                    className="settings-theme-anchor"
-                    open={defaultPermissionMenuOpen}
-                    onClose={() => setDefaultPermissionMenuOpen(false)}
-                    menuClassName="settings-theme-menu"
+                  <SettingsMenuSelect
+                    className="settings-permission-select"
                     label={t("settings.permissionMode")}
-                    align="end"
-                    trigger={(ref) => (
-                      <button
-                        ref={ref}
-                        type="button"
-                        className="settings-theme-trigger"
-                        aria-haspopup="listbox"
-                        aria-expanded={defaultPermissionMenuOpen}
-                        aria-label={t("settings.permissionMode")}
-                        onClick={() => setDefaultPermissionMenuOpen((open) => !open)}
-                      >
-                        <span className="settings-theme-trigger-label">
-                          {t(
-                            settings.defaultPermissionMode === "accept-edits"
-                              ? "settings.permissionModeAcceptEdits"
-                              : settings.defaultPermissionMode === "auto"
-                                ? "settings.permissionModeAuto"
-                                : "settings.permissionModeAsk",
-                          )}
-                        </span>
-                        <IconChevronDown size={14} aria-hidden />
-                      </button>
-                    )}
-                  >
-                    <div className="settings-theme-results">
-                      <ul className="settings-theme-list">
-                        {(["ask", "accept-edits", "auto"] as const).map((candidate) => {
-                          const isCurrent =
-                            (settings.defaultPermissionMode ?? "ask") === candidate;
-                          return (
-                            <li key={candidate}>
-                              <button
-                                type="button"
-                                className={cx(
-                                  "settings-theme-option",
-                                  isCurrent && "is-current is-active",
-                                )}
-                                onClick={() => {
-                                  setDefaultPermissionMenuOpen(false);
-                                  void saveSettings({ defaultPermissionMode: candidate });
-                                }}
-                              >
-                                <div className="settings-theme-option-copy">
-                                  <span className="settings-theme-option-title">
-                                    {t(
-                                      candidate === "accept-edits"
-                                        ? "settings.permissionModeAcceptEdits"
-                                        : candidate === "auto"
-                                          ? "settings.permissionModeAuto"
-                                          : "settings.permissionModeAsk",
-                                    )}
-                                  </span>
-                                  <span className="settings-theme-option-hint">
-                                    {candidate === "ask"
-                                      ? t("settings.permissionAskHint", "Always ask for confirmation before tools/edits")
-                                      : candidate === "accept-edits"
-                                        ? t("settings.permissionAcceptEditsHint", "Automatically accept file edits, ask for commands")
-                                        : t("settings.permissionAutoHint", "Bypass prompts and execute autonomously")}
-                                  </span>
-                                </div>
-                                {isCurrent ? <IconCheck size={14} /> : null}
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </div>
-                  </AnchoredMenu>
-                  <select
-                    className="sr-only"
-                    tabIndex={-1}
-                    aria-hidden="true"
-                    aria-label={t("settings.permissionMode")}
                     value={settings.defaultPermissionMode ?? "ask"}
-                    onChange={(e) =>
+                    onChange={(mode) =>
                       void saveSettings({
-                        defaultPermissionMode: e.target.value as GlobalPermissionMode,
+                        defaultPermissionMode: mode as GlobalPermissionMode,
                       })
                     }
-                  >
-                    <option value="ask">{t("settings.permissionModeAsk")}</option>
-                    <option value="accept-edits">
-                      {t("settings.permissionModeAcceptEdits")}
-                    </option>
-                    <option value="auto">{t("settings.permissionModeAuto")}</option>
-                  </select>
+                    options={[
+                      { id: "ask", label: t("settings.permissionModeAsk") },
+                      {
+                        id: "accept-edits",
+                        label: t("settings.permissionModeAcceptEdits"),
+                      },
+                      { id: "auto", label: t("settings.permissionModeAuto") },
+                    ]}
+                  />
                 </SettingsRow>
               </SettingsCard>
 
@@ -563,7 +533,7 @@ export function SettingsPage() {
           {tab === "about" && (
             <div className="settings-stack">
               <SettingsCard>
-                <SettingsRow title={t("settings.application")} description={t("settings.applicationDesc")}>
+                <SettingsRow title={t("settings.application")}>
                   <div className="settings-about-meta">
                     <div className="font-medium">
                       {version?.name || "PI-Desktop"} {version?.version}
@@ -573,7 +543,7 @@ export function SettingsPage() {
                     </div>
                   </div>
                 </SettingsRow>
-                <SettingsRow title={t("settings.logs")} description={t("settings.logsDesc")}>
+                <SettingsRow title={t("settings.logs")}>
                   <Button variant="secondary" onClick={() => void api.openLogs()}>
                     {t("settings.openLogs")}
                   </Button>
@@ -597,7 +567,9 @@ export function SettingsPage() {
               )}
             </div>
           )}
+          </>}
 
+          </div>
         </div>
       </div>
     </div>

@@ -12,6 +12,9 @@ public interfaces.
 Read the documents relevant to your change:
 
 - [`AGENTS.md`](AGENTS.md) — repository rules for contributors and agents.
+- [`CLAUDE.md`](CLAUDE.md) — Claude Code / Cowork mirror of the non-negotiables.
+  When you change either policy file, update the other, set the same
+  `Policy-Sync:` token, and run `pnpm check:agent-policy`.
 - [`README.md`](README.md) — product overview and development context.
 - [`docs/spec/00-baseline.md`](docs/spec/00-baseline.md) — frozen architecture
   and product decisions.
@@ -50,16 +53,21 @@ git status --short
 git fetch origin main
 ```
 
-If the primary `main` worktree is clean, fast-forward it before creating the
+If the primary `main` worktree is clean, synchronize it before creating the
 request worktree:
 
 ```bash
 git switch main
-git pull --ff-only origin main
+git fetch origin main
+git merge --ff-only origin/main
 git worktree add -b <type>/<short-description> \
   ../PI-Desktop-worktrees/<short-description> origin/main
 cd ../PI-Desktop-worktrees/<short-description>
 ```
+
+That fast-forward fails once local `main` carries its own integration merge of
+a delivered request; synchronize with `git merge origin/main` instead, and
+resolve the divergence before starting new work without discarding commits.
 
 If the primary checkout has uncommitted work or is being used for another
 branch, leave it untouched and create the request worktree directly from the
@@ -114,10 +122,11 @@ Run only the relevant subset when the change is low risk. Documentation-only
 changes normally need no runtime tests; at minimum, review the rendered
 Markdown and run `git diff --check`.
 
-Code-bearing changes require the relevant E2E suite after the change is
-integrated into `main`. A pre-merge run is useful for debugging but does not
-replace post-integration E2E. Record any unavailable required suite as `NOT
-RUN` with its reason, alternative validation, and remaining risk.
+Code-bearing changes require the relevant E2E suite on the integrated local
+`main` before the request branch is pushed and the pull request is opened. A
+run on the request branch itself is useful for debugging but does not replace
+that gate. Record any unavailable required suite as `NOT RUN` with its reason,
+alternative validation, and remaining risk.
 
 ## Commit and Pull Request
 
@@ -135,7 +144,8 @@ Before committing, review the complete diff. Never commit:
 - Local databases, logs, configuration, or machine-specific paths.
 - `node_modules/`, build artifacts, release packages, or unrelated changes.
 
-Open a pull request against `main` with:
+Merge the request branch into local `main` and run the required E2E suite from
+that integrated checkout first; then open a pull request against `main` with:
 
 - a concise summary and rationale;
 - affected specs, ADRs, and E2E scenarios;
@@ -153,14 +163,20 @@ From a clean primary checkout:
 ```bash
 git fetch origin main
 git switch main
-git pull --ff-only origin main
+git merge origin/main
 git worktree remove ../PI-Desktop-worktrees/<short-description>
 git branch -d <type>/<short-description>
 git worktree prune
 ```
 
-For code-bearing changes, run and record the relevant E2E suite against the
-integrated `main` commit before declaring delivery complete.
+Local `main` already carries its own integration merge of the request branch,
+so the remote merge is synchronized with `git merge origin/main` rather than a
+fast-forward pull. Reset local `main` to `origin/main` once the request commits
+are verified present in remote `main` and that local merge is no longer needed.
+
+For code-bearing changes, record the required E2E result from the integrated
+local `main` before the pull request is opened, and rerun the affected suites
+when the remote merge lands executable content that differs from that commit.
 
 ## Issue and Security Reports
 

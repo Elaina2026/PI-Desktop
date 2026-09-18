@@ -35,7 +35,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .route-surface,
-  .settings-shell-full,
+  .settings-content-enter,
   .jump-latest-btn,
   .chat-error-notice,
   .work-panel,
@@ -51,6 +51,16 @@
   .conversation-topbar.ct-collapsed,
   .conversation-topbar .ct-lead,
   .conversation-topbar.ct-collapsed .ct-lead {
+    transition-duration: 0.01ms !important;
+  }
+
+  /* The project fold is a height change: keep both endpoints, drop the travel. */
+  .sidebar-session-group-body.project {
+    transition-duration: 0.01ms !important;
+  }
+
+  .thread-item,
+  .sidebar-session-group-header {
     transition-duration: 0.01ms !important;
   }
 

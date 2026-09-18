@@ -2,7 +2,13 @@ import { app, BrowserWindow, nativeTheme, screen, type Tray } from "electron";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { APP_NAME, builtinWindowBackground, IPC, type CloseBehavior } from "@pi-desktop/shared";
+import {
+  APP_NAME,
+  builtinWindowBackground,
+  IPC,
+  MAC_TRAFFIC_LIGHT_POSITION,
+  type CloseBehavior,
+} from "@pi-desktop/shared";
 import type { BrowserPane } from "../browser-view";
 import type { HostProcess } from "../host-process";
 import type { Logger } from "../logger";
@@ -27,6 +33,16 @@ import {
   type WorkPanelReservationState,
 } from "../work-panel-window";
 import { readWindowState, writeWindowState } from "../window-preferences";
+
+function windowsIconPath(): string | undefined {
+  if (process.platform !== "win32") return undefined;
+
+  const resourceRoot = app.isPackaged
+    ? process.resourcesPath
+    : join(app.getAppPath(), "build");
+  const iconPath = join(resourceRoot, app.isPackaged ? "app-icon.ico" : "icon.ico");
+  return existsSync(iconPath) ? iconPath : undefined;
+}
 
 export type WindowLifecycleState = {
   mainWindow: BrowserWindow | null;
@@ -84,6 +100,7 @@ export type WindowLifecycleDependencies = {
   createTray: () => void;
   browserPane: BrowserPane;
   pluginViews: PluginViewHost;
+  pluginSettingsViews: PluginViewHost;
   plugins: PluginRuntime;
   logger: Pick<Logger, "app">;
 };
@@ -111,6 +128,7 @@ export async function createWindow({
   createTray,
   browserPane,
   pluginViews,
+  pluginSettingsViews,
   plugins,
   logger,
 }: WindowLifecycleDependencies): Promise<void> {
@@ -145,10 +163,13 @@ export async function createWindow({
     // One frameless look everywhere: macOS keeps inset traffic lights;
     // Windows/Linux hide native chrome entirely — the renderer draws its
     // own Codex-style window controls (see WindowControls.tsx).
+    // The traffic-light position comes from @pi-desktop/shared so the space
+    // the renderer reserves for the buttons (styles/tokens.css) is derived
+    // from the same numbers that place them.
     ...(process.platform === "darwin"
       ? {
           titleBarStyle: "hiddenInset" as const,
-          trafficLightPosition: { x: 16, y: 16 },
+          trafficLightPosition: MAC_TRAFFIC_LIGHT_POSITION,
           vibrancy: "sidebar" as const,
           visualEffectState: "followWindow" as const,
           transparent: true,
@@ -160,6 +181,11 @@ export async function createWindow({
             nativeTheme.shouldUseDarkColors ? "dark" : "light",
           ),
         }),
+    ...(process.platform === "win32"
+      ? {
+          icon: windowsIconPath(),
+        }
+      : {}),
     webPreferences: {
       preload: join(__dirname, "../preload/index.cjs"),
       contextIsolation: true,
@@ -561,6 +587,7 @@ export async function createWindow({
 
   browserPane.setWindow(window);
   pluginViews.setWindow(window);
+  pluginSettingsViews.setWindow(window);
   window.on("closed", () => {
     screen.removeListener("display-metrics-changed", reconcileDisplayTopology);
     screen.removeListener("display-added", reconcileDisplayTopology);
@@ -586,6 +613,7 @@ export async function createWindow({
     windowState.mainWindow = null;
     browserPane.setWindow(null);
     pluginViews.setWindow(null);
+    pluginSettingsViews.setWindow(null);
     if (
       process.platform !== "darwin" &&
       windowState.pluginLauncherWindow &&

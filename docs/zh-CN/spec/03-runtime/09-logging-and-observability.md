@@ -46,13 +46,13 @@ host 和 agent stderr 使用标记进行分类；无法分类的子进程输出�
 
 - `lifecycle` — 启动、关闭和应用监控
 - `session` — 提示、回合、会话生命周期和压缩
-- `tool` — 工具 start/end 事件
+- `tool` — 工具执行结果和中断
 - `permission` — 权限请求和决定
 - `plugin` — 插件加载、服务和插件工具执行
 - `provider` — provider/model 发现、重试和缓存失败
 - `persistence` — 成绩单和发件箱持久化失败
 - `updater` — 更新器诊断和错误
-- `diagnostics` — 阻止导航、菜单和模板诊断
+- `diagnostics` — 阻止导航、菜单、模板以及对外请求的诊断。技能市场的两个通道会为每个没有产出结果的源或文档各记录一条 `skillMarket.sourceFailed` / `skillMarket.documentFailed`：`data` 里带 `source`、`host`、`kind`、`address`,以及被守卫拒绝时的 `reason`、`addressKind` 与 `route`。`kind` 在守卫判定的是目标自身地址时为 `policy`,判定的是本地代理伪造的 fake-IP 占位地址时为 `fake-ip`,本地解析没有返回答案时为 `unresolved`,其余为 `network`；`code` 前两者为 `NETWORK_POLICY_BLOCKED`,第三者为 `NETWORK_RESOLVE_FAILED`,因此一行日志即可区分「目标地址不是公网」「代理用了 fake-IP」与「解析器没有应答」。`reason` 记录守卫自己的分支（`url-syntax`、`resolve-failed`、`non-public-address`、`redirect-limit`）,`addressKind` 记录被拒地址的类别（TUN fake-IP 为 `benchmark`,RFC1918 为 `private`）,`route` 记录该地址是在哪条线路上被判定的（`proxied`、`direct`,或传输层读不出线路时的 `unknown`）,因此「直连线路上的 fake-IP 拒绝」与「读不出线路的拒绝」可以区分（ADR 0272）。记录会保留主机名、被解析到的地址、该地址的类别与该线路 —— 但绝不包含 URL、其路径、查询串或凭据 —— 因为目录源 URL 由用户提供,而被拒绝的主机、地址及其类别正是全部诊断价值所在（issue #419）。
 - `runtime` — host/sidecar 生命周期、未分类的子进程输出，以及主进程
   `uncaughtException` / `unhandledRejection` 记录
 
@@ -70,18 +70,28 @@ type LogRecord = {
   level: "debug" | "info" | "warn" | "error"
   channel: string
   category: string
+  event: string              // 稳定的点号分隔机器可读名称
   message: string
   traceId?: string
+  requestId?: string
   sessionId?: string
   turnId?: string
   toolCallId?: string
+  parentToolCallId?: string
+  agentName?: string
   pluginId?: string
+  executionId?: string
   code?: string
   data?: unknown
 }
 ```
 
 格式：NDJSON 文件。
+
+`event` 是稳定的查询键，`message` 是简短的人类可读摘要。关联字段位于
+顶层，因此无需解析自由文本即可串联工具失败、权限请求和父子 agent。
+`data` 仅用于诊断元数据，不是成绩单或命令输出；它会脱敏、限制深度和集合
+大小，并且每条记录最多 8 KiB。
 
 ## 5. 必须记录的内容
 
@@ -91,14 +101,16 @@ type LogRecord = {
 - host/agent 生成、握手和意外退出；
 - 会话 create/delete；
 - 提示 accepted/aborted；
-- 工具 start/end 以及权限 request/decision/timeout；
+- 工具完成/失败/中断以及权限 request/decision/timeout；
 - Plan 工件创建、approval、expiry、拒绝、执行转换和启动中断；
 - shell 身份、超时、中止和进程树关闭；
 - 插件 enable/disable/load/error；
 - 工具准入拒绝、队列或资源耗尽，以及更新器错误。
 
 这些记录在可用时应包含对应的会话、回合、工具调用、插件或稳定错误码。
-正常成功操作不应输出逐阶段或逐请求的延迟记录。
+正常工具调用在 `tool_end` 后只产生一条完成或失败记录；sidecar 意外退出时，
+为每个仍在运行的工具产生一条中断记录。sidecar 的 `tool_start`/`tool_end`
+协议事件和成绩单持久化保持不变。正常成功操作不应输出逐阶段或逐请求的延迟记录。
 
 ### 绝不记录
 
@@ -108,11 +120,18 @@ type LogRecord = {
 
 ## 6. 脱敏规则
 
-1. 与 `/token|secret|password|api[_-]?key/i` 匹配的键名做脱敏处理。
-2. Authorization 标头做脱敏处理。
-3. 工具参数预览必须有界（例如 2KB）。
-4. 审计记录中的长命令输出应计数或截断；stdout/stderr 数据块不得整体写入
-   常规通道。
+1. 与 token、secret、password、API key、authorization、cookie、credential、
+   private key 或 client secret 匹配的键名做脱敏处理。
+2. 字符串中的 Bearer/Basic 凭据、URL 用户信息和常见 provider token 格式也做
+   脱敏处理。
+3. home、应用数据和日志目录前缀替换为占位符；诊断记录不保留原始本机路径。
+4. 任意字符串有长度上限；结构化数据限制深度和集合大小，每条记录的 `data`
+   最多 8 KiB；host-core 审计 payload 整形后也最多 8 KiB。
+5. 工具参数和结果不会整体复制到常规日志。工具结果只保留结果、错误码、时长、
+   字段名、内容块数量以及 stdout/stderr 大小等安全元数据；审计记录中的长命令
+   输出应计数或截断。
+6. 子进程 stderr 以稳定的 `child.process.stderr` 事件写入有界、去 ANSI 的
+   `data.output`，而不是放入记录消息。
 
 ## 7. 追踪关联
 
@@ -156,7 +175,8 @@ MVP 不包含远程遥测管道或云崩溃分析。
 
 ## 10. 验收
 
-1. 失败的工具调用可以通过 `toolCallId` 跨关键日志追踪。
+1. 失败和中断的工具调用可以通过 `toolCallId` 跨关键日志追踪，正常执行每次只
+   有一条结果记录。
 2. 正常流程中秘密永远不会出现在日志文件中。
 3. 可从应用或命令面板打开日志文件夹。
 4. boot、host、sidecar、plugin、updater 和 renderer 路径只输出生命周期、

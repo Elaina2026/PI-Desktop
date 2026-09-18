@@ -1,4 +1,5 @@
 import i18n from "i18next";
+import { projectMessageEnd, reconcilePersistedUserMessage } from "../../lib/session-transcript";
 import type {
   AgentEventEnvelope,
   PlanningStateEvent,
@@ -171,6 +172,49 @@ export function createEventsSlice({
           return;
         }
         streamUpdates.flushNow();
+      }
+      if (event.type === "user_message_persisted") {
+        const sessionId = envelope.sessionId;
+        const reconcile = (messages: UiMessage[]) =>
+          reconcilePersistedUserMessage(messages, event.optimisticMessageId, event.message);
+        runtime.liveSessionTranscripts.add(sessionId);
+        runtime.cacheSessionTranscript(sessionId, reconcile(
+          runtime.sessionTranscriptCache.get(sessionId) ??
+          get().retainedTranscripts[sessionId] ??
+          (get().activeSessionId === sessionId ? get().messages : []),
+        ));
+        set((state) => ({
+          ...(state.activeSessionId === sessionId ? { messages: reconcile(state.messages) } : {}),
+          retainedTranscripts: state.retainedTranscripts[sessionId]
+            ? { ...state.retainedTranscripts, [sessionId]: reconcile(state.retainedTranscripts[sessionId]) }
+            : state.retainedTranscripts,
+        }));
+        return;
+      }
+      if (event.type === "message_end" && event.replacesMessageId) {
+        // Exact native stream re-key: the durable SDK entry replaces its own
+        // provisional row in the caches a reselect can paint from, while a
+        // generic Desktop completion never touches unrelated rows.
+        if (get().activeSessionId === envelope.sessionId) {
+          const cached = runtime.sessionTranscriptCache.get(envelope.sessionId);
+          if (cached) {
+            runtime.cacheSessionTranscript(
+              envelope.sessionId,
+              projectMessageEnd(cached, event),
+            );
+          }
+        }
+        if (get().retainedTranscripts[envelope.sessionId]) {
+          set((state) => ({
+            retainedTranscripts: {
+              ...state.retainedTranscripts,
+              [envelope.sessionId]: projectMessageEnd(
+                state.retainedTranscripts[envelope.sessionId],
+                event,
+              ),
+            },
+          }));
+        }
       }
       if (
         event.type === "message_start" ||
@@ -454,32 +498,9 @@ export function createEventsSlice({
           });
           break;
         case "message_end":
-          set((state) => {
-            if (
-              event.message.role === "assistant" &&
-              (event.message.status === "error" ||
-                event.message.status === "aborted") &&
-              !event.message.content.trim() &&
-              !(event.message.thinking || "").trim() &&
-              !event.message.error
-            ) {
-              return {
-                messages: state.messages.filter(
-                  (message) => message.id !== event.message.id,
-                ),
-              };
-            }
-            const exists = state.messages.some(
-              (message) => message.id === event.message.id,
-            );
-            return {
-              messages: exists
-                ? state.messages.map((message) =>
-                    message.id === event.message.id ? event.message : message,
-                  )
-                : [...state.messages, event.message],
-            };
-          });
+          set((state) => ({
+            messages: projectMessageEnd(state.messages, event),
+          }));
           break;
         case "tool_start":
           set((state) => ({

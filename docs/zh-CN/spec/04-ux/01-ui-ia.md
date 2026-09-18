@@ -64,13 +64,24 @@
   那里，包括全屏。当工作面板打开时，会话
   窗格标题栏在右上角托管其折叠控件。面板标题栏改为可横向滚动的标签条，
   后接固定的 `+` 新建入口；关闭操作归属于各标签，因此 Windows 原生关闭
-  控件旁不再重复呈现第二个 `×`。工作面板预览模式会卸载 MainChat，
+  控件旁不再重复呈现第二个 `×`。头部为视口固定的折叠开关预留 44px 的右侧
+  安全车道（28px 控件、12px 视口内缩与头部自身的 4px 控制间距），同一个间距
+  把 `+`、最大化与折叠开关连成一组并保持 `+` 的独立命中区域。工作面板预览模式会卸载 MainChat，
   并在窗口级 46px chrome 行中保留新建任务、侧边栏和本机窗口控件。
-  macOS 非全屏且侧边栏折叠时，左侧预留 76px（全屏为 8px），避免与交通灯重叠。
+  The row and spacer declare neither drag nor no-drag and pass pointer events
+  through outside controls. The panel header alone owns dragging in the preview
+  pane. Its border box excludes the shell action lane plus an 8px gap in both
+  sidebar states, including expanded-sidebar New Task, on every platform.
+  The left inset is 8px except collapsed-sidebar windowed macOS (88px), using
+  `--ds-window-lead-inset`: the shared native cluster's 76px edge plus 12px.
+  The main process uses the same geometry from `@pi-desktop/shared`.
+  Right native-control exclusion is unchanged; header-height background paint
+  fills the left lane without an opaque overlay covering panel controls.
   Windows/Linux 使用无菜单的无框架 46px 行，并在
   左侧和可访问的最小化/最大化或恢复/关闭控件
-  右（D129）。目的地历史记录仅是快捷方式（`Cmd/Ctrl+[` 和
-  `Cmd/Ctrl+]`);不呈现 back/forward 按钮。主标题栏没有
+  右（D129）。目的地历史以快捷键为主（`Cmd/Ctrl+[` 和
+  `Cmd/Ctrl+]`），不渲染专门的 back/forward chrome；插件页激活时，页脚
+  插件按钮执行一次后退，是它唯一的鼠标入口。主标题栏没有
   通知行动；耐用的本地收件箱从侧边栏页脚打开
   改为响铃 (D130/D117)。
 - **工作面板**：由工件打开的停靠右列（不是覆盖层）
@@ -146,15 +157,18 @@
   工具栏在创建新会话之前进行排序。两个标题都保持沉默
   字形操作，还接受标题或空白上的右键单击创建菜单
   列出 chrome，以便部分创建保持可发现性
-  无需额外镀铬。它的列表之前最多显示五个紧凑行（140px）
+  无需额外镀铬。它的列表之前最多显示五个紧凑行（146px）
   内部滚动，因此独立作品保持可见而不会移位
   项目导航。以下 `Projects` 标题公开了
   文件夹选择器操作；保留的项目组使用剩余的高度和
 独立滚动。
 - **身份**：每个组都由规范化的完整项目路径作为密钥，从不
   通过可能不明确的文件夹基名。
-- **标题**：项目名称、活动状态、披露、新任务操作和
-  溢出菜单。目录标题是一个整行的披露目标；
+- **标题**：项目名称、当前工作区圆点、披露、新任务操作和
+  溢出菜单。工作区上下文不等于导航选中：项目标题不绘制持久选中背景，
+  没有选中会话时也不例外。只有聊天页当前会话显示选中背景。
+  项目与会话共享整行悬停反馈，项目标题按钮自身保持透明。
+  目录标题是一个整行的披露目标；
   collapse/expand 仅影响子级可见性，相邻组形成一个
   密集的树而不是分离的卡片。悬停或聚焦项目标题
   揭示完整的项目路径。
@@ -254,8 +268,9 @@
 - `page` 状态：`chat | pulls | scheduled | plugins | settings`； `chat` 是
   对话表面路线，而不是操作模式。项目
   archive 是 `projects` 设置选项卡而不是独立页面。
-- 目的地历史是线性的； `Cmd/Ctrl+[` 和 `Cmd/Ctrl+]` 遍历它
-  没有持久的 back/forward 镀铬。
+- 目的地历史是线性的； `Cmd/Ctrl+[` 和 `Cmd/Ctrl+]` 遍历它，
+  没有持久的 back/forward chrome。插件页激活时，页脚插件按钮复用
+  一次后退（见 §2 Shell 区域），不新增独立的前进/后退控件。
 - 当项目选项卡的路径与路径不同时，选择项目选项卡会重用 `project.set`
   选择主机工作区并保留其他选项卡。
 - 选择项目范围的线程会在切换到之前激活其项目

@@ -97,6 +97,9 @@ Reference the [spec update matrix](03-ai-development-workflow.md#3-spec-update-m
 After implementation (or alongside it):
 
 - [ ] Every affected spec file is updated with the new behavior.
+- [ ] If `AGENTS.md` changed: `CLAUDE.md` still mirrors the non-negotiables,
+  both files share the same `Policy-Sync:` token, and `pnpm check:agent-policy`
+  passes. The reverse applies when only `CLAUDE.md` changed.
 - [ ] If architectural boundary changed: ADR is written or updated in `docs/adr/`.
 - [ ] If an implementation default changed: `decisions-log.md` entry updated.
 - [ ] If baseline frozen decisions are affected: baseline bump + explicit ADR (not MVP-normal).
@@ -115,17 +118,20 @@ After implementation (or alongside it):
   cross-component regression risk makes them necessary.
 - [ ] The smallest necessary targeted local checks passed, or local validation
   was assessed as unnecessary with no separate approval or waiver required.
-- [ ] Relevant E2E suites were selected and passed after the code-bearing
-  change was integrated into `main`; required validation needs no separate user
-  request. Documentation-only changes retain their existing exemption.
-- [ ] Results apply to the executable commit currently integrated into `main`.
-  Any required suite not run is recorded with its reason, alternative
-  validation, and remaining risk; delivery remains incomplete until that gate
-  passes.
-- [ ] Required remote E2E jobs passed for authorized remote delivery after the
-  change reached remote `main`; pre-merge jobs do not replace this result.
-  Dispatch or rerun follows the hosting platform's or repository workflow's
-  requirements.
+- [ ] Relevant E2E suites were selected and passed on the integrated local
+  `main` before the request branch was pushed and a PR/MR was opened, or before
+  a commit-only delivery was declared complete; required validation needs no
+  separate user request. Documentation-only changes retain their existing
+  exemption.
+- [ ] Results apply to the commit the gate ran on, and the affected suites were
+  rerun when the landed executable content changed. Any required suite not run
+  is recorded with its reason, alternative validation, and remaining risk;
+  delivery remains incomplete until that gate passes.
+- [ ] Hosting-platform E2E jobs that start before the remote merge were observed
+  and reported but do not replace the local `main` gate; a post-merge rerun
+  happened when the landed executable content differs from the commit the gate
+  ran on. Dispatch or rerun follows the hosting platform's or repository
+  workflow's requirements.
 
 ---
 
@@ -148,14 +154,20 @@ explicit branch-only or draft-only requests retain their narrower scope:
 - [ ] Requested commit/push delivery is integrated into local `main`; a
   task-branch commit or push alone was not reported as completion, and no second
   merge confirmation was requested.
+- [ ] For a code-bearing change: the relevant E2E gate ran against the
+  integrated local `main` before the branch push and PR/MR creation, or before
+  a commit-only delivery was declared complete, or its `NOT RUN` limitation is
+  recorded with reason, alternative validation, and remaining risk.
 - [ ] Commit-only or local-merge delivery did not publish remotely without
   separate authorization.
 - [ ] For authorized remote delivery: the request branch was pushed, its PR/MR
   targeted `main` with only this task's changes, and the description documented
   impacted specs, E2E scenarios, and validation.
 - [ ] For authorized remote delivery: PR self-review, required checks, and
-  reviews passed; the PR/MR merged into remote `main` using a permitted strategy;
-  local `main` was synchronized with the landed change.
+  reviews passed; the PR/MR merged into remote `main` using a permitted
+  strategy; local `main` was synchronized with the landed change; when the
+  landed executable content differs from the commit the gate ran on, the
+  affected suites were rerun and recorded.
 - [ ] No direct push to `main`, force-push, discarded unrelated work, or bypassed
   gate was inferred from the delivery request. Genuine blockers were reported.
 - [ ] Request worktree is removed after merge.
@@ -223,7 +235,7 @@ user's delivery scope:
 | 2 | Code/doc implements the planned change | Step 4 of [development loop](03-ai-development-workflow.md#2-development-loop) |
 | 3 | All impacted specs updated | [R1 — Spec-sync](03-ai-development-workflow.md#r1--spec-first--spec-sync) |
 | 4 | E2E scenarios documented (or confirmed not needed) | [R3 — E2E coverage doc](03-ai-development-workflow.md#r3--e2e-coverage-doc) |
-| 5 | Targeted local checks follow the existing risk standard; relevant E2E passed after code-bearing local/remote `main` integration and applicable remote gates passed; required tests need no separate user request | Steps 7 and 11 of development loop |
+| 5 | Targeted local checks follow the existing risk standard; for a code-bearing change the relevant E2E gate passed on the integrated local `main` before the branch push, the PR/MR, or a commit-only completion (or its `NOT RUN` limitation is recorded); after the remote merge the affected suites were rerun when the landed executable content changed; required tests need no separate user request | Steps 7, 10, and 11 of development loop |
 | 6 | Change committed with conventional message | [R2 — Commit-per-change](03-ai-development-workflow.md#r2--commit-per-change) |
 | 7 | BOARD updated if milestone deliverable completed | Step 9 of development loop |
 | 8 | No secrets or local data in commit | [§4.4 Never commit](03-ai-development-workflow.md#44-never-commit) |

@@ -2,6 +2,41 @@ import type { ChangelogEntry } from "./changelog.js";
 
 export const deEntries: ChangelogEntry[] = [
   {
+    "version": "0.15.0",
+    "date": "2026-09-17",
+    "highlights": [
+      "Warteschlangen-Prompts lassen sich umordnen, bearbeiten, sperren und als Nächstes senden.",
+      "Beim Erstellen eines Projekts lässt sich ein Git-Repository klonen.",
+      "Die Inhaltsbreite der Unterhaltung lässt sich in der Chat-Spalte ziehen.",
+      "Fehler bei der Skill-Markt-Installation zeigen einen Retry statt eines toten Buttons.",
+      "Von Plugins deklarierte Anbieter erscheinen als native Zeilen, inklusive API-Keys und vertrauenswürdiger Custom-Agents.",
+      "Plugins können Echtzeitverbindungen, globale Shortcuts, Fähigkeitsrechte und einen offiziellen Kanal mit Backups nutzen.",
+      "Plugins können Theme-Variablen, Theme-Assets und ein transparentes schwebendes Widget registrieren.",
+      "Ein Projekt wird zusammen mit seinen eigenen Sitzungen gelöscht, nach einer zweiten Bestätigung.",
+      "Subagenten erhalten eine geordnete Modell-Fallback-Liste; abgeschlossene laufen in derselben Task-Karte weiter; mitgelieferte Builtins lassen sich in den Einstellungen schalten.",
+      "Dateiverweise in Tool-Zeilen öffnen die passende Ansicht; das Aufklappen hält die Leseposition; Plan-Freigabe-Hover ist undurchsichtig.",
+    ],
+  },
+
+  {
+    "version": "0.14.9",
+    "date": "2026-09-17",
+    "highlights": [
+      "Warteschlangen-Prompts lassen sich umordnen, bearbeiten, sperren und als Nächstes senden.",
+      "Beim Erstellen eines Projekts lässt sich ein Git-Repository klonen.",
+      "Die Inhaltsbreite der Unterhaltung lässt sich in der Chat-Spalte ziehen.",
+      "Fehler bei der Skill-Markt-Installation zeigen einen Retry statt eines toten Buttons.",
+      "Von Plugins deklarierte Anbieter erscheinen als native Zeilen, inklusive API-Keys und vertrauenswürdiger Custom-Agents.",
+      "Plugins können Echtzeitverbindungen, globale Shortcuts, Fähigkeitsrechte und einen offiziellen Kanal mit Backups nutzen.",
+      "Plugins können Theme-Variablen, Theme-Assets und ein transparentes schwebendes Widget registrieren.",
+      "Ein Projekt wird zusammen mit seinen eigenen Sitzungen gelöscht, nach einer zweiten Bestätigung.",
+      "Subagenten erhalten eine geordnete Modell-Fallback-Liste; mitgelieferte Builtins lassen sich in den Einstellungen schalten.",
+      "Dateiverweise in Tool-Zeilen öffnen die passende Ansicht; das Aufklappen hält die Leseposition; Plan-Freigabe-Hover ist undurchsichtig.",
+    ],
+  },
+
+
+  {
     "version": "0.14.8",
     "date": "2026-09-14",
     "highlights": [

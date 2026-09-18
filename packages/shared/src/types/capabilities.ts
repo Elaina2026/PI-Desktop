@@ -11,6 +11,27 @@ export type AgentCapabilityQuery = {
   projectPath?: string;
 };
 
+/** One end of a level move: the level plus, for `project`, the owning root. */
+export type AgentCapabilityTarget = {
+  level: AgentCapabilityLevel;
+  projectPath?: string;
+};
+
+/**
+ * A move of one capability document between the global `.agents` directory and
+ * a project's.
+ *
+ * Both ends travel together because the host resolves each one against its own
+ * directory: a global source may still name a project, which is the context its
+ * enabled state is read in, and that must never be mistaken for the destination.
+ * The document is moved rather than copied, so the source level stops listing it.
+ */
+export type AgentCapabilityMove = {
+  id: string;
+  from: AgentCapabilityTarget;
+  to: AgentCapabilityTarget;
+};
+
 /** Transport of an MCP server the user configured themselves. */
 export type McpTransport = "stdio" | "http";
 
@@ -144,8 +165,9 @@ export type UserSubagentRecord = {
   tools: string[];
   /** `<provider>/<model>` pin, resolved against providers at launch. */
   model?: string;
+  /** Ordered fallback pins; empty clears the list, absent preserves it on update. */
+  fallbackModels?: string[];
   thinkingLevel?: SubagentThinkingLevel;
-  maxTurns?: number;
   /** Output-token cap for one delegate response; omitted follows the model. */
   maxTokens?: number;
   /** Absolute path of the document, for revealing it. */
@@ -163,9 +185,10 @@ export type UserSubagentInput = {
   tools?: string[];
   /** Empty string clears the pin; absent leaves it unchanged. */
   model?: string;
+  /** Ordered fallback pins; empty clears the list, absent preserves it on update. */
+  fallbackModels?: string[];
   thinkingLevel?: SubagentThinkingLevel | "";
   /** `0` clears the override; absent leaves it unchanged. */
-  maxTurns?: number;
   /** `0` clears the cap; absent leaves it unchanged. */
   maxTokens?: number;
   enabled?: boolean;

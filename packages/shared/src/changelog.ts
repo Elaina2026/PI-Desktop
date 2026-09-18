@@ -29,6 +29,40 @@ export type ChangelogEntry = {
 
 const enEntries: ChangelogEntry[] = [
   {
+    version: "0.15.0",
+    date: "2026-09-17",
+    highlights: [
+      "Reorder, edit, lock, and promote queued prompts so a later message can run next.",
+      "Clone a git repository from the create-project dialog.",
+      "Drag the conversation content width inside the chat column.",
+      "Show skill-market install failures with a retry instead of a dead button.",
+      "Show plugin-declared providers as native rows, including API keys and trusted custom agents.",
+      "Add plugin real-time connections, global shortcuts, capability permissions, and an official channel with backups.",
+      "Let plugins register theme variables, theme assets, and a transparent floating widget.",
+      "Delete a project together with its owned sessions, after a second-click confirm.",
+      "Give subagents an ordered model fallback list, resume a settled one from the same Task card, and switch shipped builtins from Settings.",
+      "Open file references from tool rows, keep the reading position when expanding details, and paint Plan approval hover as an opaque plate.",
+    ],
+  },
+
+  {
+    version: "0.14.9",
+    date: "2026-09-17",
+    highlights: [
+      "Reorder, edit, lock, and promote queued prompts so a later message can run next.",
+      "Clone a git repository from the create-project dialog.",
+      "Drag the conversation content width inside the chat column.",
+      "Show skill-market install failures with a retry instead of a dead button.",
+      "Show plugin-declared providers as native rows, including API keys and trusted custom agents.",
+      "Add plugin real-time connections, global shortcuts, capability permissions, and an official channel with backups.",
+      "Let plugins register theme variables, theme assets, and a transparent floating widget.",
+      "Delete a project together with its owned sessions, after a second-click confirm.",
+      "Give subagents an ordered model fallback list, and switch shipped builtins from Settings.",
+      "Open file references from tool rows, keep the reading position when expanding details, and paint Plan approval hover as an opaque plate.",
+    ],
+  },
+
+  {
     version: "0.14.8",
     date: "2026-09-14",
     highlights: [
@@ -759,6 +793,41 @@ const enEntries: ChangelogEntry[] = [
 
 const zhCNEntries: ChangelogEntry[] = [
   {
+    version: "0.15.0",
+    date: "2026-09-17",
+    highlights: [
+      "排队消息支持调整顺序、编辑、锁定，以及提升为下一条立即发送。",
+      "创建项目时可直接克隆 Git 仓库。",
+      "可在对话列内拖动正文宽度。",
+      "技能市场安装失败会显示原因并支持重试，而不再是失效按钮。",
+      "插件声明的提供商显示为原生行，可填写 API 密钥，并支持受信任的自定义 Agent。",
+      "插件可申请实时连接、全局快捷键和能力权限，并支持带备份的官方渠道安装。",
+      "插件可注册主题变量、主题资源，以及透明浮动小组件。",
+      "删除项目时一并删除其拥有的会话，并需二次点击确认。",
+      "子智能体支持按顺序回退的模型列表，已结束的可在同一 Task 卡片上继续，并可在设置中开关内置子智能体。",
+      "工具行中的文件引用会打开对应视图，展开详情时保持阅读位置；Plan 审批悬停使用不透明底板。",
+    ],
+  },
+
+  {
+    version: "0.14.9",
+    date: "2026-09-17",
+    highlights: [
+      "排队消息支持调整顺序、编辑、锁定，以及提升为下一条立即发送。",
+      "创建项目时可直接克隆 Git 仓库。",
+      "可在对话列内拖动正文宽度。",
+      "技能市场安装失败会显示原因并支持重试，而不再是失效按钮。",
+      "插件声明的提供商显示为原生行，可填写 API 密钥，并支持受信任的自定义 Agent。",
+      "插件可申请实时连接、全局快捷键和能力权限，并支持带备份的官方渠道安装。",
+      "插件可注册主题变量、主题资源，以及透明浮动小组件。",
+      "删除项目时一并删除其拥有的会话，并需二次点击确认。",
+      "子智能体支持按顺序回退的模型列表，并可在设置中开关随应用提供的内置子智能体。",
+      "工具行中的文件引用会打开对应视图，展开详情时保持阅读位置；Plan 审批悬停使用不透明底板。",
+    ],
+  },
+
+
+  {
     version: "0.14.8",
     date: "2026-09-14",
     highlights: [
@@ -1487,6 +1556,41 @@ const zhCNEntries: ChangelogEntry[] = [
 ];
 
 const zhTWEntries: ChangelogEntry[] = [
+  {
+    version: "0.15.0",
+    date: "2026-09-17",
+    highlights: [
+      "排隊訊息支援調整順序、編輯、鎖定，以及提升為下一則立即傳送。",
+      "建立專案時可直接複製 Git 儲存庫。",
+      "可在對話欄內拖曳正文寬度。",
+      "技能市場安裝失敗會顯示原因並支援重試，而不再是失效按鈕。",
+      "外掛宣告的提供商顯示為原生列，可填寫 API 金鑰，並支援受信任的自訂 Agent。",
+      "外掛可申請即時連線、全域快速鍵和能力權限，並支援帶備份的官方渠道安裝。",
+      "外掛可註冊主題變數、主題資源，以及透明浮動小工具。",
+      "刪除專案時一併刪除其擁有的工作階段，並需二次點選確認。",
+      "子智慧體支援依序回退的模型清單，已結束的可在同一 Task 卡片上繼續，並可在設定中開關內建子智慧體。",
+      "工具列中的檔案引用會開啟對應檢視，展開詳情時保持閱讀位置；Plan 審批懸停使用不透明底板。",
+    ],
+  },
+
+  {
+    version: "0.14.9",
+    date: "2026-09-17",
+    highlights: [
+      "排隊訊息支援調整順序、編輯、鎖定，以及提升為下一則立即傳送。",
+      "建立專案時可直接複製 Git 儲存庫。",
+      "可在對話欄內拖曳正文寬度。",
+      "技能市場安裝失敗會顯示原因並支援重試，而不再是失效按鈕。",
+      "外掛宣告的提供商顯示為原生列，可填寫 API 金鑰，並支援受信任的自訂 Agent。",
+      "外掛可申請即時連線、全域快速鍵和能力權限，並支援帶備份的官方渠道安裝。",
+      "外掛可註冊主題變數、主題資源，以及透明浮動小工具。",
+      "刪除專案時一併刪除其擁有的工作階段，並需二次點選確認。",
+      "子智慧體支援依序回退的模型清單，並可在設定中開關隨應用程式提供的內建子智慧體。",
+      "工具列中的檔案引用會開啟對應檢視，展開詳情時保持閱讀位置；Plan 審批懸停使用不透明底板。",
+    ],
+  },
+
+
   {
     version: "0.14.8",
     date: "2026-09-14",

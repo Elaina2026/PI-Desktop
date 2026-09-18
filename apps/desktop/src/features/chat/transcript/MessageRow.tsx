@@ -44,7 +44,8 @@ export const MessageRow = memo(function MessageRow({
   const openFileRef = useOpenChatFileRef();
   // Slash prompts are stored expanded; editing works on the typed form so the
   // resent turn re-expands the template (D123).
-  const editSeed = (editableUserMessage && message.command) || message.content || "";
+  const editSeed =
+    (editableUserMessage && message.command) || (message.content || "");
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(editSeed);
   const [retryingEdit, setRetryingEdit] = useState(false);
@@ -84,6 +85,8 @@ export const MessageRow = memo(function MessageRow({
     <div
       className={`message-row ${isSessionMessage ? "session-message" : isUser ? "user" : message.role}`}
       data-minimap-id={message.id}
+      data-message-id={message.id}
+      data-row-role={isSessionMessage ? undefined : "user"}
       role="article"
       aria-label={isSessionMessage ? t("sessionCollaboration.agentMessage") : isUser ? t("chat.userMessage") : t("chat.assistantMessage")}
     >
@@ -92,7 +95,14 @@ export const MessageRow = memo(function MessageRow({
         {isUser || displayed ? (
           <div className="message-bubble">
             {editing && editableUserMessage ? (
-              <div className="message-edit">
+              <form
+                className="message-edit"
+                aria-busy={retryingEdit || undefined}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void retryEdit();
+                }}
+              >
                 <textarea
                   className="message-edit-input selectable"
                   value={editValue}
@@ -116,22 +126,21 @@ export const MessageRow = memo(function MessageRow({
                 <div className="message-edit-actions">
                   <button
                     type="button"
-                    className="copy-btn"
+                    className="icon-btn message-edit-cancel"
                     disabled={retryingEdit}
                     onClick={cancelEdit}
                   >
                     {t("chat.cancelEdit")}
                   </button>
                   <button
-                    type="button"
-                    className="copy-btn primary"
+                    type="submit"
+                    className="send-btn message-edit-submit"
                     disabled={retryingEdit || (!editValue.trim() && !message.attachments?.length)}
-                    onClick={() => void retryEdit()}
                   >
                     {retryingEdit ? t("chat.retryingEdit") : t("chat.retryEdit")}
                   </button>
                 </div>
-              </div>
+              </form>
             ) : isUser ? (
               <>
                 {extraAttachments.length ? (
@@ -171,6 +180,8 @@ export const MessageRow = memo(function MessageRow({
                       // it) and is what regenerate/reseed replay (D123).
                       <code
                         className="chat-command-chip"
+                        data-source-start={0}
+                        data-source-end={message.content.length}
                         title={String(message.content || "")}
                       >
                         {message.command}

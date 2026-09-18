@@ -27,7 +27,7 @@ PI-Desktop in the application menu and uses the canonical icon in the native
 About panel. The runtime also applies `build/icon_1024.png` to the Dock. Stock
 files under `node_modules` are never modified. Windows/Linux development keeps
 the normal electron-vite executable. Windows Main nevertheless registers the
-same `com.pi-desktop.app` AppUserModelID used by the NSIS package before
+same `net.aiuo.pi-desktop` AppUserModelID used by the NSIS package before
 Electron readiness, preventing the stock host identity from owning native
 notifications or taskbar groups. The Windows package additionally pins the
 `PI-Desktop` executable and Start menu shortcut names. The launcher sets
@@ -35,10 +35,11 @@ notifications or taskbar groups. The Windows package additionally pins the
 and preserve developer workspace defaults despite the branded executable name.
 The first `pnpm dev` on Electron 43+ downloads the Electron binary on demand
 (the package no longer installs it during `pnpm install`).
-Packaged lanes use
-`build/icon.icns` through electron-builder, and the renderer imports the same
-PNG through `BrandLogo`. The PNG is canonical;
-`scripts/make-icon.py` derives the 512px Windows/Linux package PNG, the
+Packaged lanes use `build/icon.icns` through electron-builder on macOS and
+`build/icon.ico` for the Windows executable and native window icon. The
+renderer imports the same PNG through `BrandLogo`. The PNG is canonical;
+`scripts/make-icon.py` derives the multi-size Windows ICO, the 512px
+Windows/Linux package PNG, the
 transparent monochrome `build/tray-icon-mac.png` template, and the iconset/ICNS
 when macOS `iconutil` is available, without overwriting the canonical source.
 
@@ -73,8 +74,8 @@ when macOS `iconutil` is available, without overwriting the canonical source.
 - Chromium locale packs for English, Simplified Chinese, Traditional Chinese,
   Turkish, German, Spanish, French, and Korean. Product catalogs remain bundled
   independently of Chromium locales.
-- App icon `build/icon.icns` (derived from canonical `build/icon_1024.png` by
-  `scripts/make-icon.py`).
+- App icons `build/icon.icns` and `build/icon.ico` (derived from canonical
+  `build/icon_1024.png` by `scripts/make-icon.py`).
 - macOS menu bar template `build/tray-icon-mac.png`, derived from the dark PI
   mark with a transparent background; Windows/Linux use the product PNG tray
   resource.
@@ -247,7 +248,7 @@ name. The macOS ZIP includes both that note and the executable
 `/Applications` or `~/Applications`, ZIP users can double-click the helper. It
 searches only those two fixed locations, removes only the recursive
 `com.apple.quarantine` attribute when present, and opens PI-Desktop. Before
-doing so it verifies `CFBundleIdentifier=com.pi-desktop.app`. It does not use
+doing so it verifies `CFBundleIdentifier=net.aiuo.pi-desktop`. It does not use
 `sudo` or accept an arbitrary application path. The manual fallback for the
 standard system location is:
 

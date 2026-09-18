@@ -68,11 +68,11 @@ inside the `openai_compatible` provider path: the preset fixes the endpoint to
 models from `/models`, and sends chat turns through pi-ai's OpenAI Chat
 Completions adapter. It does not create a second transport or a closed model
 allowlist. Agent-runtime injects OpenCode routing headers on every LLM
-request (session turns, subagents, prompt enhancement, and plugin
-one-shots): `x-opencode-session` is the durable conversation id (or a
-per-call UUID when the caller has no session), `x-opencode-client` is
-`pi-desktop`, and `User-Agent` is `pi-desktop/<APP_VERSION>` unless the row
-sets `headers["User-Agent"]`. A custom OpenAI-compatible row whose base URL
+request (session turns, subagents, context-compaction summaries, prompt
+enhancement, and plugin one-shots): `x-opencode-session` is the durable
+conversation id (or a per-call UUID when the caller has no session),
+`x-opencode-client` is `pi-desktop`, and `User-Agent` is
+`pi-desktop/<APP_VERSION>` unless the row sets `headers["User-Agent"]`. A custom OpenAI-compatible row whose base URL
 host is `opencode.ai` receives the same headers. pi-ai is not relied on to
 emit `x-opencode-session`. Each provider row (AI service or OAuth account)
 may set optional `headers`; empty keeps adapter defaults. A fetch wrapper is
@@ -101,6 +101,10 @@ base URL, model id, or catalog `family` identifies DeepSeek. pi-ai only
 auto-detects `provider === "deepseek"` or a `deepseek.com` URL, and PI-Desktop
 stores a UUID as `model.provider`, so aggregators and custom gateways would
 otherwise omit `reasoning_content` on assistant turns that produced no thinking.
+Non-official DeepSeek endpoints also set `requiresNonEmptyReasoningReplay` so
+missing reasoning is filled with a documented placeholder instead of `""`
+(OpenCode / third-party relays reject empty echoes after compaction; see
+ADR 0256 / #296). Official `deepseek.com` rows keep empty-string fill (#223).
 The overlay does not change `thinkingFormat`.
 
 ## 5. Built-in vendor matrix (ship intent)
@@ -301,6 +305,10 @@ type UserModelConfig = {
 type ModelBinding = {
   id: string
   contextWindow: number
+  /** Where `contextWindow` came from; absent on records older than the marker,
+   * which then resolve through the historical rule (see
+   * `13-model-catalog-and-selection.md` §9.1). */
+  contextWindowSource?: "catalog" | "user"
   maxTokens: number
   thinkingLevels: ThinkingLevel[]
   defaultThinkingLevel: ThinkingLevel | null
@@ -347,7 +355,9 @@ normal pin resolution, including when `Task.model` repeats that definition's
 own pin key. On-demand matching uses unique provider id/vendor/name lookup and
 must not overwrite a pin with another account's credentials. If vendor/model aliases collide across accounts, the
 opted-in account uses its exact provider ID as the override key. Selection priority remains Task.model → definition pin
-→ session model (D278; ADR subagent-model-opt-in).
+→ session model (D278; ADR subagent-model-opt-in). The opt-in governs every entry point that lets the AI pick a model
+for delegated work, not only `Task.model`: a `session/collaboration/spawn` `modelKey` naming a model without it is
+refused with `PERMISSION_DENIED`, while omitting the key, or naming the default model's own key, still inherits.
 
 ## 8. Secrets
 
@@ -410,6 +420,34 @@ models — so the row's `apiStyle` follows the selected model.
 Deleting a row calls the normal host `providers.delete` path, which removes its
 OAuth secret and metadata; it never logs out or deletes another row with the
 same vendor key.
+
+### Anthropic token endpoint rate limits
+
+The pinned pi-ai 0.85.1 patch gives Anthropic authorization-code exchange and
+refresh a shared, bounded token-request policy: retry only an explicit HTTP
+429, at most three total requests. Wait at least 1 s then 2 s, or longer when
+`Retry-After` gives delta seconds or an HTTP date. A server delay beyond the
+remaining budget ends the attempt; it is never shortened to fit. Malformed or
+missing hints use the bounded exponential fallback.
+
+One 30 s helper deadline covers requests, response-body reads and waits, and
+all use the original caller signal. An earlier caller deadline wins; pi-ai's
+existing refresh operation has a 15 s limit inside the credential-store lock.
+Cancellation also stops pending waits. The patch does not move refresh outside
+that lock: failed attempts leave the stored credential unchanged, and a
+successful rotated grant is written once.
+
+Network failures, interrupted bodies, 5xx and `invalid_grant` are not replayed:
+the result of a non-idempotent token request may be ambiguous. An explicit
+`invalid_grant` stops even if a response is labelled 429. HTTP/token-JSON
+failures expose a bounded recovery message rather than raw response bodies,
+URLs or embedded stacks. Login guidance tells the user to wait, close the
+failed dialog and start sign-in again; refresh guidance suggests waiting before
+retrying and signing in again if the problem continues. HTTP 429 alone does
+not prove whether a code was consumed, so no expiry claim is made.
+
+This uses the existing repository dependency-patch mechanism; OAuth endpoints,
+PKCE, credential ownership, IPC and storage schemas are unchanged.
 
 ## 9. Model catalog service
 

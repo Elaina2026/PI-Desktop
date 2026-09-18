@@ -93,12 +93,13 @@ before it is ever sent to the UI:
   the parser cannot resolve, `javascript:`, `expression(`, and markup sequences
   (`<style`, `</style`, `<!--`); an empty sheet is refused too
 - Capped at 256KB per file, 8 themes per plugin
-- A theme may declare `assets` (package-relative, whitelisted image and font
+- A theme may declare `assets` (absolute paths, whitelisted image and font
   extensions, 4MB summed). Each matching `url()` is rewritten to
   `plugin-asset://<pluginId>/<path>` and served by a host handler that resolves
-  only through the loaded plugin's own declared list: read-only,
-  package-scoped, `nosniff`, and revoked when the plugin unloads. An undeclared
-  reference is still refused, and the raw path never reaches the renderer
+  only through the loaded plugin's own registered list: read-only, `nosniff`,
+  and revoked when the plugin unloads. `pi.themes.upsert` registers the same
+  kind of path at runtime. An unregistered reference is still refused, and the
+  raw path never reaches the renderer
 - `contributes.windowAppearance` (`#rrggbb` / `#rrggbbaa`) requires
   `ui.window.appearance` and applies only while one of that plugin's themes is
   the selected one; leaving the theme restores the host background, because the
@@ -305,6 +306,14 @@ outbound path the host owns answers to it.
   called out during configuration or plugin permission review. The MCP client
   follows redirects manually, allows at most five HTTP(S) hops, and re-checks
   the allowlist before every hop.
+- **`pi.net.websocket`.** A `ws://` or `wss://` target whose host is not in
+  `manifest.net.domains` is refused at the egress chokepoint before the
+  transport is asked to open anything, and the host — which owns the socket,
+  not the plugin — closes every socket the plugin still holds when it unloads,
+  is disabled, or crashes. Sockets are bounded per plugin (4), inbound and
+  outbound frames are capped at 1 MiB, an oversized frame closes the connection
+  instead of being buffered, and a send queue above 4 MiB is refused rather
+  than grown. Frames are addressed to the owning plugin only.
 
 An absent, empty, or malformed list means no egress at all, and a bare `*` is
 refused at install so nobody declares their way out. This is what makes a
@@ -313,7 +322,11 @@ generous `fs.read` scope affordable (§6).
 Still open, tracked separately: `agent.prompt.inject` (skill text can ask a
 shell-capable agent to do the carrying), `shell.openExternal`, a `bus.publish`
 relayed to a net-capable plugin, and raw `fetch` inside the plugin process — the
-last one needs the sandboxed plugin runtime from ADR 0008 D009.
+last one needs the sandboxed plugin runtime from ADR 0008 D009. `pi.net.fetch`
+narrows none of that: the host applies the allowlist, follows redirects by hand,
+and audits the call, but it never retries, throttles, or re-issues a request. An
+upstream `429` reaches the plugin as `429` plus whatever `Retry-After` the server
+sent, and what the plugin does about it is the plugin's own policy.
 
 ## 8.1 MCP server egress and credentials
 
@@ -363,6 +376,37 @@ dialog service refuses every dangerous operation outright.
 `ui.microphone` allows only the `media` permission, for audio, inside the
 plugin's isolated panel session. Camera and every other device permission stay
 denied, and the plugin receives no native handle: capture stays page-owned.
+
+`audio.capture.background` and `audio.playback.background` gate a callable
+surface: the ten `pi.audio.*` methods exist in the plugin host process and keep
+their permission requirement, but this branch has no device backend, so an
+authorized call is refused with a coded `UNSUPPORTED` refusal that is audited
+under `audio.<method>` with `ok: false`, and no device is opened (the two
+synchronous registration helpers `onInputFrame` / `offInputFrame` throw the
+same code instead of registering a handler that could never fire). When the
+host service lands, the host owns the device: a plugin exchanges PCM16 frames
+and never receives a `MediaStream`, a device handle, an OS device path, or a
+Node stream, one input stream per plugin is allowed, and disable, unload,
+crash, or permission revocation stops capture and drops queued playback
+instead of leaving an orphaned device or timer.
+
+`keyboard.globalShortcut` is implemented and stays inside the host's
+registration model. The host owns Electron's `globalShortcut`; a plugin never
+receives a keyboard hook, `before-input-event`, raw input device, or key event
+stream, so there is no keylogger-shaped surface and no way to see the keys the
+user types. A plugin may only map an accelerator to one of its own registered
+commands, and an accelerator the OS reserves, that PI-Desktop itself currently
+spends (the plugin-launcher and window-toggle bindings, `Alt+Space` and
+`Alt+Shift+W` by default; a user rebinding one frees it for plugins), or that
+another plugin holds is refused with
+`LIMIT_EXCEEDED` (at most 8 per plugin) instead of being taken over. A trigger
+runs exactly that one command. Register, unregister, and trigger are audited
+with the plugin id and the result — a registration and a trigger also name the
+accelerator and command — and typed input is never recorded. Every entry is
+released on disable, unload, and crash.
+
+Across all four capabilities, an undeclared or ungranted permission denies the
+call and is audited before any device, accelerator, or socket is reached.
 
 ## 9. Auditing and emergency response
 
@@ -432,6 +476,17 @@ Current enforcement:
     dialog shows only catalog text (§8.2)
 15. `ui.microphone` grants audio capture only, inside the isolated panel
     session (§8.2)
+16. `keyboard.globalShortcut` is host-owned: the registry refuses an
+    OS-reserved, host-owned, or other-plugin accelerator, a shortcut can only
+    run the owning plugin's own command, and every entry dies on the same
+    teardown path as the plugin's commands and tools (§8.2)
+
+`audio.capture.background` and `audio.playback.background` are declared and
+present in the plugin API: the methods are gated by those permissions and an
+authorized call is refused with a coded `UNSUPPORTED` refusal that is audited,
+because this host has no device backend yet, so nothing reaches a device.
+`net.websocket` is implemented: connections are host-owned, allowlist-checked,
+bounded, and released with the plugin (§8.1).
 
 Not enforced yet:
 

@@ -563,6 +563,15 @@ fn permission_parent_param(params: &Value) -> Result<Option<String>, JsonRpcErro
     Ok(Some(parent_id.to_string()))
 }
 
+/// Drop the per-session files and caches that live outside SQLite. Shared by
+/// `session.delete` and `projects.remove` so removing a project cleans up
+/// exactly the same side data as deleting one session.
+fn drop_session_side_data(st: &AppState, id: &str) {
+    scratch::remove_session_dir(&st.data_dir, id);
+    review::remove_session(&st.data_dir, id);
+    st.hashline.drop_session(id);
+}
+
 const DEFAULT_LARGE_PASTE_THRESHOLD: i64 = 600;
 const MIN_LARGE_PASTE_THRESHOLD: i64 = 1;
 const MAX_LARGE_PASTE_THRESHOLD: i64 = 1_000_000;
@@ -822,6 +831,47 @@ fn resolve_tool_workspace(
     }
 }
 
+/// Select a registered logical-project root for an absolute tool path.
+///
+/// The active workspace remains the session's primary root by default. A path
+/// inside another root of the same host-owned project group may use that root
+/// as its containment base; arbitrary external paths still follow the normal
+/// permission flow and never become group roots implicitly.
+fn resolve_tool_workspace_for_call(
+    state: &AppState,
+    session_id: &str,
+    args: &Value,
+) -> Result<Option<String>, JsonRpcError> {
+    let primary = resolve_tool_workspace(state, session_id)?;
+    let Some(primary_path) = primary.as_deref() else {
+        return Ok(primary);
+    };
+    let Some(raw_path) = args.get("path").and_then(Value::as_str) else {
+        return Ok(primary);
+    };
+    if !Path::new(raw_path).is_absolute() {
+        return Ok(primary);
+    }
+    let group = state
+        .db
+        .project_group_for_path(primary_path)
+        .map_err(|error| rpc_err(1000, error.to_string(), "INTERNAL"))?;
+    // Resolve the spelling before containment. macOS can expose the same
+    // directory as `/var` and `/private/var`, while the database stores the
+    // canonical spelling. Non-existent leaves are still supported by the
+    // workspace resolver's existing-ancestor behavior.
+    let comparable_path = workspace::resolve_external_path(Path::new(primary_path), raw_path)
+        .unwrap_or_else(|_| PathBuf::from(raw_path));
+    if let Some(group) = group {
+        if let Some(root) = group.roots.iter().find(|root| {
+            workspace::lexically_inside(Path::new(&root.path), &comparable_path.to_string_lossy())
+        }) {
+            return Ok(Some(root.path.clone()));
+        }
+    }
+    Ok(primary)
+}
+
 /// Read/search tools are low risk inside their normal roots, but an explicit
 /// path outside both roots is a separate capability. The check is deliberately
 /// based on the same resolver used for execution so `..` and symlink escapes
@@ -877,7 +927,8 @@ fn resolve_plan_workspace_if_available(
     Ok(resolve_persisted_project_workspace(state, session_id)?.map(PathBuf::from))
 }
 
-async fn emit_notification(tx: &mpsc::UnboundedSender<String>, method: &str, params: Value) {
+/// Push one notification line to the caller's stream.
+fn send_notification(tx: &mpsc::UnboundedSender<String>, method: &str, params: Value) {
     let note = JsonRpcNotification {
         jsonrpc: "2.0",
         method: method.to_string(),
@@ -885,6 +936,71 @@ async fn emit_notification(tx: &mpsc::UnboundedSender<String>, method: &str, par
     };
     if let Ok(raw) = serde_json::to_string(&note) {
         let _ = tx.send(format!("{raw}\n"));
+    }
+}
+
+async fn emit_notification(tx: &mpsc::UnboundedSender<String>, method: &str, params: Value) {
+    send_notification(tx, method, params);
+}
+
+/// Reports install progress to the renderer, and reads the cancel flag.
+///
+/// Throttled on purpose: an install reports every chunk of bytes it sees, and
+/// an interface needs a few of those per second rather than thousands. A phase
+/// change and the terminal report always go through, so a dialog never misses
+/// the transition it is displaying.
+struct RpcInstallObserver {
+    tx: mpsc::UnboundedSender<String>,
+    cancel: crate::plugins::CancelToken,
+    last: Option<std::time::Instant>,
+    last_phase: Option<crate::plugins::InstallPhase>,
+}
+
+impl crate::plugins::InstallObserver for RpcInstallObserver {
+    fn progress(&mut self, event: crate::plugins::InstallProgress) {
+        const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+        let phase_changed = self.last_phase != Some(event.phase);
+        let terminal = event.error.is_some();
+        let due = self
+            .last
+            .map(|at| at.elapsed() >= MIN_INTERVAL)
+            .unwrap_or(true);
+        if !phase_changed && !terminal && !due {
+            return;
+        }
+        self.last = Some(std::time::Instant::now());
+        self.last_phase = Some(event.phase);
+        let tried: Vec<Value> = event
+            .tried
+            .iter()
+            .map(|mirror| {
+                json!({
+                    "source": mirror.source,
+                    "url": mirror.url,
+                    "error": mirror.error,
+                })
+            })
+            .collect();
+        send_notification(
+            &self.tx,
+            "plugin.installProgress",
+            json!({
+                "pluginId": event.plugin_id,
+                "version": event.version,
+                "phase": event.phase.as_str(),
+                "source": event.source,
+                "attempt": event.attempt,
+                "attempts": event.attempts,
+                "receivedBytes": event.received_bytes,
+                "totalBytes": event.total_bytes,
+                "tried": tried,
+                "error": event.error,
+            }),
+        );
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancel.is_cancelled()
     }
 }
 
@@ -1016,6 +1132,22 @@ fn plugin_err(err: impl ToString) -> JsonRpcError {
         rpc_err(1013, msg, "PLUGIN_PERMISSION_DENIED")
     } else if msg.contains("PLUGIN_NOT_FOUND") {
         rpc_err(1003, msg, "NOT_FOUND")
+    } else if msg.contains("PLUGIN_CANCELLED") {
+        // The user's own action rather than a failure: the surface closes the
+        // dialog quietly instead of reporting an error.
+        rpc_err(1019, msg, "PLUGIN_CANCELLED")
+    } else if msg.contains("PLUGIN_MARKET_NOT_PUBLISHED") {
+        // The platform has the version and is not offering it yet: a state to
+        // report, not a bug to sweep into INTERNAL.
+        rpc_err(1020, msg, "PLUGIN_MARKET_NOT_PUBLISHED")
+    } else if msg.contains("PLUGIN_MARKET_ARCHIVED") {
+        rpc_err(1021, msg, "PLUGIN_MARKET_ARCHIVED")
+    } else if msg.contains("PLUGIN_MARKET_NOT_FOUND") {
+        rpc_err(1022, msg, "PLUGIN_MARKET_NOT_FOUND")
+    } else if msg.contains("PLUGIN_MARKET_RATE_LIMITED") {
+        rpc_err(1023, msg, "PLUGIN_MARKET_RATE_LIMITED")
+    } else if msg.contains("PLUGIN_MARKET_NO_SOURCE") {
+        rpc_err(1024, msg, "PLUGIN_MARKET_NO_SOURCE")
     } else if msg.contains("PLUGIN_NETWORK") {
         rpc_err(1014, msg, "PLUGIN_NETWORK")
     } else {
@@ -1123,6 +1255,40 @@ fn parse_capability_query(
     Ok((level, project_path))
 }
 
+/// Read one end of a move from a nested `{ level, projectPath }` object.
+///
+/// A move names two directories at once, so unlike the single-level queries it
+/// reads a named key instead of the flat params, and the two ends can never be
+/// confused for each other. `level` must be present and a string: defaulting a
+/// missing or non-string level to `global` would silently write a capability
+/// into the wrong directory, so it is rejected as invalid params instead.
+fn parse_capability_target(
+    params: &Value,
+    key: &str,
+) -> Result<crate::agent_capabilities::CapabilityTarget, JsonRpcError> {
+    let source = params
+        .get(key)
+        .ok_or_else(|| rpc_err(1002, format!("{key} required"), "INVALID_PARAMS"))?;
+    let level = match source.get("level") {
+        Some(Value::String(level)) => CapabilityLevel::parse(Some(level))
+            .map_err(|error| capability_err(error.to_string()))?,
+        _ => {
+            return Err(rpc_err(
+                1002,
+                format!("{key}.level must be 'global' or 'project'"),
+                "INVALID_PARAMS",
+            ))
+        }
+    };
+    let project_path = source
+        .get("projectPath")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|value| !value.trim().is_empty());
+    crate::agent_capabilities::CapabilityTarget::new(level, project_path.as_deref())
+        .map_err(|error| capability_err(error.to_string()))
+}
+
 async fn handle_request(
     state: Arc<Mutex<AppState>>,
     method: &str,
@@ -1227,6 +1393,141 @@ async fn handle_request(
                 .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
             Ok(json!({ "projects": projects }))
         }
+        "project.groups.list" => {
+            let st = state.lock().await;
+            let groups = st
+                .db
+                .list_project_groups()
+                .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
+            Ok(json!({ "groups": groups }))
+        }
+        "project.group.create" => {
+            let name = params
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| rpc_err(1002, "name required", "INVALID_PARAMS"))?;
+            let folders = params
+                .get("folders")
+                .and_then(Value::as_array)
+                .ok_or_else(|| rpc_err(1002, "folders required", "INVALID_PARAMS"))?
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let st = state.lock().await;
+            let group = st
+                .db
+                .create_project_group(name, &folders)
+                .map_err(|e| rpc_err(1002, e.to_string(), "INVALID_PARAMS"))?;
+            Ok(json!({ "group": group }))
+        }
+        "project.group.update" => {
+            let group_id = params
+                .get("groupId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| rpc_err(1002, "groupId required", "INVALID_PARAMS"))?;
+            let name = params
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| rpc_err(1002, "name required", "INVALID_PARAMS"))?;
+            let folders = params
+                .get("folders")
+                .and_then(Value::as_array)
+                .ok_or_else(|| rpc_err(1002, "folders required", "INVALID_PARAMS"))?
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let st = state.lock().await;
+            let group = st
+                .db
+                .update_project_group(group_id, name, &folders)
+                .map_err(|e| rpc_err(1002, e.to_string(), "INVALID_PARAMS"))?;
+            Ok(json!({ "group": group }))
+        }
+        "project.group.rename" => {
+            let id = params
+                .get("groupId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| rpc_err(1002, "groupId required", "INVALID_PARAMS"))?;
+            let name = params
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| rpc_err(1002, "name required", "INVALID_PARAMS"))?;
+            let st = state.lock().await;
+            let group = st
+                .db
+                .rename_project_group(id, name)
+                .map_err(|e| rpc_err(1002, e.to_string(), "INVALID_PARAMS"))?;
+            Ok(json!({ "group": group }))
+        }
+        "project.group.memory.get" => {
+            let id = params
+                .get("groupId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| rpc_err(1002, "groupId required", "INVALID_PARAMS"))?;
+            let st = state.lock().await;
+            let memory = st
+                .db
+                .get_project_group_memory(id)
+                .map_err(|e| rpc_err(1002, e.to_string(), "INVALID_PARAMS"))?;
+            Ok(json!({ "memory": memory }))
+        }
+        "project.group.memory.set" => {
+            let id = params
+                .get("groupId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| rpc_err(1002, "groupId required", "INVALID_PARAMS"))?;
+            let entries = params
+                .get("entries")
+                .ok_or_else(|| rpc_err(1002, "entries required", "INVALID_PARAMS"))?;
+            let st = state.lock().await;
+            let memory = st
+                .db
+                .set_project_group_memory(id, entries)
+                .map_err(|e| rpc_err(1002, e.to_string(), "INVALID_PARAMS"))?;
+            Ok(json!({ "memory": memory }))
+        }
+        "project.group.instructions.get" => {
+            let id = params
+                .get("groupId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| rpc_err(1002, "groupId required", "INVALID_PARAMS"))?;
+            let st = state.lock().await;
+            let content = st
+                .db
+                .get_project_group_instructions(id)
+                .map_err(|e| rpc_err(1002, e.to_string(), "INVALID_PARAMS"))?;
+            Ok(json!({ "content": content }))
+        }
+        "project.group.instructions.set" => {
+            let id = params
+                .get("groupId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| rpc_err(1002, "groupId required", "INVALID_PARAMS"))?;
+            let content = params
+                .get("content")
+                .and_then(Value::as_str)
+                .ok_or_else(|| rpc_err(1002, "content required", "INVALID_PARAMS"))?;
+            let st = state.lock().await;
+            let content = st
+                .db
+                .set_project_group_instructions(id, content)
+                .map_err(|e| rpc_err(1002, e.to_string(), "INVALID_PARAMS"))?;
+            Ok(json!({ "content": content }))
+        }
+        "project.group.context" => {
+            let path = params
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| rpc_err(1002, "path required", "INVALID_PARAMS"))?;
+            let st = state.lock().await;
+            let context = st
+                .db
+                .project_group_context_for_path(path)
+                .map_err(|e| rpc_err(1002, e.to_string(), "INVALID_PARAMS"))?;
+            Ok(json!({ "context": context }))
+        }
         "projects.create" => {
             let path = params
                 .get("path")
@@ -1243,6 +1544,58 @@ async fn handle_request(
                 .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?
                 .ok_or_else(|| rpc_err(1000, "project disappeared after creation", "INTERNAL"))?;
             Ok(json!({ "project": project }))
+        }
+
+        "projects.remove" => {
+            let path = params
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| rpc_err(1002, "path required", "INVALID_PARAMS"))?;
+            let path = crate::db::canonical_project_path(path)
+                .ok_or_else(|| rpc_err(1002, "path required", "INVALID_PARAMS"))?;
+            let st = state.lock().await;
+            if st
+                .db
+                .path_is_in_stored_project_group(&path)
+                .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?
+            {
+                return Err(rpc_err(
+                    1002,
+                    "project belongs to a multi-folder project group; remove the folder from the group first",
+                    "INVALID_PARAMS",
+                ));
+            }
+            let session_ids = st
+                .db
+                .project_session_ids(&path)
+                .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
+            // A running turn still owns its session's tools and working
+            // directory and is still writing to that session's transcript, so
+            // the bulk delete waits until every attached session is idle.
+            for id in &session_ids {
+                if sessions::session_has_running_turn(&st.db, id)
+                    .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?
+                {
+                    return Err(rpc_err(1008, "project has running sessions", "CONFLICT"));
+                }
+            }
+            let mut sessions_removed = 0;
+            for id in &session_ids {
+                if sessions::delete_session(&st.db, id)
+                    .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?
+                {
+                    drop_session_side_data(&st, id);
+                    sessions_removed += 1;
+                }
+            }
+            let removed = st
+                .db
+                .delete_project(&path)
+                .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
+            st.db
+                .delete_project_memory(&path)
+                .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
+            Ok(json!({ "removed": removed, "sessionsRemoved": sessions_removed }))
         }
         "project.memory.get" => {
             let path = params
@@ -1383,11 +1736,21 @@ async fn handle_request(
             st.db
                 .set_setting("app", &settings)
                 .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
-            // Re-pin the marketplace source in memory. Fetching here would hold
+            // Re-pin the marketplace channel in memory. Fetching here would hold
             // the state lock behind a remote timeout, so the renderer triggers
-            // `market.refresh` after switching sources.
-            let market_source = crate::plugins::market_source_from_settings(Some(&settings));
-            st.plugins.set_market_source(market_source);
+            // `market.refresh` after switching channels.
+            let (channel, custom_url) =
+                crate::plugins::market_channel_from_settings(Some(&settings));
+            st.plugins.set_market_channel(channel, custom_url);
+            // A concrete app language pins the plugin display locale here, so a
+            // shell that only writes settings still gets localized plugin rows.
+            // `auto` is resolved by the shell and pushed through
+            // `plugins.setLocale`.
+            if let Some(language) = settings.get("language").and_then(Value::as_str) {
+                if language != "auto" {
+                    st.plugins.set_locale(language);
+                }
+            }
             crate::network_proxy::apply_from_settings(Some(&settings));
             Ok(json!({ "ok": true }))
         }
@@ -1501,6 +1864,20 @@ async fn handle_request(
             let value = providers::get_secret_for_provider(&st.db, &st.secrets, id)
                 .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
             Ok(json!({ "value": value }))
+        }
+        // The credential of a plugin-declared provider. `providers.update`
+        // refuses that row, so this is the one path that writes the key the
+        // declaration asks for without touching the declaration's own fields.
+        "providers.setSecret" => {
+            let id = params
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| rpc_err(1002, "id required", "INVALID_PARAMS"))?;
+            let secret_value = params.get("secretValue").and_then(|v| v.as_str());
+            let st = state.lock().await;
+            let provider = providers::set_provider_secret(&st.db, &st.secrets, id, secret_value)
+                .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
+            Ok(json!({ "provider": provider }))
         }
         "providers.listModels" => {
             let provider_id = params.get("providerId").and_then(|v| v.as_str());
@@ -1639,9 +2016,15 @@ async fn handle_request(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| rpc_err(1002, "id required", "INVALID_PARAMS"))?;
             let message_before = params.get("messageBefore").and_then(|v| v.as_i64());
+            let message_around = params
+                .get("messageAround")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
             let message_limit = params.get("messageLimit").and_then(|v| v.as_i64());
             if message_before.is_some_and(|value| value < 0)
                 || message_limit.is_some_and(|value| value <= 0)
+                || (message_around.is_some()
+                    && (message_before.is_some() || message_limit.is_none()))
             {
                 return Err(rpc_err(
                     1002,
@@ -1669,6 +2052,7 @@ async fn handle_request(
                 &st.db,
                 id,
                 sessions::SessionReadOptions {
+                    message_around,
                     message_before,
                     message_limit,
                     content_limit,
@@ -1717,9 +2101,7 @@ async fn handle_request(
             let ok = sessions::delete_session(&st.db, id)
                 .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
             if ok {
-                scratch::remove_session_dir(&st.data_dir, id);
-                review::remove_session(&st.data_dir, id);
-                st.hashline.drop_session(id);
+                drop_session_side_data(&st, id);
             }
             Ok(json!({ "ok": ok }))
         }
@@ -2150,9 +2532,41 @@ async fn handle_request(
                 .ok_or_else(|| rpc_err(1002, "id required", "INVALID_PARAMS"))?;
             let st = state.lock().await;
             let entry = turn_queue::prioritize(&st.db, id)
-                .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?
+                .map_err(|e| {
+                    let message = e.to_string();
+                    if message == "ALREADY_PRIORITIZED" {
+                        rpc_err(1008, message, "CONFLICT")
+                    } else {
+                        rpc_err(1000, message, "INTERNAL")
+                    }
+                })?
                 .ok_or_else(|| rpc_err(1007, "queue entry not found", "NOT_FOUND"))?;
             Ok(json!({ "entry": entry }))
+        }
+        "session.queueReorder" => {
+            let id = params
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| rpc_err(1002, "id required", "INVALID_PARAMS"))?;
+            let direction = params
+                .get("direction")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| rpc_err(1002, "direction required", "INVALID_PARAMS"))?;
+            let direction = match direction {
+                "up" => turn_queue::ReorderDirection::Up,
+                "down" => turn_queue::ReorderDirection::Down,
+                other => {
+                    return Err(rpc_err(
+                        1002,
+                        format!("unknown direction: {other}"),
+                        "INVALID_PARAMS",
+                    ))
+                }
+            };
+            let st = state.lock().await;
+            let moved = turn_queue::reorder(&st.db, id, direction)
+                .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
+            Ok(json!({ "moved": moved }))
         }
 
         "notification.list" => {
@@ -2193,6 +2607,50 @@ async fn handle_request(
             let st = state.lock().await;
             notifications::clear(&st.db).map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
             Ok(json!({ "ok": true }))
+        }
+
+        "search.sessions" => {
+            let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            if query.chars().count() > 500 {
+                return Err(rpc_err(
+                    1001,
+                    "query exceeds 500 characters",
+                    "INVALID_ARGUMENT",
+                ));
+            }
+            let offset = params.get("offset").and_then(|v| v.as_i64()).unwrap_or(0);
+            let st = state.lock().await;
+            let page = crate::session_search::search(&st.db, query, offset)
+                .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
+            Ok(json!(page))
+        }
+        "search.context" => {
+            let session_id = params
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let message_id = params
+                .get("messageId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            let direction = params
+                .get("direction")
+                .and_then(|v| v.as_str())
+                .unwrap_or("around");
+            if session_id.is_empty()
+                || message_id.is_empty()
+                || query.chars().count() > 500
+                || !matches!(direction, "around" | "before" | "after")
+            {
+                return Err(rpc_err(1001, "invalid search context", "INVALID_ARGUMENT"));
+            }
+            let st = state.lock().await;
+            let context =
+                crate::session_search::context(&st.db, session_id, message_id, direction, query)
+                    .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?
+                    .ok_or_else(|| rpc_err(1007, "message not found", "NOT_FOUND"))?;
+            Ok(json!(context))
         }
 
         "search.query" => {
@@ -2861,7 +3319,7 @@ async fn handle_request(
                     // isolated when the renderer switches between project tabs.
                     // The session's project remains the containment root for all
                     // known sessions.
-                    let ws = resolve_tool_workspace(&st, &p.session_id)?;
+                    let ws = resolve_tool_workspace_for_call(&st, &p.session_id, &p.args)?;
                     let scratch = scratch::session_dir(&st.data_dir, &p.session_id);
                     let external_path_permission = requires_external_path_permission(
                         ws.as_deref(),
@@ -3388,9 +3846,9 @@ async fn handle_request(
                         })
                 })
                 .unwrap_or_else(|| "ask".into());
-            let workspace_path = resolve_tool_workspace(&st, session_id)?;
-            let scratch_path = scratch::session_dir(&st.data_dir, session_id);
             let args = params.get("args").cloned().unwrap_or_else(|| json!({}));
+            let workspace_path = resolve_tool_workspace_for_call(&st, session_id, &args)?;
+            let scratch_path = scratch::session_dir(&st.data_dir, session_id);
             let external_path_permission = requires_external_path_permission(
                 workspace_path.as_deref(),
                 scratch_path.as_deref(),
@@ -3465,6 +3923,18 @@ async fn handle_request(
             Ok(json!({ "requests": st.permissions.pending_requests(session_id) }))
         }
 
+        "plugins.setLocale" => {
+            // The desktop shell owns the app language — `settings.language`, or
+            // the OS locale while that is `auto` — so it pushes the resolved
+            // locale here whenever it changes. Rows then read their display
+            // strings from the matching `i18n` entry, and a locale change needs
+            // no registry rewrite.
+            let locale = params.get("locale").and_then(Value::as_str).unwrap_or("");
+            let mut st = state.lock().await;
+            st.plugins.set_locale(locale);
+            Ok(json!({ "ok": true, "locale": st.plugins.locale() }))
+        }
+
         "plugins.list" => {
             let st = state.lock().await;
             Ok(json!({ "plugins": st.plugins.list() }))
@@ -3500,6 +3970,13 @@ async fn handle_request(
                     rpc_err(1010, msg, "PLUGIN_LOAD_FAILED")
                 }
             })?;
+            // A development plugin owns its declared provider rows the same way
+            // an installed one does.
+            if let Err(error) =
+                crate::plugins::reconcile_plugin(&st.db, &st.secrets, &st.plugins, &plugin.id, true)
+            {
+                tracing::warn!(plugin = %plugin.id, %error, "plugin provider sync failed");
+            }
             Ok(json!({ "plugin": plugin }))
         }
         "plugins.enable" => {
@@ -3512,6 +3989,17 @@ async fn handle_request(
                 .plugins
                 .set_enabled(id, true)
                 .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
+            if let Some(current) = plugin.as_ref() {
+                if let Err(error) = crate::plugins::reconcile_plugin(
+                    &st.db,
+                    &st.secrets,
+                    &st.plugins,
+                    &current.id,
+                    true,
+                ) {
+                    tracing::warn!(plugin = %current.id, %error, "plugin provider sync failed");
+                }
+            }
             Ok(json!({ "plugin": plugin }))
         }
         "plugins.disable" => {
@@ -3524,6 +4012,14 @@ async fn handle_request(
                 .plugins
                 .set_enabled(id, false)
                 .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
+            // The declaration still exists, so the rows stay and are turned
+            // off: a re-enable restores the credential the user already gave.
+            if plugin.is_some() {
+                if let Err(error) = crate::plugins::set_plugin_providers_enabled(&st.db, id, false)
+                {
+                    tracing::warn!(plugin = id, %error, "plugin provider disable failed");
+                }
+            }
             Ok(json!({ "plugin": plugin }))
         }
         "plugins.uninstall" => {
@@ -3536,6 +4032,12 @@ async fn handle_request(
                 .plugins
                 .uninstall(id)
                 .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
+            if ok {
+                if let Err(error) = crate::plugins::remove_plugin_providers(&st.db, &st.secrets, id)
+                {
+                    tracing::warn!(plugin = id, %error, "plugin provider removal failed");
+                }
+            }
             Ok(json!({ "ok": ok }))
         }
         "plugins.getPermissions" => {
@@ -3731,6 +4233,17 @@ async fn handle_request(
             let server = st.mcp_servers.set_scope(&id, scope).map_err(scope_err)?;
             Ok(json!({ "server": server }))
         }
+        "mcp.transfer" => {
+            let id = require_id(&params)?;
+            let from = parse_capability_target(&params, "from")?;
+            let to = parse_capability_target(&params, "to")?;
+            let mut st = state.lock().await;
+            let server = st
+                .mcp_servers
+                .transfer(&id, &from, &to)
+                .map_err(scope_err)?;
+            Ok(json!({ "server": server }))
+        }
 
         "skills.list" => {
             let (level, project_path) = parse_capability_query(&params)?;
@@ -3827,6 +4340,17 @@ async fn handle_request(
             let skill = st.user_skills.set_scope(&id, scope).map_err(skill_err)?;
             Ok(json!({ "skill": skill }))
         }
+        "skills.transfer" => {
+            let id = require_id(&params)?;
+            let from = parse_capability_target(&params, "from")?;
+            let to = parse_capability_target(&params, "to")?;
+            let mut st = state.lock().await;
+            let skill = st
+                .user_skills
+                .transfer(&id, &from, &to)
+                .map_err(skill_err)?;
+            Ok(json!({ "skill": skill }))
+        }
 
         "agents.list" => {
             let mut st = state.lock().await;
@@ -3889,6 +4413,23 @@ async fn handle_request(
                 .map_err(subagent_err)?;
             Ok(json!({ "subagent": subagent }))
         }
+        "agents.disabledBuiltins" => {
+            let st = state.lock().await;
+            Ok(json!({ "disabled": st.user_subagents.disabled_builtins() }))
+        }
+        "agents.setBuiltinEnabled" => {
+            let id = require_id(&params)?;
+            let enabled = params
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let mut st = state.lock().await;
+            let id = st
+                .user_subagents
+                .set_builtin_enabled(&id, enabled)
+                .map_err(subagent_err)?;
+            Ok(json!({ "id": id, "enabled": enabled }))
+        }
 
         "market.refresh" => {
             let force = params
@@ -3940,12 +4481,47 @@ async fn handle_request(
                 .get("grantedPermissions")
                 .cloned()
                 .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok());
+            // An install outlives one request from the interface's point of
+            // view: it resolves where the package is, downloads it from one
+            // mirror after another, verifies it and registers it. Every one of
+            // those steps is worth showing, which is what the observer does,
+            // and the token is what the cancel channel flips.
+            let cancel = crate::plugins::CancelToken::default();
+            // Armed outside AppState: cancelInstall must flip this flag while
+            // install still holds the state lock for the download.
+            crate::plugins::progress::arm_active_cancel(&cancel);
+            let mut observer = RpcInstallObserver {
+                tx: tx.clone(),
+                cancel: cancel.clone(),
+                last: None,
+                last_phase: None,
+            };
             let mut st = state.lock().await;
-            let result = st
-                .plugins
-                .install_from_market(id, version, enable, auto_update, granted)
-                .map_err(plugin_err)?;
+            st.plugins.set_install_cancel(Some(cancel));
+            let outcome = st.plugins.install_from_market_observed(
+                id,
+                version,
+                enable,
+                auto_update,
+                granted,
+                &mut observer,
+            );
+            // Whatever happened, nothing is cancellable any more: a token left
+            // in place would answer the next cancel for an install that is
+            // already over.
+            st.plugins.set_install_cancel(None);
+            let result = outcome.map_err(plugin_err)?;
             Ok(json!({ "result": result }))
+        }
+        "market.cancelInstall" => {
+            let id = params
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| rpc_err(1002, "id required", "INVALID_PARAMS"))?;
+            // Do not take AppState: the install holds that lock while bytes
+            // arrive, and waiting on it would make cancel a no-op.
+            let cancelled = crate::plugins::progress::cancel_active_install();
+            Ok(json!({ "cancelled": cancelled, "id": id }))
         }
         "market.checkUpdates" => {
             let refresh_remote = params
@@ -4036,9 +4612,11 @@ mod tests {
     use tokio::sync::{mpsc, Mutex};
 
     use super::{
-        capability_err, handle_request, parse_capability_query, peek_jsonrpc_id, provider_rpc_err,
-        resolve_plan_workspace, resolve_tool_workspace, scope_err, skill_err,
+        capability_err, handle_request, parse_capability_query, parse_capability_target,
+        peek_jsonrpc_id, provider_rpc_err, resolve_plan_workspace, resolve_tool_workspace,
+        resolve_tool_workspace_for_call, scope_err, skill_err,
     };
+    use crate::agent_capabilities::CapabilityLevel;
     use crate::plans::{PlanResolveParams, PlanSubmitParams};
     use crate::scheduled;
     use crate::sessions;
@@ -4075,6 +4653,42 @@ mod tests {
             capability_err("missing project").data.unwrap()["errorCode"],
             "CAPABILITY_INVALID"
         );
+    }
+
+    #[test]
+    fn capability_target_requires_an_explicit_string_level() {
+        // A missing or non-string level must not fall back to `global`: that
+        // would write the capability into the wrong directory without telling
+        // the caller.
+        let missing = parse_capability_target(&json!({ "to": { "projectPath": "/p" } }), "to")
+            .expect_err("a target without a level is invalid");
+        assert_eq!(missing.code, 1002);
+        assert_eq!(
+            missing.data.as_ref().unwrap()["errorCode"],
+            json!("INVALID_PARAMS")
+        );
+
+        let wrong_type = parse_capability_target(&json!({ "to": { "level": 5 } }), "to")
+            .expect_err("a non-string level is invalid");
+        assert_eq!(wrong_type.code, 1002);
+        assert_eq!(
+            wrong_type.data.as_ref().unwrap()["errorCode"],
+            json!("INVALID_PARAMS")
+        );
+
+        let absent = parse_capability_target(&json!({}), "from")
+            .expect_err("the named end of a move is required");
+        assert_eq!(absent.code, 1002);
+
+        let project = parse_capability_target(
+            &json!({ "to": { "level": "project", "projectPath": "/p" } }),
+            "to",
+        )
+        .unwrap();
+        assert_eq!(project.level, CapabilityLevel::Project);
+        let global =
+            parse_capability_target(&json!({ "to": { "level": "global" } }), "to").unwrap();
+        assert_eq!(global.level, CapabilityLevel::Global);
     }
 
     #[test]
@@ -4146,6 +4760,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn project_group_update_rpc_adjusts_folders() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let primary = data_dir.path().join("primary");
+        let extra = data_dir.path().join("extra");
+        fs::create_dir_all(&primary).unwrap();
+        fs::create_dir_all(&extra).unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let state = Arc::new(Mutex::new(app_state));
+        let created = handle_request(
+            state.clone(),
+            "project.group.create",
+            json!({ "name": "Editable", "folders": [primary] }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        let group_id = created["group"]["id"].as_str().unwrap();
+        let updated = handle_request(
+            state,
+            "project.group.update",
+            json!({
+                "groupId": group_id,
+                "name": "Adjusted",
+                "folders": [created["group"]["primaryPath"], extra]
+            }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated["group"]["name"], "Adjusted");
+        assert_eq!(updated["group"]["roots"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn project_group_rpc_roundtrips_context_and_roots() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let primary = data_dir.path().join("primary");
+        let member = data_dir.path().join("member");
+        fs::create_dir_all(&primary).unwrap();
+        fs::create_dir_all(&member).unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let state = Arc::new(Mutex::new(app_state));
+        let created = handle_request(
+            state.clone(),
+            "project.group.create",
+            json!({
+                "name": "A named project",
+                "folders": [primary, member]
+            }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        let group_id = created["group"]["id"].as_str().unwrap();
+        assert_eq!(created["group"]["roots"].as_array().unwrap().len(), 2);
+
+        let context = handle_request(
+            state,
+            "project.group.context",
+            json!({ "path": created["group"]["primaryPath"] }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(context["context"]["groupId"], group_id);
+        assert_eq!(context["context"]["roots"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
     async fn project_memory_rpc_roundtrips_without_switching_workspace() {
         let data_dir = tempfile::tempdir().unwrap();
         let mut app_state = AppState::open(data_dir.path()).unwrap();
@@ -4193,6 +4878,402 @@ mod tests {
             "## Deployment\n\nUse the staging database."
         );
         assert_eq!(structured["memory"]["entries"][0]["id"], "deployment");
+    }
+
+    /// Append a user message through the RPC so the session's transcript file
+    /// exists on disk, mirroring a renderer outbox append.
+    async fn append_test_message(state: Arc<Mutex<AppState>>, session_id: &str, message_id: &str) {
+        handle_request(
+            state,
+            "session.appendMessage",
+            json!({
+                "sessionId": session_id,
+                "message": {
+                    "id": message_id,
+                    "role": "user",
+                    "content": "hello",
+                    "createdAt": "2025-05-01T00:00:00Z"
+                }
+            }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn projects_remove_deletes_project_sessions_and_transcripts() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let project_dir = data_dir.path().join("project");
+        fs::create_dir_all(&project_dir).unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let project_path = project_dir.to_string_lossy().to_string();
+        let first = sessions::create_session_with_options(
+            &app_state.db,
+            sessions::SessionCreateOptions {
+                project_path: Some(project_path.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        let second = sessions::create_session_with_options(
+            &app_state.db,
+            sessions::SessionCreateOptions {
+                project_path: Some(project_path.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        let state = Arc::new(Mutex::new(app_state));
+
+        let mut transcripts = Vec::new();
+        for (index, id) in [&first, &second].into_iter().enumerate() {
+            append_test_message(state.clone(), id, &format!("message-{index}")).await;
+            let transcript = crate::transcripts::transcript_path(data_dir.path(), id).unwrap();
+            assert!(transcript.exists());
+            transcripts.push(transcript);
+        }
+
+        let saved_memory = handle_request(
+            state.clone(),
+            "project.memory.set",
+            json!({ "path": project_path, "content": "Use the staging database." }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            saved_memory["memory"]["content"],
+            "Use the staging database."
+        );
+
+        let result = handle_request(
+            state.clone(),
+            "projects.remove",
+            json!({ "path": project_path }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["removed"], json!(true));
+        assert_eq!(result["sessionsRemoved"], json!(2));
+
+        let canonical =
+            crate::db::canonical_project_path(&project_path).expect("canonical project path");
+        let projects = handle_request(
+            state.clone(),
+            "projects.list",
+            json!({}),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert!(projects["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|project| project["path"].as_str() != Some(canonical.as_str())));
+
+        let listed = handle_request(
+            state.clone(),
+            "session.list",
+            json!({}),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        for id in [&first, &second] {
+            assert!(listed["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|session| session["id"].as_str() != Some(id.as_str())));
+        }
+
+        let memory = handle_request(
+            state,
+            "project.memory.get",
+            json!({ "path": project_path }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(memory["memory"]["content"], "");
+
+        for transcript in transcripts {
+            assert!(!transcript.exists());
+        }
+        assert!(project_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn projects_remove_keeps_sessions_of_other_projects() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let removed_dir = data_dir.path().join("removed-project");
+        let kept_dir = data_dir.path().join("kept-project");
+        fs::create_dir_all(&removed_dir).unwrap();
+        fs::create_dir_all(&kept_dir).unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let removed_path = removed_dir.to_string_lossy().to_string();
+        let kept_path = kept_dir.to_string_lossy().to_string();
+        let removed_session = sessions::create_session_with_options(
+            &app_state.db,
+            sessions::SessionCreateOptions {
+                project_path: Some(removed_path.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        let kept_session = sessions::create_session_with_options(
+            &app_state.db,
+            sessions::SessionCreateOptions {
+                project_path: Some(kept_path.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        let state = Arc::new(Mutex::new(app_state));
+
+        append_test_message(state.clone(), &removed_session, "removed-message").await;
+        append_test_message(state.clone(), &kept_session, "kept-message").await;
+        let kept_transcript =
+            crate::transcripts::transcript_path(data_dir.path(), &kept_session).unwrap();
+        assert!(kept_transcript.exists());
+
+        let result = handle_request(
+            state.clone(),
+            "projects.remove",
+            json!({ "path": removed_path }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["removed"], json!(true));
+        assert_eq!(result["sessionsRemoved"], json!(1));
+
+        let listed = handle_request(
+            state.clone(),
+            "session.list",
+            json!({}),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        let listed_sessions = listed["sessions"].as_array().unwrap();
+        assert!(listed_sessions
+            .iter()
+            .any(|session| session["id"].as_str() == Some(kept_session.as_str())));
+        assert!(!listed_sessions
+            .iter()
+            .any(|session| session["id"].as_str() == Some(removed_session.as_str())));
+        assert!(kept_transcript.exists());
+
+        let canonical_kept =
+            crate::db::canonical_project_path(&kept_path).expect("canonical project path");
+        let projects = handle_request(
+            state,
+            "projects.list",
+            json!({}),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert!(projects["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|project| project["path"].as_str() == Some(canonical_kept.as_str())));
+    }
+
+    #[tokio::test]
+    async fn projects_remove_unknown_path_is_idempotent() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let state = Arc::new(Mutex::new(app_state));
+
+        let blank = handle_request(
+            state.clone(),
+            "projects.remove",
+            json!({ "path": "   " }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .expect_err("a blank project path is invalid");
+        assert_eq!(blank.code, 1002);
+        assert_eq!(
+            blank.data.as_ref().and_then(|data| data.get("errorCode")),
+            Some(&json!("INVALID_PARAMS"))
+        );
+
+        let missing = data_dir
+            .path()
+            .join("missing")
+            .to_string_lossy()
+            .to_string();
+        let result = handle_request(
+            state,
+            "projects.remove",
+            json!({ "path": missing }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["removed"], json!(false));
+        assert_eq!(result["sessionsRemoved"], json!(0));
+    }
+
+    #[tokio::test]
+    async fn projects_remove_refuses_stored_group_root() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let grouped_dir = data_dir.path().join("grouped");
+        let extra_dir = data_dir.path().join("extra");
+        fs::create_dir_all(&grouped_dir).unwrap();
+        fs::create_dir_all(&extra_dir).unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let grouped_path = grouped_dir.to_string_lossy().to_string();
+        app_state
+            .db
+            .create_project_group(
+                "Grouped",
+                &[
+                    grouped_path.clone(),
+                    extra_dir.to_string_lossy().to_string(),
+                ],
+            )
+            .unwrap();
+        let state = Arc::new(Mutex::new(app_state));
+
+        let error = handle_request(
+            state.clone(),
+            "projects.remove",
+            json!({ "path": grouped_path }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .expect_err("a stored project group root must not be removed");
+        assert_eq!(error.code, 1002);
+        assert_eq!(
+            error.data.as_ref().and_then(|data| data.get("errorCode")),
+            Some(&json!("INVALID_PARAMS"))
+        );
+
+        let canonical =
+            crate::db::canonical_project_path(&grouped_path).expect("canonical project path");
+        let projects = handle_request(
+            state,
+            "projects.list",
+            json!({}),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert!(projects["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|project| project["path"].as_str() == Some(canonical.as_str())));
+    }
+
+    /// A running turn owns its session's tools, working directory, and
+    /// transcript writes, so the bulk delete waits until the project is idle.
+    #[tokio::test]
+    async fn projects_remove_refuses_while_a_session_is_running() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let project_dir = data_dir.path().join("busy-project");
+        fs::create_dir_all(&project_dir).unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let project_path = project_dir.to_string_lossy().to_string();
+        let session_id = sessions::create_session_with_options(
+            &app_state.db,
+            sessions::SessionCreateOptions {
+                project_path: Some(project_path.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        let state = Arc::new(Mutex::new(app_state));
+
+        let started = handle_request(
+            state.clone(),
+            "session.beginTurn",
+            json!({ "sessionId": session_id }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        let turn_id = started["turnId"].as_str().unwrap().to_string();
+
+        let error = handle_request(
+            state.clone(),
+            "projects.remove",
+            json!({ "path": project_path }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .expect_err("a running turn blocks the project delete");
+        assert_eq!(error.code, 1008);
+        assert_eq!(
+            error.data.as_ref().and_then(|data| data.get("errorCode")),
+            Some(&json!("CONFLICT"))
+        );
+
+        let canonical =
+            crate::db::canonical_project_path(&project_path).expect("canonical project path");
+        let projects = handle_request(
+            state.clone(),
+            "projects.list",
+            json!({}),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert!(projects["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|project| project["path"].as_str() == Some(canonical.as_str())));
+        let listed = handle_request(
+            state.clone(),
+            "session.list",
+            json!({}),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert!(listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|session| session["id"].as_str() == Some(session_id.as_str())));
+
+        handle_request(
+            state.clone(),
+            "session.endTurn",
+            json!({ "turnId": turn_id, "status": "completed" }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        let removed = handle_request(
+            state,
+            "projects.remove",
+            json!({ "path": project_path }),
+            mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(removed["removed"], json!(true));
+        assert_eq!(removed["sessionsRemoved"], json!(1));
     }
 
     #[tokio::test]
@@ -4544,6 +5625,64 @@ mod tests {
         assert_eq!(
             crate::workspace::simple_canonicalize(&resolved).unwrap(),
             crate::workspace::simple_canonicalize(&project_a).unwrap()
+        );
+    }
+
+    #[test]
+    fn group_member_absolute_paths_use_only_registered_group_roots() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let primary = data_dir.path().join("primary");
+        let member = data_dir.path().join("member");
+        fs::create_dir_all(&primary).unwrap();
+        fs::create_dir_all(&member).unwrap();
+        let state = AppState::open(data_dir.path()).unwrap();
+        let group = state
+            .db
+            .create_project_group(
+                "Grouped project",
+                &[
+                    primary.to_string_lossy().into(),
+                    member.to_string_lossy().into(),
+                ],
+            )
+            .unwrap();
+        let session = sessions::create_session(
+            &state.db,
+            Some("Grouped task".into()),
+            Some("agent".into()),
+            None,
+            None,
+            Some(primary.to_string_lossy().into_owned()),
+        )
+        .unwrap();
+
+        let member_file = member.join("README.md");
+        let resolved =
+            resolve_tool_workspace_for_call(&state, &session.id, &json!({ "path": member_file }))
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            crate::workspace::simple_canonicalize(Path::new(&resolved)).unwrap(),
+            crate::workspace::simple_canonicalize(&member).unwrap()
+        );
+        assert_eq!(
+            state
+                .db
+                .project_group_for_path(&resolved)
+                .unwrap()
+                .unwrap()
+                .id,
+            group.id
+        );
+
+        let outside = data_dir.path().join("outside").join("file.txt");
+        let fallback =
+            resolve_tool_workspace_for_call(&state, &session.id, &json!({ "path": outside }))
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            crate::workspace::simple_canonicalize(Path::new(&fallback)).unwrap(),
+            crate::workspace::simple_canonicalize(&primary).unwrap()
         );
     }
 
@@ -7041,5 +8180,71 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM notifications", [], |row| row.get(0))
             .unwrap();
         assert_eq!(remaining, 0);
+    }
+
+    #[tokio::test]
+    async fn plugin_labels_follow_the_pushed_app_language() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let mut app_state = AppState::open(data_dir.path()).unwrap();
+        app_state.handshook = true;
+        let state = Arc::new(Mutex::new(app_state));
+        let tx = mpsc::unbounded_channel().0;
+
+        // A concrete app language in settings pins the locale even before the
+        // shell pushes one.
+        handle_request(
+            state.clone(),
+            "settings.set",
+            json!({ "language": "zh-CN" }),
+            tx.clone(),
+        )
+        .await
+        .unwrap();
+        {
+            let st = state.lock().await;
+            assert_eq!(st.plugins.locale(), "zh-CN");
+        }
+
+        // `auto` is a setting, not a locale: the shell resolves it, and the
+        // host must not start reading `zh-CN` off the raw value.
+        handle_request(
+            state.clone(),
+            "settings.set",
+            json!({ "language": "auto" }),
+            tx.clone(),
+        )
+        .await
+        .unwrap();
+        {
+            let st = state.lock().await;
+            assert_eq!(st.plugins.locale(), "zh-CN");
+        }
+
+        let pushed = handle_request(
+            state.clone(),
+            "plugins.setLocale",
+            json!({ "locale": "en-US" }),
+            tx.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(pushed["locale"], "en-US");
+        {
+            let st = state.lock().await;
+            assert_eq!(st.plugins.locale(), "en-US");
+        }
+
+        // Neither an empty value nor `auto` overwrites the resolved locale.
+        for value in [
+            json!({ "locale": "" }),
+            json!({ "locale": "auto" }),
+            json!({}),
+        ] {
+            handle_request(state.clone(), "plugins.setLocale", value, tx.clone())
+                .await
+                .unwrap();
+        }
+        let st = state.lock().await;
+        assert_eq!(st.plugins.locale(), "en-US");
     }
 }

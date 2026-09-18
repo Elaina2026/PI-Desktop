@@ -802,7 +802,6 @@ export function installCaptureRig(): CaptureRig {
           enabled: true,
           scope: { mode: "global", projects: [] },
           tools: ["Read", "Grep", "Bash"],
-          maxTurns: 12,
           path: "/Users/pi/.agents/subagents/log-reader.md",
           sizeBytes: 1_840,
           createdAt: "2026-08-05T09:00:00.000Z",
@@ -832,7 +831,6 @@ export function installCaptureRig(): CaptureRig {
           enabled: true,
           scope: { mode: "global", projects: [] },
           tools: ["Read", "Glob", "Grep"],
-          maxTurns: 30,
           path: "/Users/pi/.agents/subagents/explorer.md",
           sizeBytes: 2_260,
           createdAt: "2026-08-01T09:00:00.000Z",
@@ -860,7 +858,6 @@ export function installCaptureRig(): CaptureRig {
           description: "A user-owned log reader, tuned for its CI output.",
           prompt: "You are log-reader.\n",
           tools: ["Read", "Grep"],
-          maxTurns: 12,
           source: "user",
           filePath: "/Users/pi/.agents/subagents/log-reader.md",
         },
@@ -869,7 +866,6 @@ export function installCaptureRig(): CaptureRig {
           description: "My own explorer, with the repository's layout written into the prompt.",
           prompt: "You are explorer.\n",
           tools: ["Read", "Glob", "Grep"],
-          maxTurns: 30,
           source: "user",
           filePath: "/Users/pi/.agents/subagents/explorer.md",
         },
@@ -879,7 +875,6 @@ export function installCaptureRig(): CaptureRig {
             "Review a change for correctness, then report findings ranked by severity.",
           prompt: "You are code-reviewer.\n",
           tools: ["Read", "Glob", "Grep"],
-          maxTurns: 24,
           source: "builtin",
         },
         {
@@ -887,10 +882,15 @@ export function installCaptureRig(): CaptureRig {
           description: "Run the test suite, then report the first failure that is not flaky.",
           prompt: "You are test-runner.\n",
           tools: ["Read", "Glob", "Grep", "Bash"],
-          maxTurns: 24,
           source: "builtin",
         },
       ];
+
+      // The shipped defaults the page lists separately, one of them switched
+      // off, so a capture exercises the switch on a built-in row.
+      const builtinRows = catalog
+        .filter((item) => item.source === "builtin")
+        .map((item, index) => ({ ...item, enabled: index !== 0 }));
       const rowsForQuery = <T extends { level?: string; projectPath?: string }>(
         rows: readonly T[],
         query: { level?: string; projectPath?: string } = {},
@@ -914,6 +914,7 @@ export function installCaptureRig(): CaptureRig {
       (api as any).listUserSubagents = async () => ({ subagents });
       (api as any).subagentCatalog = async () => ({
         subagents: catalog,
+        builtins: builtinRows,
         diagnostics: [],
         projectPath: "/Users/pi/work/api",
       });

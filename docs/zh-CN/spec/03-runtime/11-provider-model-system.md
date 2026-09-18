@@ -70,9 +70,9 @@ OpenCode Go 以一个名为 `opencode_go` 的 API 风格预设暴露。它仍然
 `https://opencode.ai/zen/go/v1`，使用 Bearer API key 认证，从 `/models` 发现
 模型，并通过 pi-ai 的 OpenAI Chat Completions 适配器发送对话回合。它不会另建
 第二条传输链路，也不会形成封闭的模型许可名单。Agent 运行时会在每一次 LLM
-请求上注入 OpenCode 路由标头（会话回合、子代理、提示增强以及插件的一次性
-调用）：`x-opencode-session` 是持久的对话 id（调用方没有会话时则是按次生成的
-UUID），`x-opencode-client` 为 `pi-desktop`，`User-Agent` 为
+请求上注入 OpenCode 路由标头（会话回合、子代理、上下文压缩摘要、提示增强以及
+插件的一次性调用）：`x-opencode-session` 是持久的对话 id（调用方没有会话时则是
+按次生成的 UUID），`x-opencode-client` 为 `pi-desktop`，`User-Agent` 为
 `pi-desktop/<APP_VERSION>`，除非该行设置了 `headers["User-Agent"]`。base URL
 主机为 `opencode.ai` 的自定义 OpenAI 兼容行也会收到同样的标头。系统不依赖
 pi-ai 去发出 `x-opencode-session`。每个提供商行（AI 服务或 OAuth 账户）都可以
@@ -97,7 +97,10 @@ pi-ai 去发出 `x-opencode-session`。每个提供商行（AI 服务或 OAuth �
 `requiresReasoningContentOnAssistantMessages: true`。pi-ai 只根据
 `provider === "deepseek"` 或 `deepseek.com` URL 自动检测，而 PI-Desktop 把 UUID
 存成 `model.provider`，因此聚合网关与自定义端点会在无思考内容的助手回合漏掉
-`reasoning_content`。该覆盖不改 `thinkingFormat`。
+`reasoning_content`。非官方 DeepSeek 端点还会设置 `requiresNonEmptyReasoningReplay`，
+用文档化的非空占位符而不是 `""` 填补缺失推理（OpenCode / 第三方中转在压缩后拒绝空回传；
+见 ADR 0256 / #296）。官方 `deepseek.com` 行仍使用空串回填（#223）。该覆盖不改
+`thinkingFormat`。
 
 ## 5. 内置供应商矩阵（发货意图）
 
@@ -275,6 +278,9 @@ type UserModelConfig = {
 type ModelBinding = {
   id: string
   contextWindow: number
+  /** `contextWindow` 的来源；早于该标记的记录没有此字段，按历史规则解析
+   * （见 `13-model-catalog-and-selection.md` §9.1）。 */
+  contextWindowSource?: "catalog" | "user"
   maxTokens: number
   thinkingLevels: ThinkingLevel[]
   defaultThinkingLevel: ThinkingLevel | null
@@ -315,7 +321,9 @@ agent 系统提示的委托目录中。父 agent 随后就能通过 Task 工具�
 正常的固定模型解析生效，包括 `Task.model` 重复该定义自己的固定键。按需匹配使用唯一
 provider id/vendor/name 查找，不得用另一账号凭据覆盖固定模型。多个账号的 vendor/model 别名冲突时，已勾选账号改用
 确切的提供商 ID 作为覆盖键。优先级保持 Task.model → 定义固定模型 → 会话模型
-（D278；ADR subagent-model-opt-in）。
+（D278；ADR subagent-model-opt-in）。该许可约束所有让 AI 为委派工作挑选模型的入口，
+而不只是 `Task.model`：`session/collaboration/spawn` 的 `modelKey` 指向未勾选的模型时
+以 `PERMISSION_DENIED` 拒绝，省略该键或写出默认模型自己的键仍按继承处理。
 
 ## 8. 秘密
 
@@ -364,6 +372,27 @@ sidecar 请求
 提供元数据，但不能把 ID 加进已认证列表。一个厂商可以跨越多种线路 API ——
 Copilot 同时提供 Anthropic、Chat Completions 与 Responses 模型 —— 因此行
 的 `apiStyle` 跟随所选模型。
+
+### Anthropic token 端点限流
+
+固定版本 pi-ai 0.85.1 的仓库补丁为 Anthropic 授权码交换与刷新提供同一套
+有限策略：只重试明确的 HTTP 429，最多总共三次请求。先等待至少 1 秒、再
+等待至少 2 秒；若 `Retry-After` 给出更长的秒数或 HTTP 日期，则遵守该时间。
+服务器要求的等待超出剩余预算时结束本次尝试，不缩短等待后提前重试。
+缺失或无效提示使用有限的指数退避。
+
+请求、响应体读取和等待共用一个 30 秒 helper 截止时间及原始调用方 signal；
+更早的调用方截止时间优先。pi-ai 现有刷新操作在凭据存储锁内有 15 秒限制。
+取消同样中断等待。补丁不把刷新移出该锁：失败保留已有凭据，成功旋转后
+仅写入一次新授权。
+
+网络失败、响应体中断、5xx 和 `invalid_grant` 均不重放，因为非幂等 token
+请求的结果可能不确定。明确的 `invalid_grant` 即使标为 429 也立即结束。
+HTTP/token JSON 失败显示有限恢复说明，不包含原始响应体、URL 或嵌套堆栈。
+登录失败提示稍后关闭弹窗并重新发起登录；刷新失败提示等待后重试，持续失败
+时重新登录。仅凭 HTTP 429 不能证明授权码是否已被使用，因此不声称其已失效。
+
+沿用现有依赖补丁机制，OAuth 端点、PKCE、凭据归属、IPC 和存储 schema 不变。
 
 ## 9. 模型目录服务
 

@@ -12,26 +12,6 @@ import {
 } from "react";
 import { TooltipButton, cx } from "./ui";
 
-// --- Time-based session grouping ---
-type TimeGroup = "today" | "yesterday" | "thisWeek" | "older14d" | "archived";
-
-function getTimeGroup(dateStr?: string): TimeGroup {
-  if (!dateStr) return "older14d";
-  const ts = Date.parse(dateStr);
-  if (!Number.isFinite(ts)) return "older14d";
-  const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const startOfYesterday = startOfToday - 86400000;
-  const startOfWeek = startOfToday - 6 * 86400000; // last 7 days
-  const startOf14d = startOfToday - 13 * 86400000;
-  if (ts >= startOfToday) return "today";
-  if (ts >= startOfYesterday) return "yesterday";
-  if (ts >= startOfWeek) return "thisWeek";
-  if (ts >= startOf14d) return "older14d";
-  return "archived"; // older than 14 days
-}
-
-const TIME_GROUP_ORDER: TimeGroup[] = ["today", "yesterday", "thisWeek", "older14d", "archived"];
 /** Default number of most-recent sessions shown per project group before the rest fold. */
 const MAX_VISIBLE_SESSIONS = 10;
 import { createPortal } from "react-dom";
@@ -40,7 +20,13 @@ import { api } from "../lib/api";
 import { SessionHoverCard } from "../features/sessions/SessionHoverCard";
 import { useSessionHoverCard } from "../features/sessions/useSessionHoverCard";
 import { isDefaultSessionTitle, useAppStore } from "../stores/app-store";
-import { normalizeProjectPath } from "../lib/sidebar-session-groups";
+import {
+  getGlobalPinnedSessions,
+  groupSidebarSessionsByTime,
+  normalizeProjectPath,
+  sessionArchived,
+  sessionPinned,
+} from "../lib/sidebar-session-groups";
 import {
   composerDropItems,
   hasComposerFileDrag,
@@ -55,11 +41,11 @@ import {
   sidebarSessionStatus,
   type SidebarSessionStatus,
 } from "../lib/sidebar-session-status";
+import { ErrorCodes } from "@pi-desktop/shared";
 import type { SessionSummary } from "@pi-desktop/shared";
 import type {
   ProjectMeta,
   ProjectSort,
-  SessionMeta,
   SessionSort,
 } from "../lib/sidebar-preferences";
 import {
@@ -69,7 +55,10 @@ import {
 } from "../lib/sidebar-preferences";
 import { BrandLogo } from "./BrandLogo";
 import { NotificationCenter } from "./NotificationCenter";
-import { ProjectRenameDialog, SessionRenameDialog } from "./SessionRenameDialog";
+import { ProjectEditDialog } from "./ProjectEditDialog";
+import { useArmedDelete } from "../hooks/use-armed-delete";
+import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
+import { SessionRenameDialog } from "./SessionRenameDialog";
 import { useUpdateState } from "../hooks/use-update-state";
 import {
   IconArchive,
@@ -90,6 +79,7 @@ import {
   IconSidebar,
   IconSettings,
   IconStar,
+  IconTrash,
   IconX,
 } from "./icons";
 
@@ -155,20 +145,6 @@ function timestamp(value?: string) {
 function optionalTimestamp(value?: string): number | null {
   const parsed = value ? Date.parse(value) : NaN;
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-function sessionArchived(
-  session: SessionSummary,
-  meta: SessionMeta | undefined,
-): boolean {
-  return Boolean(meta?.archived || (session as SessionSummary & { archived?: boolean }).archived);
-}
-
-function sessionPinned(
-  session: SessionSummary,
-  meta: SessionMeta | undefined,
-): boolean {
-  return Boolean(meta?.pinned || (session as SessionSummary & { pinned?: boolean }).pinned);
 }
 
 function projectMetaFor(
@@ -252,6 +228,8 @@ export function Sidebar({
   const sessionOutcomes = useAppStore((s) => s.sessionOutcomes);
   const pendingPermissions = useAppStore((s) => s.pendingPermissions);
   const setPage = useAppStore((s) => s.setPage);
+  const navBack = useAppStore((s) => s.navBack);
+  const canNavBack = useAppStore((s) => s.canNavBack);
   const page = useAppStore((s) => s.page);
   const settings = useAppStore((s) => s.settings);
   const prefetchSession = useAppStore((s) => s.prefetchSession);
@@ -269,6 +247,7 @@ export function Sidebar({
   const restoreSession = useAppStore((s) => s.restoreSession);
   const renameSession = useAppStore((s) => s.renameSession);
   const deleteSessionAction = useAppStore((s) => s.deleteSession);
+  const deleteProjectAction = useAppStore((s) => s.deleteProject);
   const setSessionSort = useAppStore((s) => s.setSessionSort);
   const moveSessionProject = useAppStore((s) => s.moveSessionProject);
   const setSessionArchiveVisibility = useAppStore((s) => s.setSessionArchiveVisibility);
@@ -287,7 +266,10 @@ export function Sidebar({
   const [sortOpen, setSortOpen] = useState(false);
   const [sessionMenu, setSessionMenu] = useState<string | null>(null);
   const [renameFor, setRenameFor] = useState<SessionSummary | null>(null);
-  const [renameProjectFor, setRenameProjectFor] = useState<ProjectEntry | null>(null);
+  const [editProjectFor, setEditProjectFor] = useState<ProjectEntry | null>(null);
+  const [deleteProjectFor, setDeleteProjectFor] = useState<ProjectEntry | null>(null);
+  // Which row menu item is armed for its second, confirming click.
+  const { armed: armedDelete, setArmed: setArmedDelete } = useArmedDelete();
   const [projectMenu, setProjectMenu] = useState<string | null>(null);
   const [sectionMenu, setSectionMenu] = useState<"sessions" | "projects" | null>(null);
   const [menuPosition, setMenuPosition] = useState<{
@@ -308,6 +290,8 @@ export function Sidebar({
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [draggingProjectKey, setDraggingProjectKey] = useState<string | null>(null);
   const [dropIndicator, setDropIndicator] = useState<{ key: string; insertAfter: boolean } | null>(null);
+  const [windowFocused, setWindowFocused] = useState(true);
+
   const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const menuFirstItemRef = useRef<HTMLButtonElement | null>(null);
   const sessionPrefetchTimerRef = useRef<number | undefined>(undefined);
@@ -418,6 +402,19 @@ export function Sidebar({
       sidebarResizeRef.current = null;
     };
   }, [onWidthChange]);
+
+  // Mirror window focus onto the sidebar; a blurred window can keep CSS :hover
+  // latched on the row under the cursor.
+  useEffect(() => {
+    const onWindowFocus = () => setWindowFocused(document.hasFocus());
+    const onWindowBlur = () => setWindowFocused(false);
+    window.addEventListener("focus", onWindowFocus);
+    window.addEventListener("blur", onWindowBlur);
+    return () => {
+      window.removeEventListener("focus", onWindowFocus);
+      window.removeEventListener("blur", onWindowBlur);
+    };
+  }, []);
 
   const showArchived = sessionView.archived;
   const sessionSort = sessionView.sort;
@@ -629,6 +626,16 @@ export function Sidebar({
     }
     return a.id.localeCompare(b.id);
   }, [displaySessionSort, sessionMeta, taskTitle]);
+
+  const pinnedSessions = useMemo(
+    () => getGlobalPinnedSessions(filtered, sessionMeta, projectMeta, showArchived)
+      .sort(compareSessions),
+    [filtered, sessionMeta, projectMeta, showArchived, compareSessions],
+  );
+  const pinnedSessionIds = useMemo(
+    () => new Set(pinnedSessions.map((session) => session.id)),
+    [pinnedSessions],
+  );
 
   const projectEntries = useMemo(() => {
     const byPath = new Map<string, ProjectEntry>();
@@ -919,6 +926,10 @@ export function Sidebar({
       .sort(compareSessions),
     [filtered, compareSessions],
   );
+  const temporarySessionHistory = useMemo(
+    () => temporarySessions.filter((session) => !pinnedSessionIds.has(session.id)),
+    [temporarySessions, pinnedSessionIds],
+  );
   const renderSessionStatus = (status: SidebarSessionStatus) => {
     const labelKey =
       status === "running"
@@ -1056,7 +1067,17 @@ export function Sidebar({
 
   const toggleSessionPin = (session: SessionSummary) => {
     toggleSessionPinned(session.id);
-    closeMenus();
+    closeMenus(false);
+    // Pinning moves a row between lists, replacing its previous DOM node.
+    requestAnimationFrame(() => {
+      const row = document.querySelector<HTMLElement>(
+        `[data-sidebar-session-row="${CSS.escape(session.id)}"] [data-action="session-menu"]`,
+      );
+      const target = row && !row.closest('[aria-hidden="true"]')
+        ? row
+        : document.querySelector<HTMLElement>('[data-action="session-sort"]');
+      target?.focus();
+    });
   };
 
   const archiveSession = async (session: SessionSummary) => {
@@ -1139,6 +1160,53 @@ export function Sidebar({
     }
   };
 
+  /**
+   * Two-step delete for one row's menu item. The first click arms the item and
+   * relabels it; only the second click runs the delete, and the arm expires on
+   * its own. The menu stays open between the two clicks.
+   */
+  const requestDeleteSession = (session: SessionSummary) => {
+    if (armedDelete !== session.id) {
+      setArmedDelete(session.id);
+      return;
+    }
+    setArmedDelete(null);
+    void deleteSession(session);
+  };
+
+  /** Menu items of different surfaces never share an armed key. */
+  const projectDeleteKey = (entry: ProjectEntry) => `project:${entry.key}`;
+
+  /**
+   * Two-step delete for a project row that keeps the running-task safety. The
+   * second click deletes an idle project straight away; a project whose turn is
+   * still live opens the dialog that names those sessions and stops them.
+   */
+  const requestDeleteProject = async (entry: ProjectEntry) => {
+    const key = projectDeleteKey(entry);
+    if (armedDelete !== key) {
+      setArmedDelete(key);
+      return;
+    }
+    setArmedDelete(null);
+    closeMenus(false);
+    if (entry.sessions.some((session) => runningSessions[session.id] === true)) {
+      setDeleteProjectFor(entry);
+      return;
+    }
+    try {
+      await deleteProjectAction(entry.path);
+      showToast(t("project.deleted", { name: entry.name }), { variant: "success" });
+    } catch (error) {
+      // The host refuses a project whose task started after this render.
+      reportError(
+        (error as { errorCode?: unknown } | null)?.errorCode === ErrorCodes.CONFLICT
+          ? new Error(t("project.deleteRunningBlocked"))
+          : error,
+      );
+    }
+  };
+
   const openProjectFolder = async (entry: ProjectEntry) => {
     closeMenus(false);
     try {
@@ -1148,7 +1216,7 @@ export function Sidebar({
     }
   };
 
-  const renameProjectEntry = async (entry: ProjectEntry, name: string) => {
+  const editProjectEntry = (entry: ProjectEntry, name: string) => {
     renameProject(entry.path, name);
   };
 
@@ -1411,9 +1479,15 @@ export function Sidebar({
 
   const renderSessionRows = (
     items: SessionSummary[],
-    options?: { temporary?: boolean; projectPath?: string },
+    options?: { temporary?: boolean; projectPath?: string; global?: boolean },
   ) => items.map((session) => {
     const meta = sessionMeta[session.id] ?? {};
+    const normalizedProjectPath = normalizeProjectPath(session.projectPath);
+    const temporary = options?.temporary ?? !normalizedProjectPath;
+    const owningProject = options?.global && normalizedProjectPath
+      ? projectEntriesByPath.get(normalizedProjectPath)?.name
+        ?? projectName(normalizedProjectPath, projectMetaFor(normalizedProjectPath, projectMeta).name)
+      : t("nav.hoverCardTemporarySpace");
     const active = page === "chat" && selectedSessionId === session.id;
     const archived = sessionArchived(session, meta);
     const running = Boolean(runningSessions[session.id]);
@@ -1438,6 +1512,19 @@ export function Sidebar({
           beginSessionDrag(event, session.id);
         }}
         onDragEnd={endSessionDrag}
+        onClick={(event) => {
+          // The row's own controls are the only click targets spelled out in
+          // markup; a click on the row container or its gap to the actions
+          // column - including where a hidden overflow control would sit -
+          // still opens the conversation instead of dying on the wrapper.
+          const target = event.target as HTMLElement | null;
+          if (target?.closest("button, [data-action]")) return;
+          cancelSessionPrefetch();
+          hideSessionHoverCard();
+          void (temporary
+            ? selectTemporarySession(session.id)
+            : selectProjectSession(session));
+        }}
         onContextMenu={(event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -1458,17 +1545,17 @@ export function Sidebar({
           onPointerLeave={cancelSessionPrefetch}
           onFocus={() => void prefetchSession(session.id).catch(() => undefined)}
           onMouseEnter={(event) =>
-            showSessionHoverCard(session, event.currentTarget, options?.temporary ?? false)
+            showSessionHoverCard(session, event.currentTarget, temporary)
           }
           onMouseLeave={scheduleSessionHoverCardHide}
           onFocusCapture={(event) =>
-            showSessionHoverCard(session, event.currentTarget, options?.temporary ?? false)
+            showSessionHoverCard(session, event.currentTarget, temporary)
           }
           onBlur={scheduleSessionHoverCardHide}
           onClick={() => {
             cancelSessionPrefetch();
             hideSessionHoverCard();
-            void (options?.temporary
+            void (temporary
               ? selectTemporarySession(session.id)
               : selectProjectSession(session));
           }}
@@ -1478,7 +1565,15 @@ export function Sidebar({
           {sessionPinned(session, meta) ? (
             <IconPin size={11} className="thread-item-pin" aria-hidden />
           ) : null}
+          {session.source === "pi-native" ? (
+            <span className="thread-item-source" title="Native Pi session">Pi</span>
+          ) : null}
           <span className="thread-item-title">{taskTitle(session.title)}</span>
+          {options?.global ? (
+            <span className="thread-item-project">
+              {owningProject}
+            </span>
+          ) : null}
         </button>
         <div className="sidebar-row-actions">
           <TooltipButton
@@ -1515,24 +1610,13 @@ export function Sidebar({
     // sessions stay folded behind the same load-more affordance used for the
     // time-grouped overflow and expand on click.
     const sessionsExpanded = expandedProjectSessions[entry.key] ?? false;
-    const visibleSessions = sessionsExpanded
-      ? entry.sessions
-      : entry.sessions.slice(0, MAX_VISIBLE_SESSIONS);
-    const hiddenCount = entry.sessions.length - visibleSessions.length;
+    const history = entry.sessions.filter((session) => !pinnedSessionIds.has(session.id));
+    const visibleSessions = sessionsExpanded ? history : history.slice(0, MAX_VISIBLE_SESSIONS);
+    const hiddenCount = history.length - visibleSessions.length;
 
     const renderTimeGroupedSessions = (sessions: SessionSummary[]) => {
-      // Group the visible slice by time, preserving recency order.
-      const grouped = new Map<TimeGroup, SessionSummary[]>();
-      for (const session of sessions) {
-        const group = getTimeGroup(session.updatedAt);
-        if (!grouped.has(group)) grouped.set(group, []);
-        grouped.get(group)!.push(session);
-      }
       const result: React.ReactNode[] = [];
-      for (const group of TIME_GROUP_ORDER) {
-        const groupSessions = grouped.get(group);
-        if (!groupSessions || groupSessions.length === 0) continue;
-
+      for (const { group, sessions: groupSessions } of groupSidebarSessionsByTime(sessions)) {
         // For today, don't show header (as per requirement)
         if (group !== "today") {
           const i18nKey =
@@ -1567,9 +1651,10 @@ export function Sidebar({
     return (
       <section
         key={entry.key}
-        className={`sidebar-session-group project-group ${entry.active ? "active" : ""} ${entry.meta.archived ? "archived" : ""} ${dropProjectKey === entry.key ? "is-drop-target" : ""} ${draggingProjectKey === entry.key ? "is-dragging" : ""} ${dropIndicator?.key === entry.key ? (dropIndicator.insertAfter ? "is-drop-after" : "is-drop-before") : ""}`}
+        className={`sidebar-session-group project-group ${entry.meta.archived ? "archived" : ""} ${dropProjectKey === entry.key ? "is-drop-target" : ""} ${draggingProjectKey === entry.key ? "is-dragging" : ""} ${dropIndicator?.key === entry.key ? (dropIndicator.insertAfter ? "is-drop-after" : "is-drop-before") : ""}`}
         aria-labelledby={projectId}
         data-sidebar-project-group={entry.key}
+        data-current-workspace={entry.active ? "true" : undefined}
         onDragOver={(event) => {
           onProjectDropTargetOver(event, entry);
         }}
@@ -1586,6 +1671,17 @@ export function Sidebar({
       >
         <div
           className="sidebar-session-group-header"
+          onClick={(event) => {
+            // Same one-target rule as a session row: the header's own controls
+            // stay the only spelled-out targets, so the gutter next to a hidden
+            // control still activates and toggles the group.
+            const target = event.target as HTMLElement | null;
+            if (target?.closest("button, [data-action]")) return;
+            void (async () => {
+              if (!entry.active && !(await selectProject(entry.path))) return;
+              setCollapsed(entry.path, !collapsedProject);
+            })();
+          }}
           onContextMenu={(event) => {
             if (projectReorderRef.current) {
               event.preventDefault();
@@ -1689,10 +1785,15 @@ export function Sidebar({
           className={`sidebar-session-group-body project ${collapsedProject ? "collapsed" : ""}`}
           role="region"
           aria-hidden={collapsedProject}
+          inert={collapsedProject ? true : undefined}
         >
-          {entry.sessions.length > 0 ? renderTimeGroupedSessions(visibleSessions) : (
-            <div className="sidebar-session-empty">{t("nav.noProjectSessions")}</div>
-          )}
+          <div className="sidebar-session-group-clip">
+            <div className="sidebar-session-group-list">
+              {entry.sessions.length > 0 ? renderTimeGroupedSessions(visibleSessions) : (
+                <div className="sidebar-session-empty">{t("nav.noProjectSessions")}</div>
+              )}
+            </div>
+          </div>
         </div>
       </section>
     );
@@ -1790,19 +1891,21 @@ export function Sidebar({
       >
         {session ? (
           <>
-            <button
-              ref={menuFirstItemRef}
-              type="button"
-              role="menuitem"
-              data-action="rename-session"
-              onClick={() => {
-                closeMenus(false);
-                setRenameFor(session);
-              }}
-            >
-              <IconPencil size={14} />
-              {t("nav.renameTask", { defaultValue: "Rename task" })}
-            </button>
+            {session.source !== "pi-native" ? (
+              <button
+                ref={menuFirstItemRef}
+                type="button"
+                role="menuitem"
+                data-action="rename-session"
+                onClick={() => {
+                  closeMenus(false);
+                  setRenameFor(session);
+                }}
+              >
+                <IconPencil size={14} />
+                {t("nav.renameTask", { defaultValue: "Rename task" })}
+              </button>
+            ) : null}
             <button
               type="button"
               role="menuitem"
@@ -1829,16 +1932,18 @@ export function Sidebar({
                 ? t("nav.restoreTask", { defaultValue: "Restore" })
                 : t("nav.archiveTask", { defaultValue: "Archive" })}
             </button>
-            <button
-              type="button"
-              role="menuitem"
-              data-action="fork-session"
-              disabled={Boolean(runningSessions[session.id])}
-              onClick={() => void forkSession(session)}
-            >
-              <IconBranch size={14} />
-              {t("nav.createBranch")}
-            </button>
+            {session.source !== "pi-native" ? (
+              <button
+                type="button"
+                role="menuitem"
+                data-action="fork-session"
+                disabled={Boolean(runningSessions[session.id])}
+                onClick={() => void forkSession(session)}
+              >
+                <IconBranch size={14} />
+                {t("nav.createBranch")}
+              </button>
+            ) : null}
             {settings?.developerMode === true ? (
               <>
                 <button
@@ -1861,16 +1966,21 @@ export function Sidebar({
                 </button>
               </>
             ) : null}
-            <button
-              type="button"
-              role="menuitem"
-              className="danger"
-              data-action="delete-session"
-              onClick={() => void deleteSession(session)}
-            >
-              <IconX size={14} />
-              {t("nav.deleteTask", { defaultValue: "Delete" })}
-            </button>
+            {session.source !== "pi-native" ? (
+              <button
+                type="button"
+                role="menuitem"
+                className={cx("danger", armedDelete === session.id && "is-armed")}
+                data-action="delete-session"
+                data-armed={armedDelete === session.id ? "true" : undefined}
+                onClick={() => requestDeleteSession(session)}
+              >
+                <IconX size={14} />
+                {armedDelete === session.id
+                  ? t("nav.deleteTaskConfirm", { defaultValue: "Delete?" })
+                  : t("nav.deleteTask", { defaultValue: "Delete" })}
+              </button>
+            ) : null}
           </>
         ) : null}
         {entry ? (
@@ -1888,14 +1998,14 @@ export function Sidebar({
             <button
               type="button"
               role="menuitem"
-              data-action="rename-project"
+              data-action="edit-project"
               onClick={() => {
                 closeMenus(false);
-                setRenameProjectFor(entry);
+                setEditProjectFor(entry);
               }}
             >
               <IconPencil size={14} />
-              {t("project.rename", { defaultValue: "Rename project" })}
+              {t("project.edit", { defaultValue: "Edit project" })}
             </button>
             <button
               type="button"
@@ -1921,6 +2031,19 @@ export function Sidebar({
                 ? t("project.restore", { defaultValue: "Restore project" })
                 : t("project.archive", { defaultValue: "Archive project" })}
             </button>
+            <button
+              type="button"
+              role="menuitem"
+              className={cx("danger", armedDelete === projectDeleteKey(entry) && "is-armed")}
+              data-action="delete-project"
+              data-armed={armedDelete === projectDeleteKey(entry) ? "true" : undefined}
+              onClick={() => void requestDeleteProject(entry)}
+            >
+              <IconTrash size={14} />
+              {armedDelete === projectDeleteKey(entry)
+                ? t("project.deleteMenuConfirm", { defaultValue: "Delete?" })
+                : t("project.delete", { defaultValue: "Delete project" })}
+            </button>
             {entry.open ? (
               <button
                 type="button"
@@ -1940,7 +2063,8 @@ export function Sidebar({
 
   return (
     <aside
-      className={cx("sidebar", className)}
+      className={cx("sidebar", "sidebar-surface", className)}
+      data-window-blur={windowFocused ? undefined : "true"}
       onAnimationEnd={onAnimationEnd}
     >
       <div className="sidebar-header">
@@ -1958,7 +2082,7 @@ export function Sidebar({
         <div className="sidebar-header-actions no-drag">
           <TooltipButton
             type="button"
-            className="icon-btn"
+            className="icon-btn icon-btn-square"
             tooltip={
               sidebarToggleShortcut
                 ? `${t("nav.collapseSidebar")} (${sidebarToggleShortcut})`
@@ -1975,6 +2099,23 @@ export function Sidebar({
       </div>
 
       <div className="sidebar-body no-drag">
+
+        {pinnedSessions.length > 0 ? (
+          <section
+            className="sidebar-pinned-sessions"
+            aria-labelledby="sidebar-pinned-label"
+            data-sidebar-session-section="pinned"
+          >
+            <div className="sidebar-list-toolbar sidebar-list-toolbar-secondary">
+              <span id="sidebar-pinned-label" className="sidebar-list-label">
+                {t("nav.pinnedSessions")}
+              </span>
+            </div>
+            <div className="sidebar-session-group-body pinned" onScroll={() => closeMenus(false)}>
+              {renderSessionRows(pinnedSessions, { global: true })}
+            </div>
+          </section>
+        ) : null}
 
         <section
           className="sidebar-standalone-sessions"
@@ -2047,9 +2188,11 @@ export function Sidebar({
               openSectionMenu("sessions", event.clientX, event.clientY);
             }}
           >
-            {temporarySessions.length > 0 ? renderSessionRows(temporarySessions, { temporary: true }) : (
+            {temporarySessionHistory.length > 0 ? (
+              renderSessionRows(temporarySessionHistory, { temporary: true })
+            ) : temporarySessions.length === 0 ? (
               <div className="sidebar-session-empty">{t("nav.noTemporarySessions")}</div>
-            )}
+            ) : null}
           </div>
         </section>
 
@@ -2123,6 +2266,7 @@ export function Sidebar({
               tooltip={t("nav.settings")}
               ariaLabel={t("nav.settings")}
               onClick={() => setPage("settings")}
+              aria-pressed={page === "settings"}
             >
               <IconSettings size={14} aria-hidden />
             </TooltipButton>
@@ -2132,7 +2276,10 @@ export function Sidebar({
               data-nav="plugins"
               tooltip={t("nav.plugins")}
               ariaLabel={t("nav.plugins")}
-              onClick={() => setPage("plugins")}
+              onClick={() => page === "plugins"
+                ? (canNavBack() ? navBack() : setPage("chat"))
+                : setPage("plugins")}
+              aria-pressed={page === "plugins"}
             >
               <IconPlug size={14} aria-hidden />
             </TooltipButton>
@@ -2182,11 +2329,31 @@ export function Sidebar({
           onError={reportError}
         />
       ) : null}
-      {renameProjectFor ? (
-        <ProjectRenameDialog
-          project={renameProjectFor}
-          onClose={() => setRenameProjectFor(null)}
-          onSave={(name) => renameProjectEntry(renameProjectFor, name)}
+      {editProjectFor ? (
+        <ProjectEditDialog
+          project={editProjectFor}
+          onClose={() => setEditProjectFor(null)}
+          onSaved={(group) => editProjectEntry(editProjectFor, group.name)}
+          onError={reportError}
+        />
+      ) : null}
+      {deleteProjectFor ? (
+        <ProjectDeleteDialog
+          project={{
+            name: deleteProjectFor.name,
+            path: deleteProjectFor.path,
+            sessionCount: deleteProjectFor.sessions.length,
+          }}
+          runningSessionIds={deleteProjectFor.sessions
+            .filter((session) => runningSessions[session.id] === true)
+            .map((session) => session.id)}
+          onClose={() => setDeleteProjectFor(null)}
+          onDeleted={() => {
+            setDeleteProjectFor(null);
+            showToast(t("project.deleted", { name: deleteProjectFor.name }), {
+              variant: "success",
+            });
+          }}
           onError={reportError}
         />
       ) : null}

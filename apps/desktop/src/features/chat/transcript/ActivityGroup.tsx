@@ -1,6 +1,7 @@
 import {
   Fragment,
   memo,
+  useContext,
   useEffect,
   useId,
   useMemo,
@@ -51,6 +52,7 @@ import {
 } from "./shared";
 import { SubagentTopology } from "./SubagentDetail";
 import { ToolRow } from "./ToolRow";
+import { TranscriptSearchContext } from "../../../lib/transcript-search-context";
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
@@ -227,12 +229,16 @@ export const ActivityGroup = memo(function ActivityGroup({
   // this card is not the turn's live tail while its delegates are still running.
   const topologyLive = hasSubagentTopology && subagentSummary.running > 0;
   const live = isActive || topologyLive;
+  const searchTarget = useContext(TranscriptSearchContext);
+  const revealRequest = searchTarget && items.some((item) => item.message.id === searchTarget.messageId)
+    ? searchTarget.requestId : undefined;
   const {
     open,
     toggle: toggleDisclosure,
     collapse: collapseDisclosure,
     claim: claimDisclosure,
-  } = useAutomaticDisclosure(live);
+    titleRef,
+  } = useAutomaticDisclosure(live, revealRequest);
   const [now, setNow] = useState(Date.now);
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
   const wasActiveRef = useRef(live);
@@ -361,6 +367,7 @@ export const ActivityGroup = memo(function ActivityGroup({
       }`}
     >
       <button
+        ref={titleRef}
         className="tool-activity-header"
         aria-expanded={open}
         aria-controls={detailsId}
@@ -523,6 +530,11 @@ export function RunActivityIndicator({ activity }: { activity: AgentActivity }) 
             <strong>{retryErrorSummary}</strong>
             <code>
               {retryError.code}
+              {/* The transport errno names the failing layer (ENOTFOUND, a
+                  TLS code, a dropped socket) while the localized summary
+                  cannot; it is a technical token in the same style as the
+                  code beside it, so it needs no translation (issue #234). */}
+              {retryError.networkCode ? ` · ${retryError.networkCode}` : ""}
               {retryError.providerStatus !== undefined
                 ? ` · HTTP ${retryError.providerStatus}`
                 : ""}

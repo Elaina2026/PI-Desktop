@@ -53,6 +53,7 @@ import {
 } from "@pi-desktop/shared";
 import {
   TrustedExtensionRunner,
+  type RegisteredTrustedExtensionAgent,
   type TrustedExtensionBridge,
 } from "./extensions/runner.js";
 import type {
@@ -123,6 +124,7 @@ import {
   apiBindingForProviderModel,
   buildProviderModel,
   copilotRequestHeaders,
+  createExtensionAgentModels,
   createProviderModels,
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
@@ -130,6 +132,16 @@ import {
   type RuntimeProviderConfig,
 } from "./provider-binding.js";
 import { PathMutex } from "./path-lock.js";
+import { DelegationChainRegistry } from "./delegation-chain.js";
+import {
+  extractReadFiles,
+  isReadOnlyToolName,
+  originalTaskFromTranscript,
+  rebuildChainsFromTranscript,
+  selectChainRows,
+  seedDelegateMessages,
+  type DelegationChain,
+} from "./delegation-history.js";
 import {
   composeSubagentSystemPrompt,
   SubagentRun,
@@ -144,7 +156,12 @@ import {
   DEFAULT_RUNTIME_SYSTEM_PROMPT,
 } from "./mode-prompts.js";
 import { clampThinkingLevel } from "./thinking-level.js";
-import { visionFromModelConfig } from "./model-capabilities.js";
+import {
+  alignRetainedReasoningIdentity,
+  harvestRetainedReasoning,
+  type ReasoningReplayIdentity,
+} from "./reasoning-replay.js";
+import { genericModelConfig, visionFromModelConfig } from "./model-capabilities.js";
 import type { ProjectInstructions } from "./project-instructions.js";
 import { projectInstructionsPrompt } from "./project-instructions-prompt.js";
 import {
@@ -163,6 +180,7 @@ import {
   openCodeEndpointFromProvider,
   withOpenCodeSessionHeaders,
 } from "./opencode-session-headers.js";
+import { withCompactionRequestHeaders } from "./compaction-request.js";
 import {
   mergeProviderHeaders,
   providerHeadersEqual,
@@ -184,6 +202,14 @@ import {
 } from "./provider-retry.js";
 import { buildOutputCompressionPrompt } from "./compression-prompts.js";
 import { compressToolContent } from "./rtk-compressor.js";
+
+import { rebuildNodeNetworkTransport } from "./node-proxy.js";
+import {
+  createProviderTransportHealth,
+  explainsProviderFetchFailure,
+  type ProviderFetchFailure,
+  type ProviderTransportHealth,
+} from "./provider-transport-recovery.js";
 
 export type { RuntimeProviderConfig } from "./provider-binding.js";
 
@@ -302,8 +328,24 @@ function isMissingToolResultPlaceholder(
     content[0].text === MISSING_TOOL_RESULT_PLACEHOLDER
   );
 }
-export const ASK_TOOL_NAME = "asktool";
 
+/** Narrow view of the `tool_end` agent event; the envelope carries the rest. */
+type ToolEndEvent = {
+  type: "tool_end";
+  toolCallId: string;
+  result: unknown;
+  isError?: boolean;
+};
+
+/** Narrow view of the `tool_start` agent event; the envelope carries the rest. */
+type ToolStartEvent = {
+  type: "tool_start";
+  toolCallId: string;
+  toolName: string;
+  args?: unknown;
+};
+
+export const ASK_TOOL_NAME = "asktool";
 /**
  * Delegation lifecycle (ADR 0089): `Task` starts a subagent in the background
  * and returns immediately; `TaskWait` converges on running delegations;
@@ -366,7 +408,18 @@ export type DelegationRecord = {
    * `TaskWait` result or the resume-after-idle prompt. Auto-delivery is a
    * single shot per record. */
   reportDelivered: boolean;
+  /** Stable chain identity; never appears in a tool parameter (ADR 0279). */
+  delegateSessionId: string;
+  /** Prior `delegationId` this run continues, when `Task.resume` was set. */
+  resumedFrom?: string;
+  /** Model the run kept before the resume could not re-resolve it (ADR 0279
+   * §4): recorded so the parent can see that the delegate's binding moved. */
+  modelChangedFrom?: string;
+  /** `toolCallId`s of this run's calls that have not ended yet: dropped when the
+   * run settles, so an aborted call cannot pin its captured arguments. */
+  pendingToolCallIds?: Set<string>;
 };
+
 
 function delegationSummary(record: DelegationRecord): Record<string, unknown> {
   return {
@@ -380,7 +433,12 @@ function delegationSummary(record: DelegationRecord): Record<string, unknown> {
     toolCalls: record.result?.toolCalls ?? record.toolCalls,
     ...(record.lastToolName ? { lastToolName: record.lastToolName } : {}),
     ...(record.completedAt ? { completedAt: record.completedAt } : {}),
+    ...(record.result?.modelFailures ? { modelFailures: record.result.modelFailures } : {}),
     ...(record.result?.error ? { error: record.result.error } : {}),
+    ...(record.resumedFrom ? { resumedFrom: record.resumedFrom } : {}),
+    ...(record.modelChangedFrom
+      ? { modelChangedFrom: record.modelChangedFrom }
+      : {}),
   };
 }
 
@@ -1430,6 +1488,26 @@ export class DesktopAgentRuntime {
    * returns; `TaskWait`/`TaskList`/`TaskStop` drive it afterwards.
    */
   private delegations = new Map<string, DelegationRecord>();
+  /** Resumable chains rebuilt from the transcript and updated as Task settles. */
+  private readonly delegationChains = new DelegationChainRegistry();
+  /** Transcript rows used to rebuild a resumed delegate's context (ADR 0279):
+   * the seed history at launch plus every row this session's delegates emit. */
+  private readonly transcriptHistory: UiMessage[];
+  /** Row ids already in `transcriptHistory` from live delegate events, so a
+   * retried stream appends once. */
+  private readonly appendedDelegationRowIds = new Set<string>();
+  /** Name and arguments of a delegate's in-flight call: `tool_end` carries the
+   * result only, and the row a resume replays needs both. */
+  private readonly delegateToolCalls = new Map<
+    string,
+    { name: string; args: unknown }
+  >();
+  /** The prompt this runtime composed last, so a mid-turn refresh can tell its
+   * own prompt from a transient variant it must not clobber. */
+  private composedSystemPrompt?: string;
+  /** Set when a refresh was skipped because a transient prompt variant owned the
+   * live prompt; that variant's cleanup applies it once the prompt is restored. */
+  private resumablePromptStale = false;
   /** Set by `abort` / `dispose` so a finishing delegate cannot restart the parent. */
   private runCancelled = false;
   /**
@@ -1469,6 +1547,28 @@ export class DesktopAgentRuntime {
   private delegationWaitTargets?: DelegationRecord[];
   private providerResponseStatus?: number;
   private providerRetryHeaders?: Record<string, string>;
+  /**
+   * Size and message count of the provider attempt in flight. A failed request
+   * has to be correlatable with how much context it carried, and on a network
+   * failure the request never returns a response to read it from (issue #234).
+   */
+  private providerRequestBytes?: number;
+  private providerRequestMessages?: number;
+  /**
+   * Transport cause of the last provider attempt that rejected before any
+   * response arrived, captured where the original Error still exists. pi-ai
+   * only forwards a flattened `errorMessage`, so without this the real errno is
+   * gone before classification and `fetch failed` reaches the log as
+   * `networkCategory: "unknown"` (issue #234).
+   */
+  private providerFetchFailure?: ProviderFetchFailure;
+  /**
+   * Consecutive-failure policy for the shared undici pool. Rebuilding the pool
+   * is a process-wide action, so the evidence stays per session and the pool is
+   * rebuilt only when the same origin keeps failing unanswered (issue #234).
+   */
+  private readonly providerTransportHealth: ProviderTransportHealth =
+    createProviderTransportHealth();
   private pendingProviderRetry?: ReturnType<typeof classifyAgentError>;
   /**
    * Shared bounded retry count for non-rate-limit transient failures, counted
@@ -1597,8 +1697,12 @@ export class DesktopAgentRuntime {
     this.models = models;
     const runtimeApiKey = providerRequestKey(this.provider);
 
-    this.fullEntries = this.historyToEntries(opts.history ?? []);
+    this.transcriptHistory = [...(opts.history ?? [])];
+    this.fullEntries = this.historyToEntries(this.transcriptHistory);
     this.activeCompaction = opts.compaction;
+    this.delegationChains.hydrate(
+      rebuildChainsFromTranscript(this.transcriptHistory),
+    );
     const skillsPrompt = pluginSkillsPrompt(this.pluginSkills);
     const defaultSystemPrompt = [
       DEFAULT_RUNTIME_SYSTEM_PROMPT,
@@ -1668,6 +1772,12 @@ Delegation rules:
         this.providerResponseStatus = undefined;
         this.providerRetryHeaders = undefined;
         const supportsCustomFetch = m.api !== "google-generative-ai";
+        this.providerRequestBytes = undefined;
+        this.providerRequestMessages = context.messages?.length;
+        // A new model request starts a new transport streak: the evidence that
+        // justified a rebuild does not carry into the next request (issue #234).
+        this.providerFetchFailure = undefined;
+        this.providerTransportHealth.reset();
         const requestOptions: SimpleStreamOptions = withProviderHeaders(
           withOpenCodeSessionHeaders(
             {
@@ -1675,20 +1785,28 @@ Delegation rules:
               maxRetries: PROVIDER_REQUEST_MAX_RETRIES,
               sessionId: this.sessionId,
               // pi-ai only exposes onResponse after a request succeeds. Capture the
-              // failed response separately so a 429 can honor Retry-After headers.
+              // failed response separately so a 429 can honor Retry-After headers,
+              // and capture the transport cause of a rejection while the original
+              // Error still exists (issue #234).
               // Google Generative AI adapter rejects custom fetch.
               ...(supportsCustomFetch
                 ? {
-                    fetch: captureProviderResponse(options?.fetch, (response) => {
-                      this.providerResponseStatus = response?.status;
-                      // A gateway 502/503 can also state Retry-After, so keep headers for
-                      // every status whose delay is usable instead of only for 429.
-                      this.providerRetryHeaders = carriesRetryDelayHeaders(
-                        response?.status,
-                      )
-                        ? response?.headers
-                        : undefined;
-                    }),
+                    fetch: captureProviderResponse(
+                      options?.fetch,
+                      (response, requestBytes, failure) => {
+                        this.providerResponseStatus = response?.status;
+                        this.providerRequestBytes = requestBytes;
+                        this.providerFetchFailure = failure;
+                        if (failure) this.recoverProviderTransport(failure);
+                        // A gateway 502/503 can also state Retry-After, so keep headers
+                        // for every status whose delay is usable, not only for 429.
+                        this.providerRetryHeaders = carriesRetryDelayHeaders(
+                          response?.status,
+                        )
+                          ? response?.headers
+                          : undefined;
+                      },
+                    ),
                   }
                 : {}),
               onResponse: async (response, responseModel) => {
@@ -1709,11 +1827,12 @@ Delegation rules:
         const hookedOptions = this.withExtensionProviderHooks(requestOptions, m);
         const primaryTarget: FallbackTarget = {
           model: m,
-          createStream: (retryOptions) => models.streamSimple(m, context, retryOptions),
+          createStream: (retryOptions) => this.models.streamSimple(m, context, retryOptions),
           controller: {
             claim: (error, phase) => this.claimProviderRetry(error, phase),
             headers: () => this.providerRetryHeaders,
             status: () => this.providerResponseStatus,
+            failure: () => this.providerFetchFailure,
             onRetry: ({ error, phase, attempt, delayMs }) => {
               this.setAgentActivity({
                 phase: "retrying",
@@ -1762,7 +1881,11 @@ Delegation rules:
       // A vendor account has no long-lived key. Leaving it unset keeps pi-ai
       // from overriding the auth the provider just resolved for this request.
       getApiKey: async () => runtimeApiKey || undefined,
-      convertToLlm,
+      convertToLlm: (messages) =>
+        alignRetainedReasoningIdentity(
+          convertToLlm(messages),
+          this.reasoningReplayIdentity(),
+        ),
       prepareNextTurnWithContext: (context, signal) =>
         this.prepareNextTurn(context, signal),
       afterToolCall: async (context) => this.afterToolCall(context),
@@ -1771,7 +1894,7 @@ Delegation rules:
         model,
         tools,
         thinkingLevel: this.thinkingLevel,
-        messages: buildSessionContext(this.entriesWithCompaction()).messages,
+        messages: this.liveSessionContext().messages,
       },
       // Plan transitions must be the only tool call in an assistant batch.
       // Sequential execution also makes the host-confirmed mode change visible
@@ -1853,7 +1976,13 @@ Delegation rules:
     const compressionPrompt = buildOutputCompressionPrompt(this.tokenSaverSettings);
     const modelDisplayName = this.provider.modelConfig?.name || this.provider.modelId;
     const activeModelPrompt = `## Active Model\nYou are running on model "${modelDisplayName}" (model ID: "${this.provider.modelId}") from provider "${this.provider.name}" with thinking level "${this.thinkingLevel}". When asked about your current model or configuration, always answer based on this exact metadata.`;
-    return composeModeSystemPrompt(
+    const resumablePrompt =
+      this.subagents.length > 0
+        ? this.delegationChains.promptBlock({
+            runningDelegationIds: this.runningDelegationIds(),
+          })
+        : "";
+    const composed = composeModeSystemPrompt(
       this.mode,
       [
         this.baseSystemPrompt,
@@ -1862,8 +1991,39 @@ Delegation rules:
         ...(projectPrompt ? [projectPrompt] : []),
         ...(compressionPrompt ? [compressionPrompt] : []),
         ...(memoryPrompt ? [memoryPrompt] : []),
+        ...(resumablePrompt ? [resumablePrompt] : []),
       ].join("\n\n"),
     );
+    this.composedSystemPrompt = composed;
+    return composed;
+  }
+
+  /**
+   * The resumable list changes when a delegation settles, so the prompt the
+   * parent reads on its next turn reflects it. Recomposing is only worth it
+   * when subagents exist at all, and only while the live prompt is still the
+   * one this runtime composed: a transient variant (the delegation nudge) owns
+   * it otherwise, and the next turn recomposes anyway.
+   */
+  private refreshResumablePrompt(): void {
+    if (this.subagents.length === 0) return;
+    if (!this.agent) return;
+    if (this.composedSystemPrompt === undefined) return;
+    if (this.agent.state.systemPrompt !== this.composedSystemPrompt) {
+      // A transient variant (the delegation nudge) owns the live prompt. Its
+      // own cleanup restores the composed text, and applies this refresh then,
+      // so a chain that settled mid-nudge is still listed on the next turn.
+      this.resumablePromptStale = true;
+      return;
+    }
+    this.agent.state.systemPrompt = this.composeSystemPrompt();
+  }
+
+  /** Apply a resumable-list refresh that a transient prompt variant deferred. */
+  private applyPendingResumablePrompt(): void {
+    if (!this.resumablePromptStale) return;
+    this.resumablePromptStale = false;
+    this.refreshResumablePrompt();
   }
 
   /**
@@ -2069,8 +2229,11 @@ Delegation rules:
     ]
       .sort()
       .join(",");
-    return (
-      !this.disposed &&
+    const extensionAgentMatches =
+      Boolean(this.provider.extensionAgentKey) &&
+      this.provider.extensionAgentKey === config.provider.extensionAgentKey &&
+      this.provider.modelId === config.provider.modelId;
+    const providerMatches = extensionAgentMatches || (
       this.provider.id === config.provider.id &&
       this.provider.modelId === config.provider.modelId &&
       (this.provider.baseUrl ?? "") === (config.provider.baseUrl ?? "") &&
@@ -2080,8 +2243,11 @@ Delegation rules:
       providerHeadersEqual(this.provider.headers, config.provider.headers) &&
       this.provider.supportsReasoning === config.provider.supportsReasoning &&
       currentThinkingLevels === nextThinkingLevels &&
-      safeJson(this.provider.modelConfig ?? null) ===
-        safeJson(config.provider.modelConfig ?? null) &&
+      safeJson(this.provider.modelConfig ?? null) === safeJson(config.provider.modelConfig ?? null)
+    );
+    return (
+      !this.disposed &&
+      providerMatches &&
       this.mode === config.mode &&
       this.thinkingLevel ===
         clampThinkingLevel(config.provider, config.thinkingLevel) &&
@@ -2136,19 +2302,105 @@ Delegation rules:
     return { handled: await this.extensionRunner.runCommand(name, args) };
   }
 
+  private extensionProviderFor(agent: RegisteredTrustedExtensionAgent, model: Model<Api>): RuntimeProviderConfig {
+    const supportedThinkingLevels: ThinkingLevel[] = model.reasoning
+      ? ["off", "low", "medium", "high"]
+      : ["off"];
+    return {
+      id: agent.providerId,
+      name: agent.name,
+      modelId: model.id,
+      apiKey: "",
+      authKind: "none",
+      extensionAgentKey: agent.key,
+      supportsReasoning: model.reasoning,
+      supportedThinkingLevels,
+      modelConfig: genericModelConfig(model.id, ""),
+    };
+  }
+
+  private applyExtensionAgent(agent: RegisteredTrustedExtensionAgent, model: Model<Api>): void {
+    this.provider = this.extensionProviderFor(agent, model);
+    this.model = model;
+    this.models = createExtensionAgentModels({
+      providerId: agent.providerId,
+      providerName: agent.name,
+      model,
+      stream: { stream: agent.stream, streamSimple: agent.stream },
+    });
+    this.thinkingLevel = clampThinkingLevel(this.provider, this.thinkingLevel);
+    this.agent.state.model = model;
+    this.agent.state.thinkingLevel = this.thinkingLevel;
+  }
+
+  async activateTrustedExtensionAgent(agentKey: string, modelId: string): Promise<boolean> {
+    const found = this.extensionRunner?.findAgent(agentKey, modelId);
+    if (!found) return false;
+    this.applyExtensionAgent(found.agent, found.model);
+    return true;
+  }
+
+  private async setExtensionModel(model: unknown): Promise<boolean> {
+    if (!this.extensionRunner || !this.isIdle()) return false;
+    const agent = this.extensionRunner.findAgentModel(model);
+    if (!agent) return false;
+    const modelId = model && typeof model === "object" && typeof (model as { id?: unknown }).id === "string"
+      ? (model as { id: string }).id
+      : "";
+    const candidate = agent.models.find((item) => item.id === modelId);
+    if (!candidate) return false;
+    try {
+      const result = await this.host.call<{ ok?: boolean }>("extensions.model.configure", {
+        sessionId: this.sessionId,
+        mode: this.mode,
+        providerId: agent.providerId,
+        modelId: candidate.id,
+        thinkingLevel: this.thinkingLevel,
+      });
+      if (result?.ok === false) return false;
+      this.applyExtensionAgent(agent, candidate);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private isIdle(): boolean {
+    return !this.agent.state.isStreaming;
+  }
+
+  private extensionModelRegistry(): Record<string, unknown> {
+    const getRunner = () => this.extensionRunner;
+    const models = () => [this.model, ...(getRunner()?.getAgentModels() ?? [])];
+    return {
+      getAll: () => [...new Map(models().map((model) => [`${model.provider}/${model.id}`, model])).values()],
+      getAvailable: () => [...new Map(models().map((model) => [`${model.provider}/${model.id}`, model])).values()],
+      find: (providerId: string, modelId: string) =>
+        models().find((model) => model.provider === providerId && model.id === modelId),
+      getProviderDisplayName: (providerId: string) =>
+        getRunner()?.getAgents().find((agent) => agent.providerId === providerId)?.name ??
+        (providerId === this.provider.id ? this.provider.name : providerId),
+      getProviderAuthStatus: (providerId: string) => ({
+        configured: [this.provider.id, ...(getRunner()?.getAgents().map((agent) => agent.providerId) ?? [])].includes(providerId),
+        source: "plugin",
+      }),
+      hasConfiguredAuth: (model: { provider?: string }) =>
+        typeof model.provider === "string" &&
+        [this.provider.id, ...(getRunner()?.getAgents().map((agent) => agent.providerId) ?? [])].includes(model.provider),
+    };
+  }
+
   getTrustedExtensionReports() {
     return this.extensionRunner?.getLoadReports() ?? [];
   }
-
   private createExtensionBridge(): TrustedExtensionBridge {
     const runtime = this;
     return {
       sessionId: this.sessionId,
       cwd: this.projectPath ?? process.cwd(),
       getModel: () => runtime.model,
-      // The desktop owns the provider binding per session (D342); an
-      // extension cannot swap it from inside a turn.
-      setModel: async () => false,
+      setModel: (model) => runtime.setExtensionModel(model),
+      modelRegistry: runtime.extensionModelRegistry(),
       getThinkingLevel: () => runtime.thinkingLevel,
       setThinkingLevel: (level) => {
         runtime.thinkingLevel = clampThinkingLevel(runtime.provider, level as ThinkingLevel);
@@ -2278,6 +2530,13 @@ Delegation rules:
    * Failed assistant turns stay transcript-only. */
   private historyToEntries(history: UiMessage[]): MessageEntry[] {
     const api = apiBindingForProviderModel(this.provider).api;
+    const deepSeekCompletionsReplay =
+      api === "openai-completions" &&
+      (
+        this.model.compat as
+          | { requiresReasoningContentOnAssistantMessages?: boolean }
+          | undefined
+      )?.requiresReasoningContentOnAssistantMessages === true;
     const entries: MessageEntry[] = [];
     const append = (id: string, message: AgentMessage): MessageEntry => {
       const entry: MessageEntry = {
@@ -2328,7 +2587,15 @@ Delegation rules:
         if (m.status === "error" || m.isError || m.error) continue;
         const content: AssistantMessage["content"] = [];
         if (m.thinking?.trim()) {
-          content.push({ type: "thinking" as const, thinking: m.thinking });
+          // Completions DeepSeek replay needs thinkingSignature so convertMessages
+          // maps the block to reasoning_content instead of dropping it (#296).
+          content.push({
+            type: "thinking" as const,
+            thinking: m.thinking,
+            ...(deepSeekCompletionsReplay
+              ? { thinkingSignature: "reasoning_content" as const }
+              : {}),
+          });
         }
         if (m.content?.trim()) {
           content.push({ type: "text" as const, text: m.content });
@@ -3785,6 +4052,148 @@ Delegation rules:
     };
   }
 
+  /** Every delegation still working; a resume of one is a queueing attempt. */
+  private runningDelegationIds(): Set<string> {
+    return new Set(
+      this.runningDelegations().map((record) => record.delegationId),
+    );
+  }
+
+  /**
+   * Resolve a `Task.resume` id to its chain, or fail with a message that tells
+   * the model how to proceed (ADR 0276). The parent only ever sees
+   * `delegationId`; the chain identity behind it stays internal.
+   */
+  private resolveResumeChain(
+    resume: string,
+    agentName: string,
+  ):
+    | { ok: true; chain: DelegationChain }
+    | { ok: false; message: string } {
+    const lookup = this.delegationChains.resolveResume({
+      resume,
+      agentName,
+      runningDelegationIds: this.runningDelegationIds(),
+    });
+    if (lookup.ok) return lookup;
+    const error = lookup.error;
+    switch (error.kind) {
+      case "unknown":
+        return { ok: false, message: this.unknownResumeMessage(resume) };
+      case "running":
+        return {
+          ok: false,
+          message: `Delegation ${error.delegationId} is still running. Call TaskWait to converge with it first, or start a new delegation. Resuming a running delegation is not queued.`,
+        };
+      case "not-resumable":
+        return {
+          ok: false,
+          message:
+            error.status === "interrupted"
+              ? `Delegation ${resume} was interrupted — the app closed while it worked — so there is nothing to continue. Start a new delegation instead.`
+              : `Delegation ${resume} ended as "${error.status}" and cannot be resumed. Only completed or failed delegations continue; start a new delegation instead.`,
+        };
+      case "agent-mismatch":
+        return {
+          ok: false,
+          message: `Delegation ${resume} belongs to the ${error.expected} subagent, not ${error.actual}. Resume it with the matching agent name, or start a new delegation.`,
+        };
+      case "over-budget":
+        return {
+          ok: false,
+          message: `Delegation ${resume} has read too much to resume cheaply. Start a new delegation and point it at the specific files it should re-read.`,
+        };
+    }
+  }
+
+  private unknownResumeMessage(resume: string): string {
+    return this.delegationChains.unknownResumeError(
+      resume,
+      this.delegationChains.resumableList({
+        runningDelegationIds: this.runningDelegationIds(),
+      }),
+    );
+  }
+
+  /**
+   * A chain resolved but has nothing to replay. The caller drops it first, so
+   * the id can never be advertised as reusable in its own error (ADR 0279 §4).
+   */
+  private noHistoryResumeMessage(resume: string): string {
+    return this.delegationChains.noHistoryResumeError(
+      resume,
+      this.delegationChains.resumableList({
+        runningDelegationIds: this.runningDelegationIds(),
+      }),
+    );
+  }
+
+  /**
+   * The binding a resumed run keeps (ADR 0279 §4). A live chain records the
+   * `providerId/modelId` key it resolved, which is preferred here; a chain
+   * rebuilt from the transcript only knows the model id, matched against what
+   * is configured in this session. `undefined` means the binding is gone.
+   */
+  private resumedChainProvider(
+    chain: DelegationChain,
+  ): RuntimeProviderConfig | undefined {
+    const modelId = chain.latestModelId?.trim().toLowerCase();
+    if (!modelId) return undefined;
+    const candidates: RuntimeProviderConfig[] = [];
+    if (chain.latestModelKey) {
+      const keyed =
+        this.subagentProviders[chain.latestModelKey] ??
+        this.subagentOverrideProviders[chain.latestModelKey];
+      if (keyed) candidates.push(keyed);
+    }
+    candidates.push(
+      ...Object.values(this.subagentProviders),
+      ...Object.values(this.subagentOverrideProviders),
+      this.provider,
+    );
+    return candidates.find(
+      (candidate) => candidate.modelId.trim().toLowerCase() === modelId,
+    );
+  }
+
+  /** The delegation-model key a resolved binding is registered under, if any. */
+  private delegationModelKeyFor(
+    provider: RuntimeProviderConfig,
+  ): string | undefined {
+    for (const [key, candidate] of Object.entries(this.subagentProviders)) {
+      if (candidate === provider) return key;
+    }
+    for (const [key, candidate] of Object.entries(
+      this.subagentOverrideProviders,
+    )) {
+      if (candidate === provider) return key;
+    }
+    return undefined;
+  }
+
+  /**
+   * Rebuild the delegate's prior conversation from its transcript rows. The
+   * rows carry `parentToolCallId` for exactly the chain's `Task` calls, so the
+   * replay never picks up the parent's own rows or a sibling delegate's.
+   */
+  private seedResumedDelegate(
+    chain: DelegationChain,
+    provider: RuntimeProviderConfig,
+  ): AgentMessage[] | undefined {
+    const originalTask =
+      chain.originalTask ??
+      originalTaskFromTranscript(this.transcriptHistory, chain);
+    if (!originalTask) return undefined;
+    const rows = selectChainRows(this.transcriptHistory, chain);
+    if (rows.length === 0) return undefined;
+    return seedDelegateMessages({
+      originalTask,
+      rows,
+      provider,
+      model: buildProviderModel(provider),
+    });
+  }
+
   /**
    * `Task`: delegate one bounded piece of work to a subagent (ADR 0062).
    *
@@ -3818,6 +4227,7 @@ Delegation rules:
             ]),
         "`task` is the delegate's only instruction. It cannot see this conversation, and you cannot correct it while it runs, so state the goal, the paths and facts it cannot infer, and exactly what to report back.",
         "To run delegates concurrently, emit several Task calls in one assistant message. A message that mixes Task with any other tool runs one call at a time. You may keep working or talk to the user while they run; the runtime delivers their reports when they finish. Call TaskStop only to cancel.",
+        "To continue a previous subagent, pass its `resume` id (the `delegationId` returned by Task). Saying \"reuse\" in prose is not enough. Do not pass `model` when resuming; start a new delegation to change models.",
         `Available subagents:\n${catalog}`,
       ].join("\n\n"),
       parameters: Type.Object({
@@ -3837,7 +4247,13 @@ Delegation rules:
         model: Type.Optional(
           Type.String({
             description:
-              "Override the delegate's model for this run, e.g. 'anthropic/claude-sonnet-4-20250514'. Omit to use the subagent's default. Repeating the definition's own Default model key is the same as omitting this parameter. Only choose a different override from the available delegation model catalog.",
+              "Override the delegate's model for this run, e.g. 'anthropic/claude-sonnet-4-20250514'. Omit to use the subagent's default. Repeating the definition's own Default model key is the same as omitting this parameter. Only choose a different override from the available delegation model catalog. Forbidden when `resume` is set.",
+          }),
+        ),
+        resume: Type.Optional(
+          Type.String({
+            description:
+              "delegationId of a settled subagent in this conversation to continue. Omit to start a new session.",
           }),
         ),
         isolation: Type.Optional(
@@ -3865,17 +4281,28 @@ Delegation rules:
           isRecord(params) && typeof params.task === "string"
             ? params.task.trim()
             : "";
+        const resume =
+          isRecord(params) && typeof params.resume === "string"
+            ? params.resume.trim()
+            : "";
+        // Model override: Task.model > definition.model pin > session model.
+        const modelOverride =
+          isRecord(params) && typeof params.model === "string"
+            ? params.model.trim()
+            : "";
+        // Resume keeps the chain's model; a new delegation is the way to switch.
+        if (resume && modelOverride) {
+          return this.subagentToolError(
+            toolCallId,
+            `Resuming a subagent cannot change its model. Omit \`model\` to continue ${resume}, or start a new delegation to pick a different model.`,
+          );
+        }
         if (!task) {
           return this.subagentToolError(
             toolCallId,
             `Delegating to ${definition.name} needs a non-empty \`task\` brief.`,
           );
         }
-        // Model override: Task.model > definition.model pin > session model.
-        const modelOverride =
-          isRecord(params) && typeof params.model === "string"
-            ? params.model.trim()
-            : "";
         let provider: RuntimeProviderConfig | undefined;
         if (modelOverride) {
           if (this.isDefinitionPinOverride(definition, modelOverride)) {
@@ -3942,6 +4369,42 @@ Delegation rules:
         }
         // The delegate runs in the background (ADR 0089): `Task` returns
         // immediately with a delegation id, and TaskWait converges later.
+        const resumeLookup = resume
+          ? this.resolveResumeChain(resume, definition.name)
+          : undefined;
+        if (resume && resumeLookup && !resumeLookup.ok) {
+          return this.subagentToolError(toolCallId, resumeLookup.message);
+        }
+        const resumedChain = resumeLookup?.ok ? resumeLookup.chain : undefined;
+        // A resume keeps the chain's own binding (ADR 0279 §4): changing the
+        // parent's session model must not strand a chain, and a delegate must
+        // never swap models by accident. When the recorded binding is gone the
+        // run continues on the definition's current one and says so in its
+        // lifecycle details, because refusing would strand the chain forever.
+        const resumedProvider = resumedChain
+          ? this.resumedChainProvider(resumedChain)
+          : undefined;
+        if (resumedProvider) provider = resumedProvider;
+        const modelChangedFrom =
+          resumedChain?.latestModelId && !resumedProvider
+            ? resumedChain.latestModelId
+            : undefined;
+        const initialMessages = resumedChain
+          ? this.seedResumedDelegate(resumedChain, provider)
+          : undefined;
+        if (resume && !initialMessages) {
+          // The chain resolved but has nothing left to replay. Drop it so the
+          // prompt stops advertising an id that can never be continued, and
+          // report the drop without listing that same id as reusable.
+          if (resumedChain) {
+            this.delegationChains.drop(resumedChain.delegateSessionId);
+            this.refreshResumablePrompt();
+          }
+          return this.subagentToolError(
+            toolCallId,
+            this.noHistoryResumeMessage(resume),
+          );
+        }
         const delegationId = randomUUID();
         const controller = new AbortController();
         const thinkingLevel: SubagentThinkingLevel =
@@ -3959,6 +4422,22 @@ Delegation rules:
         let resolveCompletion: () => void = () => {};
         const completion = new Promise<void>((resolve) => {
           resolveCompletion = resolve;
+        });
+        const objective =
+          isRecord(params) && typeof params.description === "string"
+            ? params.description.trim()
+            : task;
+        const providerKey = this.delegationModelKeyFor(provider);
+        const chain = this.delegationChains.start({
+          delegateSessionId: resumedChain?.delegateSessionId ?? delegationId,
+          delegationId,
+          toolCallId,
+          agentName: definition.name,
+          originalTask: resumedChain?.originalTask ?? task,
+          objective,
+          latestModelId: provider.modelId,
+          ...(providerKey ? { latestModelKey: providerKey } : {}),
+          resumedFrom: resumedChain,
         });
         const record: DelegationRecord = {
           delegationId,
@@ -3978,6 +4457,9 @@ Delegation rules:
           lastPhase: "waiting-model",
           startedEpoch: this.turnEpoch,
           reportDelivered: false,
+          delegateSessionId: chain.delegateSessionId,
+          ...(resumedChain ? { resumedFrom: resume } : {}),
+          ...(modelChangedFrom ? { modelChangedFrom } : {}),
         };
         this.delegations.set(delegationId, record);
         const scopedTools = this.scopeDelegateTools(tools, definition);
@@ -3997,6 +4479,20 @@ Delegation rules:
           thinkingLevel,
           isolation,
           workspaceRoot: this.projectPath,
+          fallbackModels: (definition.fallbackModels ?? []).map((pin) => ({
+            key: subagentModelKey(pin),
+            provider: this.subagentProviders[subagentModelKey(pin)],
+          })),
+          inheritedThinkingLevel: this.thinkingLevel,
+          onModelChange: (next, level) => {
+            record.modelId = next.modelId;
+            record.thinkingLevel = level;
+            this.delegationChains.retarget(record.delegateSessionId, {
+              modelKey: this.delegationModelKeyFor(next),
+              modelId: next.modelId,
+            });
+            this.publishDelegationSettlement(record);
+          },
           systemPrompt: composeSubagentSystemPrompt({
             definition,
             guidance: this.subagentGuidance(definition),
@@ -4011,6 +4507,8 @@ Delegation rules:
           // through the same bookkeeping the parent uses.
           resolveToolOutcome: (context) => this.resolveOwnToolOutcome(context),
           signal: abortSignal,
+          // A resumed run replays its chain before this turn's `task` (ADR 0276).
+          ...(initialMessages ? { initialMessages } : {}),
         })
           .run()
           .then(
@@ -4054,6 +4552,7 @@ Delegation rules:
             startedAt,
             modelId: provider.modelId,
             thinkingLevel,
+            ...(resumedChain ? { resumedFrom: resume } : {}),
           },
         };
       },
@@ -4097,14 +4596,25 @@ Delegation rules:
     if (result.usage) {
       this.turnSubagentUsage = addUsage(this.turnSubagentUsage, result.usage);
     }
+    this.delegationChains.settle(record.delegateSessionId, record.status);
+    // An aborted call never sends `tool_end`, so a settled run drops whatever
+    // its calls left behind rather than pinning those arguments for the session.
+    for (const toolCallId of record.pendingToolCallIds ?? []) {
+      this.delegateToolCalls.delete(toolCallId);
+    }
+    record.pendingToolCallIds = undefined;
     this.publishDelegationSettlement(record);
     record.resolveCompletion();
     this.refreshDelegationWait();
+    this.refreshResumablePrompt();
     this.pruneFinishedDelegations();
   }
 
   private publishDelegationSettlement(record: DelegationRecord): void {
-    if (!record.taskMessage || record.status === "running") return;
+    if (!record.taskMessage) return;
+    const original = record.taskMessage.toolResult;
+    const details = isRecord(original) && isRecord(original.details) ? original.details : undefined;
+    if (record.status === "running" && details?.modelId === record.modelId && details?.thinkingLevel === record.thinkingLevel) return;
     this.emit(
       {
         type: "message_end",
@@ -4206,11 +4716,25 @@ Delegation rules:
     if (event.type === "tool_start") {
       record.toolCalls += 1;
       this.touchDelegationPhase(record, "tool", event.toolName);
+      // The row a later `resume` replays needs the call's arguments, and
+      // `tool_end` carries only the result (ADR 0279 §3).
+      this.delegateToolCalls.set(event.toolCallId, {
+        name: event.toolName,
+        args: (envelope.event as ToolStartEvent).args,
+      });
+      (record.pendingToolCallIds ??= new Set()).add(event.toolCallId);
       return;
     }
     if (event.type === "tool_end") {
       this.touchDelegationPhase(record, "waiting-model");
+      this.appendDelegationRow(record, envelope, this.toolRowFromEnvelope(envelope));
+      // The call is finished; its arguments are no longer needed.
+      this.delegateToolCalls.delete(event.toolCallId);
+      record.pendingToolCallIds?.delete(event.toolCallId);
       return;
+    }
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      this.appendDelegationRow(record, envelope, event.message);
     }
     if (
       (event.type === "message_start" || event.type === "message_update") &&
@@ -4226,6 +4750,56 @@ Delegation rules:
       );
       if (thinking && !text) this.touchDelegationPhase(record, "thinking");
     }
+  }
+
+  /**
+   * Keep `transcriptHistory` current with what a delegate produced, so a later
+   * `Task.resume` in the same session replays the chain without waiting on
+   * persistence (ADR 0276). A retried stream reuses the row id and appends once.
+   */
+  private appendDelegationRow(
+    record: DelegationRecord,
+    envelope: AgentEventEnvelope,
+    row: UiMessage,
+  ): void {
+    const tagged: UiMessage = {
+      ...row,
+      parentToolCallId: envelope.parentToolCallId ?? row.parentToolCallId,
+      agentName: envelope.agentName ?? row.agentName,
+    };
+    const key =
+      tagged.role === "tool"
+        ? `tool:${tagged.toolCallId ?? ""}`
+        : `message:${tagged.id ?? ""}`;
+    if (key.endsWith(":")) return;
+    if (this.appendedDelegationRowIds.has(key)) return;
+    this.appendedDelegationRowIds.add(key);
+    this.transcriptHistory.push(tagged);
+    if (tagged.role === "tool" && isReadOnlyToolName(tagged.toolName ?? "")) {
+      const { files, lineCount } = extractReadFiles([tagged]);
+      this.delegationChains.noteReads(record.delegateSessionId, files, lineCount);
+    }
+  }
+
+  private toolRowFromEnvelope(envelope: AgentEventEnvelope): UiMessage {
+    const event = envelope.event as ToolEndEvent;
+    const call = this.delegateToolCalls.get(event.toolCallId);
+    const ts = new Date(envelope.ts ?? Date.now()).toISOString();
+    return {
+      id: `delegate-tool-${event.toolCallId}`,
+      role: "tool",
+      content: "",
+      createdAt: ts,
+      toolCompletedAt: ts,
+      toolCallId: event.toolCallId,
+      toolName: call?.name ?? "",
+      toolArgs: call?.args,
+      toolResult: event.result,
+      toolStatus: event.isError ? "error" : "success",
+      isError: Boolean(event.isError),
+      parentToolCallId: envelope.parentToolCallId,
+      agentName: envelope.agentName,
+    };
   }
 
   private touchDelegationPhase(
@@ -4661,7 +5235,7 @@ Delegation rules:
    */
   private restoreDeferredToolsFromContext(): void {
     if (this.deferredToolNames.size === 0) return;
-    const { messages } = buildSessionContext(this.entriesWithCompaction());
+    const { messages } = this.liveSessionContext();
     for (const message of messages) {
       if (message.role !== "toolResult" || message.isError) continue;
       if (isMissingToolResultPlaceholder(message.content)) continue;
@@ -5025,6 +5599,9 @@ Delegation rules:
     const detailStatus = isRecord(error.details)
       ? error.details.providerStatus
       : undefined;
+    const detailNetworkCode = isRecord(error.details)
+      ? error.details.networkCode
+      : undefined;
     const providerStatus =
       typeof detailStatus === "number"
         ? detailStatus
@@ -5033,6 +5610,12 @@ Delegation rules:
       code: error.code,
       message: error.message,
       ...(typeof providerStatus === "number" ? { providerStatus } : {}),
+      // While the turn is still retrying, the transport errno is the only thing
+      // that tells a DNS failure from a TLS failure from a dropped socket; the
+      // localized summary cannot (issue #234).
+      ...(typeof detailNetworkCode === "string"
+        ? { networkCode: detailNetworkCode }
+        : {}),
     };
   }
 
@@ -5087,11 +5670,41 @@ Delegation rules:
     streamMs?: number,
   ): ReturnType<typeof classifyAgentError> {
     const existingDetails = isRecord(error.details) ? error.details : {};
+    // A capture exists only for an attempt that rejected before any response, so
+    // it is also the honest phase: whatever the message lifecycle that surfaced
+    // the failure looks like, this request never reached the provider, and
+    // pi-agent-core's synthetic `message_start` must not read as a started
+    // stream (issue #234).
+    const captured =
+      this.providerFetchFailure !== undefined &&
+      explainsProviderFetchFailure(error.code)
+        ? this.providerFetchFailure
+        : undefined;
     return {
       ...error,
       details: {
         ...existingDetails,
-        phase,
+        // First-hand cause, so it replaces the `unknown` the text classifier
+        // falls back to for a bare `fetch failed`.
+        ...(captured ? captured.fields : {}),
+        phase: captured ? "request" : phase,
+        // Correlation for a failure that produced no response to inspect: how
+        // much context and how many bytes the attempt carried, and which
+        // compaction generation the session was on (issue #234). Counts, flags
+        // and sizes only — never message content.
+        ...(this.providerRequestMessages !== undefined
+          ? { requestMessages: this.providerRequestMessages }
+          : {}),
+        ...(this.providerRequestBytes !== undefined
+          ? { requestBytes: this.providerRequestBytes }
+          : {}),
+        ...(this.activeCompaction
+          ? {
+              compactionGeneration: checkpointGeneration(
+                this.activeCompaction.details,
+              ),
+            }
+          : {}),
         ...(providerWaitMs !== undefined ? { providerWaitMs } : {}),
         ...(streamMs !== undefined ? { streamMs } : {}),
         ...(this.providerResponseStatus !== undefined &&
@@ -5103,6 +5716,31 @@ Delegation rules:
           : {}),
       },
     };
+  }
+
+  /**
+   * Rebuild the shared provider transport once the same origin has failed
+   * repeatedly without ever answering (issue #234).
+   *
+   * A rejection that produced no response is the only transport event that says
+   * the connection itself never worked, so `createProviderTransportHealth`
+   * counts them per origin and asks for a rebuild after the second one. The
+   * rebuild swaps a dispatcher every session shares, which is safe precisely
+   * because the swap is not a teardown: undici resolves the global dispatcher per
+   * dispatch, in-flight requests keep finishing on the pool they started on, and
+   * the replaced pool is closed gracefully by its owner in `node-proxy.ts`. A
+   * process-wide throttle there bounds how often any session can spend that cost,
+   * and the capture is reported either way, so a rebuild that does not help
+   * still leaves an accurate record.
+   */
+  private recoverProviderTransport(failure: ProviderFetchFailure): void {
+    if (!this.providerTransportHealth.observeFailure(failure)) return;
+    const result = rebuildNodeNetworkTransport();
+    process.stderr.write(
+      `[agent-runtime] provider transport ${
+        result.rebuilt ? "rebuilt after" : "rebuild skipped within throttling for"
+      } a ${failure.category} failure (session=${this.sessionId} route=${result.route})\n`,
+    );
   }
 
   /**
@@ -5120,6 +5758,8 @@ Delegation rules:
     this.providerTransientRetryAttempt = 0;
     this.providerRateLimitRetryAttempt = 0;
     this.providerRetryHeaders = undefined;
+    this.providerFetchFailure = undefined;
+    this.providerTransportHealth.reset();
     this.activeProviderRetryAttempt = 0;
     this.providerRetryInProgress = false;
     this.suppressProviderRetryRunEnd = false;
@@ -5234,6 +5874,7 @@ Delegation rules:
       if (this.agent.state.systemPrompt === promptWithNudge) {
         this.agent.state.systemPrompt = promptBefore;
       }
+      this.applyPendingResumablePrompt();
       this.silentTurnRerunInProgress = false;
       this.suppressSilentTurnRunEnd = false;
     }
@@ -5342,6 +5983,7 @@ Delegation rules:
       if (this.agent.state.systemPrompt === promptWithNudge) {
         this.agent.state.systemPrompt = promptBefore;
       }
+      this.applyPendingResumablePrompt();
       this.progressTurnRerunInProgress = false;
       this.suppressProgressTurnRunEnd = false;
     }
@@ -5402,7 +6044,7 @@ Delegation rules:
   private automaticCompactionNeeded(
     additionalMessages: AgentMessage[] = [],
   ): boolean {
-    const context = buildSessionContext(this.entriesWithCompaction());
+    const context = this.liveSessionContext();
     const messages = [...context.messages, ...additionalMessages];
     const budget = this.contextBudget(messages);
     return this.compactionEnabled && budget.tokens >= budget.hardLimit;
@@ -5520,7 +6162,7 @@ Delegation rules:
   }
 
   private rebuiltAgentContext(): AgentContext {
-    const messages = buildSessionContext(this.entriesWithCompaction()).messages;
+    const messages = this.liveSessionContext().messages;
     const tools = this.activeTools();
     this.agent.state.messages = messages;
     this.agent.state.tools = tools;
@@ -5711,6 +6353,50 @@ Delegation rules:
     });
   }
 
+
+  private reasoningReplayIdentity(): ReasoningReplayIdentity {
+    const requiresCompletionsReasoningReplay =
+      this.model.api === "openai-completions" &&
+      (
+        this.model.compat as
+          | { requiresReasoningContentOnAssistantMessages?: boolean }
+          | undefined
+      )?.requiresReasoningContentOnAssistantMessages === true;
+    return {
+      api: this.model.api,
+      provider: this.model.provider,
+      model: this.model.id,
+      requiresCompletionsReasoningReplay,
+    };
+  }
+
+  private liveSessionContext(
+    checkpoint: ContextCompactionRecord | undefined = this.activeCompaction,
+  ): { messages: AgentMessage[] } {
+    return buildSessionContext(
+      this.entriesWithCompaction(checkpoint),
+      this.reasoningReplayIdentity(),
+    );
+  }
+
+  /**
+   * When the bound model requires DeepSeek-style reasoning replay, keep the
+   * last few thinking turns inside opaque checkpoint details so post-compaction
+   * context can echo real reasoning without restoring tool-call pairs (#296).
+   */
+  private retainedReasoningForCheckpoint(preparation: ShapedPreparation): {
+    retainedReasoning?: ReturnType<typeof harvestRetainedReasoning>;
+  } {
+    const compat = this.model.compat as
+      | { requiresReasoningContentOnAssistantMessages?: boolean }
+      | undefined;
+    if (!compat?.requiresReasoningContentOnAssistantMessages) return {};
+    const retainedReasoning = harvestRetainedReasoning(
+      preparation.messagesToSummarize,
+    );
+    return retainedReasoning.length > 0 ? { retainedReasoning } : {};
+  }
+
   private checkpointDetails(preparation: ShapedPreparation) {
     return {
       readFiles: [...preparation.fileOps.read].sort(),
@@ -5815,6 +6501,7 @@ Delegation rules:
         fallback: "retained_tail" satisfies ContextCompactionFallback,
         failureCode: "CONTEXT_COMPACTION_FAILED",
         retainedTailMode: retentionMode,
+        ...this.retainedReasoningForCheckpoint(preparation),
       },
     );
   }
@@ -5880,7 +6567,7 @@ Delegation rules:
     fallback?: ContextCompactionFallback,
   ): Promise<CheckpointPersistResult> {
     const compactedBudget = this.contextBudget(
-      buildSessionContext(this.entriesWithCompaction(checkpoint)).messages,
+      this.liveSessionContext(checkpoint).messages,
     );
     if (
       mustFitSafeBudget &&
@@ -5904,9 +6591,7 @@ Delegation rules:
     // resetting its `claim_*` flags when the context window turns over.
     this.contextReminderClaimed = false;
     this.contextFallbackReminderClaimed = false;
-    this.agent.state.messages = buildSessionContext(
-      this.entriesWithCompaction(),
-    ).messages;
+    this.agent.state.messages = this.liveSessionContext().messages;
     this.emit({
       type: "compaction_end",
       reason,
@@ -6030,7 +6715,10 @@ Delegation rules:
   ): Promise<Awaited<ReturnType<typeof compact>>> {
     return compact(
       preparation,
-      this.models,
+      // The summary is a provider request like any other turn, but
+      // pi-agent-core builds its options itself and never reaches `streamFn`,
+      // so the headers have to ride on the collection.
+      withCompactionRequestHeaders(this.models, this.provider, this.sessionId),
       this.model,
       undefined,
       this.thinkingLevel,
@@ -6051,7 +6739,7 @@ Delegation rules:
     retentionMode: CompactionRetentionMode,
   ): Promise<CheckpointBuild> {
     const entries = this.entriesWithCompaction();
-    const context = buildSessionContext(entries);
+    const context = buildSessionContext(entries, this.reasoningReplayIdentity());
     const budget = this.contextBudget(context.messages);
     const preparation = this.prepareCompactionInput(
       entries,
@@ -6139,6 +6827,7 @@ Delegation rules:
           ...(isRecord(result.value.details) ? result.value.details : {}),
           strategy: "summary" satisfies CompactionStrategy,
           retainedTailMode: retentionMode,
+          ...this.retainedReasoningForCheckpoint(preparation.value),
         },
       ),
     };
@@ -6852,9 +7541,7 @@ Delegation rules:
     const userMessageId = this.pendingUserMessageId || randomUUID();
     this.pendingUserMessageId = undefined;
     this.appendLiveEntry(userMessageId, incomingUserMessage);
-    this.agent.state.messages = buildSessionContext(
-      this.entriesWithCompaction(),
-    ).messages;
+    this.agent.state.messages = this.liveSessionContext().messages;
   }
 
   private failBeforeProviderRequest(
@@ -6946,9 +7633,7 @@ Delegation rules:
       timestamp: Date.now(),
     };
     this.appendLiveEntry(internalId, internalMessage);
-    this.agent.state.messages = buildSessionContext(
-      this.entriesWithCompaction(),
-    ).messages;
+    this.agent.state.messages = this.liveSessionContext().messages;
     this.setAgentActivity({ phase: "starting", since: Date.now() });
     await this.agent.continue();
     await this.waitForIdleAndSteering();
@@ -7266,6 +7951,8 @@ Delegation rules:
     this.mutationRecoveryGraces.clear();
     this.pendingMutationTermination = undefined;
     this.terminatingToolCalls.clear();
+    this.delegateToolCalls.clear();
+    this.appendedDelegationRowIds.clear();
     this.gracefulStopRequested = false;
     this.hostCloseUnsubscribe?.();
     this.hostCloseUnsubscribe = undefined;

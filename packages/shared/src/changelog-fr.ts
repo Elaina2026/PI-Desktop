@@ -2,6 +2,41 @@ import type { ChangelogEntry } from "./changelog.js";
 
 export const frEntries: ChangelogEntry[] = [
   {
+    "version": "0.15.0",
+    "date": "2026-09-17",
+    "highlights": [
+      "Réordonnez, modifiez, verrouillez et promouvez les prompts en file pour qu'un message plus tardif parte ensuite.",
+      "Clonez un dépôt git depuis la boîte de dialogue de création de projet.",
+      "Faites glisser la largeur du contenu de conversation dans la colonne de chat.",
+      "Les échecs d'installation du marché des skills affichent un nouvel essai au lieu d'un bouton mort.",
+      "Les fournisseurs déclarés par un plugin apparaissent comme des lignes natives, avec clés API et agents personnalisés de confiance.",
+      "Les plugins peuvent demander des connexions temps réel, des raccourcis globaux, des permissions de capacité, et un canal officiel avec sauvegardes.",
+      "Les plugins peuvent enregistrer des variables de thème, des ressources de thème et un widget flottant transparent.",
+      "Supprime un projet avec les sessions qui lui appartiennent, après une seconde confirmation.",
+      "Les sous-agents disposent d'une liste ordonnée de modèles de repli ; un sous-agent terminé reprend depuis la même carte Task ; les builtins se basculent dans les Réglages.",
+      "Les références de fichiers des lignes d'outils ouvrent la vue ; déplier conserve la lecture ; le survol Plan est une plaque opaque.",
+    ],
+  },
+
+  {
+    "version": "0.14.9",
+    "date": "2026-09-17",
+    "highlights": [
+      "Réordonnez, modifiez, verrouillez et promouvez les prompts en file pour qu'un message plus tardif parte ensuite.",
+      "Clonez un dépôt git depuis la boîte de dialogue de création de projet.",
+      "Faites glisser la largeur du contenu de conversation dans la colonne de chat.",
+      "Les échecs d'installation du marché des skills affichent un nouvel essai au lieu d'un bouton mort.",
+      "Les fournisseurs déclarés par un plugin apparaissent comme des lignes natives, avec clés API et agents personnalisés de confiance.",
+      "Les plugins peuvent demander des connexions temps réel, des raccourcis globaux, des permissions de capacité, et un canal officiel avec sauvegardes.",
+      "Les plugins peuvent enregistrer des variables de thème, des ressources de thème et un widget flottant transparent.",
+      "Supprime un projet avec les sessions qui lui appartiennent, après une seconde confirmation.",
+      "Les sous-agents disposent d'une liste ordonnée de modèles de repli ; les builtins livrés se basculent dans les Réglages.",
+      "Les références de fichiers des lignes d'outils ouvrent la vue ; déplier conserve la lecture ; le survol Plan est une plaque opaque.",
+    ],
+  },
+
+
+  {
     "version": "0.14.8",
     "date": "2026-09-14",
     "highlights": [

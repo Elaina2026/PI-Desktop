@@ -116,6 +116,60 @@ pub(crate) fn validate_contributions(root: &Path, manifest: &PluginManifest) -> 
         }
     }
 
+    if let Some(shortcuts) = map.get("globalShortcuts") {
+        let entries = array_of(shortcuts, "contributes.globalShortcuts")?;
+        if entries.len() > 8 {
+            bail!("PLUGIN_INVALID: contributes.globalShortcuts allows at most 8 entries");
+        }
+        // The gate is the permission, not the contribution: a declared shortcut
+        // without `keyboard.globalShortcut` would otherwise register silently.
+        if !entries.is_empty() {
+            require_permission(manifest, "keyboard.globalShortcut", "global shortcuts")?;
+        }
+        let command_ids: Vec<&str> = map
+            .get("commands")
+            .and_then(Value::as_array)
+            .map(|commands| {
+                commands
+                    .iter()
+                    .filter_map(|command| command.get("id").and_then(Value::as_str))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut seen: Vec<&str> = Vec::new();
+        for entry in entries {
+            let obj = entry.as_object().ok_or_else(|| {
+                anyhow!("PLUGIN_INVALID: contributes.globalShortcuts entry must be an object")
+            })?;
+            let id = obj
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| is_shortcut_id(id))
+                .ok_or_else(|| {
+                    anyhow!("PLUGIN_INVALID: global shortcut id is missing or invalid")
+                })?;
+            if seen.contains(&id) {
+                bail!("PLUGIN_INVALID: duplicate global shortcut id {id}");
+            }
+            seen.push(id);
+            let command = obj
+                .get("command")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|command| !command.is_empty())
+                .ok_or_else(|| {
+                    anyhow!("PLUGIN_INVALID: global shortcut {id} requires a command")
+                })?;
+            if !command_ids.contains(&command) {
+                bail!("PLUGIN_INVALID: global shortcut {id} references an undeclared command");
+            }
+            if let Some(default) = obj.get("default") {
+                if !is_shortcut_shape(default) {
+                    bail!("PLUGIN_INVALID: global shortcut {id} has an invalid default");
+                }
+            }
+        }
+    }
     if let Some(skills) = map.get("skills") {
         let entries = array_of(skills, "contributes.skills")?;
         for entry in entries {
@@ -161,6 +215,99 @@ pub(crate) fn validate_contributions(root: &Path, manifest: &PluginManifest) -> 
         }
     }
 
+    if let Some(providers) = map.get("providers") {
+        let entries = array_of(providers, "contributes.providers")?;
+        if entries.len() > MAX_PLUGIN_PROVIDERS {
+            bail!(
+                "PLUGIN_INVALID: contributes.providers allows at most {MAX_PLUGIN_PROVIDERS} entries"
+            );
+        }
+        if !entries.is_empty() {
+            require_permission(manifest, "provider.register", "contributes.providers")?;
+        }
+        let mut seen: Vec<&str> = Vec::new();
+        for entry in entries {
+            let obj = entry.as_object().ok_or_else(|| {
+                anyhow!("PLUGIN_INVALID: contributes.providers entry must be an object")
+            })?;
+            let id = obj
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| is_contrib_id(id))
+                .ok_or_else(|| {
+                    anyhow!("PLUGIN_INVALID: provider declaration id is missing or invalid")
+                })?;
+            if seen.contains(&id) {
+                bail!("PLUGIN_INVALID: duplicate provider declaration id {id}");
+            }
+            seen.push(id);
+            if obj
+                .get("name")
+                .and_then(Value::as_str)
+                .map(|name| name.trim().is_empty())
+                .unwrap_or(true)
+            {
+                bail!("PLUGIN_INVALID: provider {id} requires a name");
+            }
+            if let Some(style) = obj.get("apiStyle") {
+                let style = style.as_str().ok_or_else(|| {
+                    anyhow!("PLUGIN_INVALID: provider {id} apiStyle must be a string")
+                })?;
+                if !is_known_api_style(style) {
+                    bail!("PLUGIN_INVALID: provider {id} has unsupported apiStyle {style}");
+                }
+            }
+            // `oauth` declarations arrive with the Host-owned plugin login
+            // flow. Until it exists, a manifest that asks for one is refused
+            // rather than turned into a row nobody can sign in to.
+            if obj.get("oauth").is_some() {
+                bail!(
+                    "PLUGIN_INVALID: provider {id} declares oauth; plugin OAuth providers are not supported in this release"
+                );
+            }
+            let auth_kind = obj
+                .get("authKind")
+                .and_then(Value::as_str)
+                .unwrap_or("api_key");
+            if !is_known_auth_kind(auth_kind) {
+                bail!("PLUGIN_INVALID: provider {id} has unsupported authKind {auth_kind}");
+            }
+            if let Some(base_url) = obj.get("baseUrl").and_then(Value::as_str) {
+                // The runtime reaches this endpoint, so a declaration may only
+                // name an absolute http(s) URL.
+                if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
+                    bail!("PLUGIN_INVALID: provider {id} baseUrl must be an http(s) URL");
+                }
+            }
+            let models = match obj.get("models") {
+                Some(value) => array_of(value, "contributes.providers.models")?,
+                None => bail!("PLUGIN_INVALID: provider {id} requires models"),
+            };
+            if models.is_empty() || models.len() > MAX_PLUGIN_PROVIDER_MODELS {
+                bail!(
+                    "PLUGIN_INVALID: provider {id} declares 1 to {MAX_PLUGIN_PROVIDER_MODELS} models"
+                );
+            }
+            let mut seen_models: Vec<&str> = Vec::new();
+            for model in models {
+                let model = model.as_object().ok_or_else(|| {
+                    anyhow!("PLUGIN_INVALID: provider {id} model entries must be objects")
+                })?;
+                let model_id = model
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty() && value.len() <= 256)
+                    .ok_or_else(|| {
+                        anyhow!("PLUGIN_INVALID: provider {id} has a model without a valid id")
+                    })?;
+                if seen_models.contains(&model_id) {
+                    bail!("PLUGIN_INVALID: provider {id} declares model {model_id} twice");
+                }
+                seen_models.push(model_id);
+            }
+        }
+    }
     if let Some(themes) = map.get("themes") {
         let entries = array_of(themes, "contributes.themes")?;
         if !entries.is_empty() {
@@ -213,21 +360,15 @@ pub(crate) fn validate_contributions(root: &Path, manifest: &PluginManifest) -> 
                     })?;
                     let normalized = normalize_theme_asset_path(raw).ok_or_else(|| {
                         anyhow!(
-                            "PLUGIN_INVALID: theme {id} asset {raw} must be a relative image or font path"
+                            "PLUGIN_INVALID: theme {id} asset {raw} must be an absolute image or font path"
                         )
                     })?;
                     if seen_assets.contains(&normalized) {
                         bail!("PLUGIN_INVALID: theme {id} declares asset {raw} twice");
                     }
-                    if normalized
-                        .split('/')
-                        .any(|segment| segment == "node_modules")
-                    {
-                        bail!(
-                            "PLUGIN_INVALID: theme {id} asset {raw} may not come from a dependency directory"
-                        );
-                    }
-                    let resolved = safe_join(root, &normalized)?;
+                    // A theme asset is an absolute path: the plugin names the file and the
+                    // host serves it, so there is nothing to resolve against the package root.
+                    let resolved = std::path::Path::new(&normalized);
                     let metadata = resolved
                         .metadata()
                         .map_err(|_| anyhow!("PLUGIN_INVALID: theme {id} asset missing: {raw}"))?;
@@ -540,17 +681,31 @@ const THEME_ASSET_EXTENSIONS: [&str; 7] = ["png", "jpg", "jpeg", "webp", "avif",
 /// Declared assets of one theme, summed.
 const THEME_ASSET_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
-/// Mirrors `normalizeThemeAssetPath` in the plugin SDK: a package-relative,
-/// forward-slash path on the extension whitelist, or `None`.
+/// Mirrors `normalizeThemeAssetPath` in the plugin SDK: a forward-slash
+/// **absolute** path on the extension whitelist, or `None`.
+///
+/// A theme asset always names a file by absolute path (`C:/art/bg.png`,
+/// `/art/bg.png`, or either spelled as a `file:` URL). Relative references are
+/// rejected: the host serves theme bytes straight from the filesystem.
 fn normalize_theme_asset_path(value: &str) -> Option<String> {
-    let trimmed = value.trim().replace('\\', "/");
-    let path = trimmed.strip_prefix("./").unwrap_or(&trimmed).to_string();
-    if path.is_empty() || path.starts_with('/') || path.contains(':') {
+    let raw = value.trim();
+    let without_scheme = match raw.strip_prefix("file://") {
+        Some(rest) => rest,
+        None => raw.strip_prefix("file:").unwrap_or(raw),
+    };
+    let normalized = without_scheme.replace('\\', "/");
+    // `file:///C:/art/bg.png` and `file:///art/bg.png` both lose the extra slash
+    // the authority marker leaves behind; a drive letter is written without it.
+    let path = match normalized.strip_prefix('/') {
+        Some(rest) if is_windows_drive_path(rest) => rest.to_string(),
+        _ => normalized,
+    };
+    if !is_absolute_theme_asset_path(&path) {
         return None;
     }
     if path
         .split('/')
-        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+        .any(|segment| segment == "." || segment == "..")
     {
         return None;
     }
@@ -559,6 +714,17 @@ fn normalize_theme_asset_path(value: &str) -> Option<String> {
         return None;
     }
     Some(path)
+}
+
+/// `C:/…` — a Windows drive path after forward-slash normalization.
+fn is_windows_drive_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
+}
+
+/// A POSIX absolute path or a Windows drive path.
+fn is_absolute_theme_asset_path(value: &str) -> bool {
+    value.starts_with('/') || is_windows_drive_path(value)
 }
 
 /// Mirrors `WINDOW_BACKGROUND_COLOR_PATTERN` in the plugin SDK.
@@ -582,6 +748,20 @@ fn is_contrib_id(value: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+/// Grammar shared with `contributes.globalShortcuts[].id` in the plugin SDK.
+/// Dots are allowed here (unlike `is_contrib_id`): a shortcut id names a
+/// namespace inside the plugin, e.g. `voice.pushToTalk`.
+fn is_shortcut_id(value: &str) -> bool {
+    if value.is_empty() || value.len() > 64 {
+        return false;
+    }
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
 }
 
 /// Shares the topic grammar with `matchesBusTopic` in the plugin SDK.

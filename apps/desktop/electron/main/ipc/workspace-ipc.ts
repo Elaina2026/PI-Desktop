@@ -11,6 +11,9 @@ import {
   OAUTH_AUTH_KIND,
   type ComposerCommand,
   type ComposerPasteFile,
+  type FsChatRefProjectRoot,
+  type FsChatRefResolveResult,
+  type ProjectGroupRecord,
 } from "@pi-desktop/shared";
 import {
   loadComposerTemplates,
@@ -45,7 +48,14 @@ import {
   resolveOpenablePath,
   resolveRealOpenablePath,
 } from "../fs-panel";
+import { resolveChatFileRef } from "../chat-ref-resolve";
 import { getWorkspaceFileIndex } from "../fs-index";
+import {
+  projectFolderPaths,
+  refreshProjectGroups,
+  rememberProjectGroups,
+  workspaceRootsFor,
+} from "../workspace-roots";
 import { BROWSER_PLUGIN_ID, type BrowserHost } from "../browser-host";
 import type { AgentSidecar } from "../agent-sidecar";
 import type { HostProcess } from "../host-process";
@@ -193,6 +203,141 @@ export function registerWorkspaceIpc({
     if (!host) throw new Error("host unavailable");
     return host.call("projects.list");
   });
+  handle(IPC.invoke.projectGroupList, async () => {
+    if (!host) throw new Error("host unavailable");
+    const result = (await host.call("project.groups.list")) as {
+      groups?: ProjectGroupRecord[];
+    };
+    // Main answers the plugin-facing workspace payload from this snapshot, so
+    // the one authoritative list call is what keeps it warm.
+    rememberProjectGroups(result?.groups ?? null);
+    return result;
+  });
+  handle(
+    IPC.invoke.projectGroupCreate,
+    async (input: { name?: unknown; folders?: unknown } = {}) => {
+      if (!host) throw new Error("host unavailable");
+      const name = typeof input.name === "string" ? input.name.trim() : "";
+      const folders = Array.isArray(input.folders)
+        ? input.folders.filter((path): path is string => typeof path === "string")
+        : [];
+      if (!name || folders.length === 0) {
+        throw Object.assign(new Error("project group name and folders required"), {
+          errorCode: ErrorCodes.INVALID_ARGUMENT,
+        });
+      }
+      const safeFolders = [
+        ...new Set(
+          folders
+            .map((path) => path.trim())
+            .filter((path) => path.length > 0)
+            .map((path) => resolve(path)),
+        ),
+      ];
+      if (safeFolders.some((path) => !existsSync(path) || !statSync(path).isDirectory())) {
+        throw Object.assign(new Error("project group folders must be directories"), {
+          errorCode: ErrorCodes.INVALID_ARGUMENT,
+        });
+      }
+      const created = await host.call("project.group.create", {
+        name,
+        folders: safeFolders,
+      });
+      void refreshProjectGroups(host);
+      return created;
+    },
+  );
+  handle(
+    IPC.invoke.projectGroupUpdate,
+    async (input: { groupId?: unknown; name?: unknown; folders?: unknown } = {}) => {
+      if (!host) throw new Error("host unavailable");
+      const groupId = typeof input.groupId === "string" ? input.groupId.trim() : "";
+      const name = typeof input.name === "string" ? input.name.trim() : "";
+      const folders = Array.isArray(input.folders)
+        ? input.folders.filter((path): path is string => typeof path === "string")
+        : [];
+      if (!groupId || !name || folders.length === 0) {
+        throw Object.assign(new Error("project group id, name and folders required"), {
+          errorCode: ErrorCodes.INVALID_ARGUMENT,
+        });
+      }
+      const safeFolders = [
+        ...new Set(
+          folders
+            .map((path) => path.trim())
+            .filter((path) => path.length > 0)
+            .map((path) => resolve(path)),
+        ),
+      ];
+      if (safeFolders.some((path) => !existsSync(path) || !statSync(path).isDirectory())) {
+        throw Object.assign(new Error("project group folders must be directories"), {
+          errorCode: ErrorCodes.INVALID_ARGUMENT,
+        });
+      }
+      const updated = await host.call("project.group.update", {
+        groupId,
+        name,
+        folders: safeFolders,
+      });
+      void refreshProjectGroups(host);
+      return updated;
+    },
+  );
+  handle(
+    IPC.invoke.projectGroupRename,
+    async (input: { groupId?: unknown; name?: unknown } = {}) => {
+      if (!host) throw new Error("host unavailable");
+      const groupId = typeof input.groupId === "string" ? input.groupId.trim() : "";
+      const name = typeof input.name === "string" ? input.name.trim() : "";
+      if (!groupId || !name) {
+        throw Object.assign(new Error("project group id and name required"), {
+          errorCode: ErrorCodes.INVALID_ARGUMENT,
+        });
+      }
+      const renamed = await host.call("project.group.rename", { groupId, name });
+      void refreshProjectGroups(host);
+      return renamed;
+    },
+  );
+  handle(IPC.invoke.projectGroupMemoryGet, async (input: { groupId?: unknown } = {}) => {
+    if (!host) throw new Error("host unavailable");
+    const groupId = typeof input.groupId === "string" ? input.groupId.trim() : "";
+    if (!groupId) throw new Error("project group id required");
+    return host.call("project.group.memory.get", { groupId });
+  });
+  handle(
+    IPC.invoke.projectGroupMemorySave,
+    async (input: { groupId?: unknown; entries?: unknown } = {}) => {
+      if (!host) throw new Error("host unavailable");
+      const groupId = typeof input.groupId === "string" ? input.groupId.trim() : "";
+      if (!groupId || !Array.isArray(input.entries)) {
+        throw new Error("project group id and entries required");
+      }
+      return host.call("project.group.memory.set", {
+        groupId,
+        entries: input.entries,
+      });
+    },
+  );
+  handle(
+    IPC.invoke.projectGroupInstructionsGet,
+    async (input: { groupId?: unknown } = {}) => {
+      if (!host) throw new Error("host unavailable");
+      const groupId = typeof input.groupId === "string" ? input.groupId.trim() : "";
+      if (!groupId) throw new Error("project group id required");
+      return host.call("project.group.instructions.get", { groupId });
+    },
+  );
+  handle(
+    IPC.invoke.projectGroupInstructionsSave,
+    async (input: { groupId?: unknown; content?: unknown } = {}) => {
+      if (!host) throw new Error("host unavailable");
+      const groupId = typeof input.groupId === "string" ? input.groupId.trim() : "";
+      const content = typeof input.content === "string" ? input.content : "";
+      if (!groupId) throw new Error("project group id required");
+      return host.call("project.group.instructions.set", { groupId, content });
+    },
+  );
   handle(IPC.invoke.projectOpenFolder, async (path: string) => {
     if (!host) throw new Error("host unavailable");
     const requestedPath = String(path ?? "").trim();
@@ -269,6 +414,28 @@ export function registerWorkspaceIpc({
     });
     return { workspace, canceled: false };
   });
+
+  handle(
+    IPC.invoke.projectCloneCheckout,
+    async (input: { url?: unknown; parentPath?: unknown } = {}) => {
+      const url = typeof input.url === "string" ? input.url.trim() : "";
+      const parentPath =
+        typeof input.parentPath === "string" ? input.parentPath.trim() : "";
+      if (!url || !parentPath) {
+        throw Object.assign(
+          new Error("repository URL and parent folder required"),
+          { errorCode: ErrorCodes.INVALID_ARGUMENT },
+        );
+      }
+      // Clone only. The renderer still creates the logical project group, so
+      // the active host workspace stays untouched until activation.
+      const dest = await cloneGitRepository({ url, parentPath });
+      return {
+        path: dest,
+        name: dest.split(/[\\/]/).filter(Boolean).at(-1) || dest,
+      };
+    },
+  );
   handle(IPC.invoke.projectSet, async (path: string) => {
     if (!host) throw new Error("host unavailable");
     setCurrentWorkspacePath(path);
@@ -281,6 +448,33 @@ export function registerWorkspaceIpc({
     setCurrentWorkspacePath(null);
     if (!host) throw new Error("host unavailable");
     return host.call("workspace.clear");
+  });
+  handle(IPC.invoke.projectRemove, async (input: { path?: unknown } = {}) => {
+    const requestedPath =
+      typeof input.path === "string" ? input.path.trim() : "";
+    if (!requestedPath) {
+      throw Object.assign(new Error("project path required"), {
+        errorCode: ErrorCodes.INVALID_ARGUMENT,
+      });
+    }
+    if (!host) throw new Error("host unavailable");
+    // Deletion only touches host records, so a project whose folder was moved
+    // or deleted on disk stays deletable: deliberately no existence check.
+    const projectPath = resolve(requestedPath);
+    const result = (await host.call("projects.remove", {
+      path: projectPath,
+    })) as { removed?: boolean; sessionsRemoved?: number };
+    const removed = Boolean(result?.removed);
+    const workspacePath = currentWorkspacePath();
+    if (removed && workspacePath && resolve(workspacePath) === projectPath) {
+      // Leaving the host bound to a deleted project would re-create it on boot.
+      setCurrentWorkspacePath(null);
+      await host.call("workspace.clear");
+    }
+    return {
+      removed,
+      sessionsRemoved: Number(result?.sessionsRemoved ?? 0),
+    };
   });
 
   const mirrorProjectMemoryToDisk = async (
@@ -799,7 +993,14 @@ export function registerWorkspaceIpc({
     return { entries: await listDir(root, String(input.path ?? "")) };
   });
 
-  const fsExtraRoots = () => [
+  /**
+   * Roots the host file tab may read besides the workspace: the session stores,
+   * plus every *other* folder of the project group. ADR 0249 §5 makes a
+   * registered group root a valid containment base, so a chat reference that
+   * resolves in a sibling folder still opens instead of failing containment —
+   * which is what a user without the file view would otherwise see.
+   */
+  const fsExtraRoots = async (workspaceRoot: string | null): Promise<string[]> => [
     join(dataDir, "scratch"),
     join(dataDir, "attachments"),
     join(dataDir, "plans"),
@@ -814,7 +1015,45 @@ export function registerWorkspaceIpc({
       join(currentWorkspacePath()!, ".pi"),
       join(currentWorkspacePath()!, ".pi-desktop", "plans")
     ] : []),
+    ...projectFolderPaths(workspaceRoot).filter((path) => path !== workspaceRoot),
   ];
+
+  /**
+   * The session's own scratch directory (ADR 0124), or null when the session
+   * is not known. host-core owns that layout, so it is asked rather than
+   * re-derived here.
+   */
+  const sessionScratchRoot = async (
+    sessionId: string | undefined,
+  ): Promise<string | null> => {
+    const id = String(sessionId ?? "").trim();
+    if (!id || !host) return null;
+    try {
+      const result = await host.call<{ path: string }>("session.getScratchPath", {
+        sessionId: id,
+      });
+      const path = String(result?.path ?? "").trim();
+      return path || null;
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * The open project as a whole, for completion and containment: its group's
+   * folders primary-first, or just the workspace when no group resolves. A
+   * single-folder project is a one-element list, so callers never special-case.
+   */
+  const projectRootsFor = (
+    workspaceRoot: string | null,
+  ): FsChatRefProjectRoot[] => {
+    const { roots } = workspaceRootsFor(workspaceRoot);
+    if (roots && roots.length > 0) return roots;
+    if (!workspaceRoot) return [];
+    const name =
+      workspaceRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? workspaceRoot;
+    return [{ path: workspaceRoot, name, primary: true }];
+  };
 
   const optionalWorkspaceRoot = async (): Promise<string | null> => {
     try {
@@ -839,7 +1078,7 @@ export function registerWorkspaceIpc({
       return readOpenableFile(
         requested,
         workspaceRoot,
-        fsExtraRoots(),
+        await fsExtraRoots(workspaceRoot),
         input.mimeType,
       );
     },
@@ -848,11 +1087,12 @@ export function registerWorkspaceIpc({
   handle(
     IPC.invoke.fsReadImageDataUrl,
     async (input: { ref?: string; mimeType?: string } = {}) => {
+      const workspaceRoot = await optionalWorkspaceRoot();
       const requested = String(input.ref ?? "").trim();
       return readOpenableImage(
         requested,
-        await optionalWorkspaceRoot(),
-        fsExtraRoots(),
+        workspaceRoot,
+        await fsExtraRoots(workspaceRoot),
         input.mimeType,
       );
     },
@@ -871,7 +1111,7 @@ export function registerWorkspaceIpc({
     const target = await resolveRealOpenablePath(
       requested,
       workspaceRoot,
-      fsExtraRoots(),
+      await fsExtraRoots(workspaceRoot),
     );
     if (!target) {
       throw Object.assign(new Error("path outside allowed roots"), {
@@ -884,7 +1124,11 @@ export function registerWorkspaceIpc({
 
   handle(IPC.invoke.fsOpen, async (input: { path?: string } = {}) => {
     const workspaceRoot = await optionalWorkspaceRoot();
-    const target = resolveOpenablePath(String(input.path ?? ""), workspaceRoot, fsExtraRoots());
+    const target = resolveOpenablePath(
+      String(input.path ?? ""),
+      workspaceRoot,
+      await fsExtraRoots(workspaceRoot),
+    );
     if (!target) {
       throw Object.assign(new Error("path is not openable"), {
         errorCode: ErrorCodes.INVALID_ARGUMENT,
@@ -900,5 +1144,31 @@ export function registerWorkspaceIpc({
     if (!root) return { entries: [], truncated: false };
     return getWorkspaceFileIndex(root);
   });
+
+  /**
+   * Resolve a file reference from chat to a real file (D320 follow-up).
+   * The renderer knows the workspace but not where a session keeps its scratch
+   * files, and completion needs a filesystem walk, so every root is resolved
+   * here. Root order is the product contract inside `resolveChatFileRef`: the
+   * whole project first — its group's folders, primary first — session scratch
+   * second, attachments last.
+   */
+  handle(
+    IPC.invoke.fsResolveRef,
+    async (
+      input: { ref?: string; sessionId?: string } = {},
+    ): Promise<FsChatRefResolveResult> => {
+      const ref = String(input.ref ?? "").trim();
+      if (!ref) return { match: null };
+      const workspaceRoot = await optionalWorkspaceRoot();
+      return {
+        match: await resolveChatFileRef(ref, {
+          project: projectRootsFor(workspaceRoot),
+          scratch: await sessionScratchRoot(input.sessionId),
+          attachments: join(dataDir, "attachments"),
+        }),
+      };
+    },
+  );
 
 }

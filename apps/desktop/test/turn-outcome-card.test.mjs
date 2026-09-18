@@ -45,7 +45,11 @@ test("outcome card exposes one localized continuation action", () => {
   assert.doesNotMatch(outcome, /focusComposer/);
   assert.doesNotMatch(outcome, /t\("chat\.retry"\)/);
   assert.doesNotMatch(outcome, /toolWorkPanelTab/);
-  assert.match(sendPrompt, /await api\.prompt\(\{[\s\S]*?sessionId,[\s\S]*?content,/);
+  assert.match(
+    sendPrompt,
+    // The send ships the submitted content through the prompt call.
+    /await api\.prompt\(\{[\s\S]*?sessionId,[\s\S]*?content,/,
+  );
   assert.match(sendPrompt, /latestTurnResults: withoutRecordKey/);
   assert.doesNotMatch(sendPrompt, /truncateFromMessageId/);
   assert.match(styles, /\.turn-outcome-card\s*\{/);

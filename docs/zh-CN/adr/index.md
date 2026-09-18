@@ -59,6 +59,7 @@ ADR 记录那些不应被静默改变的架构选择。中文入口与英文索�
 | [ADR 0201：显式插件项目 id 与宿主拥有的会话刷新](/adr/0201-plugin-project-ids-and-session-refresh) | 插件可显式绑定主机项目，成功写入由主机通知渲染器刷新 |
 | [ADR 0204：未签名 macOS 首次启动助手](/adr/0204-unsigned-macos-first-launch-helper) | 只清理 PI-Desktop 的 quarantine 属性，并用 Finder 一键启动可信的未签名应用（由 ADR 0232 修订） |
 | [ADR 0232：macOS DMG 只保留打开说明](/adr/0232-macos-dmg-text-only-opening-guidance) | DMG 只显示“如果打不开请看”说明，ZIP 保留首次启动助手 |
+| [ADR 0252：插件的宿主回合结束事件](/adr/0252-plugin-host-turn-end-event) | 宿主在每次已开始的回合结束时向插件宣告一次 `session:turnEnded`，携带回合身份与终止原因 |
 
 ## 完整索引
 
@@ -275,7 +276,19 @@ ADR 记录那些不应被静默改变的架构选择。中文入口与英文索�
 | 0242 | [仅增量且合并的流式更新](/adr/0242-delta-only-streaming-updates) | 已接受（修订 0127 / 0130 / 0149 / 0153；issue #299） |
 | 0243 | [技能市场公网 HTTPS 目录拉取](/adr/0243-skill-market-public-https-catalog) | 已接受（修订 ADR 0009；issue #287 / PR #290） |
 | 0245 | [加固 MCP 市场公网网络边界](/adr/0245-mcp-market-public-network-boundary) | 已接受 |
+| 0262 | [聊天里的文件引用在主进程补全，并在文件视图中打开](/adr/0262-chat-file-refs-open-in-the-file-view) | 已接受（修订 ADR 0163 / ADR 0241） |
+| 0263 | [向插件视图暴露项目的文件夹根，并跨根补全引用](/adr/0263-project-folder-roots-for-plugin-views) | 已接受（修订 ADR 0262；ADR 0249 §5） |
+| 0264 | [交给宿主执行的文件动作跟随视图正在浏览的文件夹](/adr/0264-host-mediated-actions-follow-the-browsed-folder) | 已接受（修订 ADR 0263；ADR 0249 §5） |
+| global-sidebar-pins | [在侧边栏全局显示置顶会话](/adr/global-sidebar-pins) | 已接受（修订 ADR 0016；issue #306） |
 | active-turn-steering | [用 Alt+Enter 向当前回合补充指令](/adr/active-turn-steering) | 已接受 |
+| 0251 | [删除项目会一并删除其拥有的会话](/adr/0251-project-delete-with-owned-sessions) | 已接受 |
+| 0253 | [移除子智能体轮次上限](/adr/0253-remove-subagent-turn-limit) | 已接受（取代 0062 / 0063 / 0119 / 0126 / 0166 / 0210 中关于 `maxTurns` 的条款） |
+ | 0265 | [排队队列的优先区块与行内操作](/adr/0265-turn-queue-priority-block-and-row-actions) | 已接受待实现（修订 ADR 0213 / 0118） |
+ | 0267 | [插件标签跟随应用语言](/adr/0267-plugin-labels-follow-the-app-language) | 已接受（修订 ADR 0160；ADR 0182） |
+ | 0272 | [按请求实际会走的线路判定公网地址](/adr/0272-connection-time-public-network-route) | 已接受待实现（修订 ADR 0243；issue #419 / PR #473） |
+| 0276 | [官方插件渠道与备份渠道](/adr/0276-official-plugin-channel-and-backup-channels) | 已接受待实现（修订 ADR 0102；D442） |
+| 0278 | [规范应用 ID `net.aiuo.pi-desktop`](/adr/0278-canonical-application-id) | 已接受（D443；修订 D141 / D371 / ADR 0204；issue #524） |
+| 0279 | [可恢复的子代理委托](/adr/0279-resumable-subagent-delegations) | 已接受待实现（修订 ADR 0062；ADR 0089；issue #513） |
 
 ## 什么时候看 ADR
 

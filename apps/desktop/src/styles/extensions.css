@@ -558,9 +558,11 @@
 
 
 .scope-compact-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: auto;
+  bottom: auto;
   z-index: 30;
   display: flex;
   width: min(252px, calc(100vw - 40px));
@@ -570,12 +572,16 @@
   background: var(--ds-bg-elevated-opaque, var(--ds-bg-primary));
   box-shadow: 0 0 0 0.5px var(--ds-border-default), 0 14px 38px rgba(0, 0, 0, 0.22);
   padding: 5px;
-  animation: scope-popover-in var(--motion-duration-fast) var(--motion-ease-out) both;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
 }
 
-.scope-compact-menu.is-up {
-  top: auto;
-  bottom: calc(100% + 6px);
+.scope-compact-menu.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
+  animation: scope-popover-in var(--motion-duration-fast) var(--motion-ease-out) both;
 }
 
 .scope-compact-option {
@@ -721,9 +727,11 @@
 }
 
 .scope-popover {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 6px);
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: auto;
+  bottom: auto;
   z-index: 30;
   display: flex;
   flex-direction: column;
@@ -732,13 +740,17 @@
   border-radius: var(--radius-md-plus);
   background: var(--ds-bg-elevated-opaque, var(--ds-bg-primary));
   box-shadow: 0 0 0 0.5px var(--ds-border-default), 0 14px 38px rgba(0, 0, 0, 0.22);
-  animation: scope-popover-in var(--motion-duration-fast) var(--motion-ease-out) both;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
   overflow: hidden;
 }
 
-.scope-popover.is-up {
-  top: auto;
-  bottom: calc(100% + 6px);
+.scope-popover.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
+  animation: scope-popover-in var(--motion-duration-fast) var(--motion-ease-out) both;
 }
 
 @keyframes scope-popover-in {
@@ -1246,12 +1258,6 @@
   color: var(--ds-text-primary);
   font-size: var(--text-sm-plus);
   font-weight: var(--font-weight-medium);
-}
-
-.ext-transport-hint {
-  color: var(--ds-text-muted);
-  font-size: var(--text-2xs);
-  line-height: var(--leading-normal);
 }
 
 .ext-test-result {

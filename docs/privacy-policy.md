@@ -94,6 +94,17 @@ endpoints, GitHub release/update endpoints, provider OAuth endpoints, and
 other services required by features you enable. Those services may receive
 network metadata such as your IP address and user agent.
 
+Installing or updating a plugin through the official plugin channel also
+contacts the plugin marketplace endpoint used by that channel, the plugin
+center at `https://plugins.aiuo.net/api/v1/download/resolve`. That request
+carries a device identifier: a SHA-256 digest derived from a machine identifier
+the operating system exposes, or, when no machine identifier can be read, a
+random identifier generated once and stored in the application data directory.
+The value sent is the digest, not the machine code, and the machine code cannot
+be recovered from it. The service uses the identifier to de-duplicate and
+rate-limit a download, and it keeps counts for a device rather than the identity
+behind it. The two backup channels and a custom source do not send it.
+
 Links opened through the application are handled by the operating system or an
 external browser. Markdown written by a model may include remote images,
 audio, or video; when rendered, the relevant host may receive a request from

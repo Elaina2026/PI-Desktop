@@ -115,7 +115,7 @@ test("a long transcript mounts under the settle veil and lifts it from measured 
   assert.match(transcript, /TRANSCRIPT_SKELETON_ROWS\.map/);
   assert.match(transcript, /data-transcript-settling=\{veilCovering \? "true" : undefined\}/);
   assert.match(transcript, /\{paneVisible && !veilCovering \? \(\s*<ConversationMinimap/);
-  assert.match(transcript, /\{showJump && !veilCovering \? \(/);
+  assert.match(transcript, /\{\(showJump \|\| readingWindow\) && !veilCovering \? \(/);
   // Stylesheet: opaque cover, fade on leave, no z-index so the composer stays on
   // top, reduced motion honoured.
   const veil = shell.match(/\.transcript-settle-veil \{[\s\S]*?\n\}/)?.[0] ?? "";
@@ -134,10 +134,11 @@ test("a long transcript mounts under the settle veil and lifts it from measured 
 test("pinned follow re-pins inside the resize observer, on the border box", () => {
   // A frame requested from a ResizeObserver callback lands in the next frame,
   // so the grown content painted unpinned once. Re-pinning inside the callback
-  // (after layout, before paint) removes that frame.
+  // (after layout, before paint) removes that frame. A held disclosure
+  // position (#324) is restored ahead of it, in the same callback.
   assert.match(
     transcript,
-    /const followScrollNow = useCallback\(\(\) => \{\s*if \(!paneVisibleRef\.current \|\| !pinnedRef\.current\) return;\s*cancelFollowScroll\(\);\s*scrollToBottom\(\);/,
+    /const followScrollNow = useCallback\(\(\) => \{[\s\S]{0,400}?if \(!paneVisibleRef\.current \|\| !pinnedRef\.current\) return;\s*cancelFollowScroll\(\);\s*scrollToBottom\(\);/,
   );
   assert.match(transcript, /new ResizeObserver\(followScrollNow\)/);
   assert.doesNotMatch(transcript, /new ResizeObserver\(scheduleFollowScroll\)/);

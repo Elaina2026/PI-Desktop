@@ -6,6 +6,7 @@ import type {
 import { api } from "../../lib/api";
 import {
   rememberProject,
+  removeRecentProject,
   renameRecentProject,
   setProjectPinned,
 } from "../../lib/recent-projects";
@@ -58,6 +59,146 @@ export type ProjectSliceDependencies = StoreAccess & {
   persistCurrentSidebar: (getState: () => AppState) => void;
 };
 
+/**
+ * Create one logical project group from already-resolved folders and activate
+ * its primary root. The Create project dialog reaches this through a local
+ * folder pick and through a git checkout, so both sources share one project
+ * semantic and one activation path.
+ */
+async function createNamedProjectGroup(
+  {
+    get,
+    set,
+    runtime,
+  }: Pick<ProjectSliceDependencies, "get" | "set" | "runtime">,
+  {
+    name,
+    folders,
+    primaryPath,
+  }: { name: string; folders: string[]; primaryPath?: string },
+): Promise<void> {
+  const normalizedName = name.trim();
+  if (!normalizedName) {
+    throw new Error(i18n.t("errors.projectNameLength"));
+  }
+  const uniqueFolders = folders.filter(
+    (path, index, all) =>
+      Boolean(normalizeProjectPath(path)) &&
+      all.findIndex(
+        (candidate) => normalizeProjectPath(candidate) === normalizeProjectPath(path),
+      ) === index,
+  );
+  if (uniqueFolders.length === 0) {
+    throw new Error(i18n.t("project.createFolderRequired"));
+  }
+  const normalizedPrimary = normalizeProjectPath(primaryPath ?? uniqueFolders[0]);
+  const primary =
+    uniqueFolders.find((path) => normalizeProjectPath(path) === normalizedPrimary) ??
+    uniqueFolders[0];
+  const orderedFolders = [
+    primary,
+    ...uniqueFolders.filter(
+      (path) => normalizeProjectPath(path) !== normalizeProjectPath(primary),
+    ),
+  ];
+  const intent = runtime.beginNavigationIntent();
+  const created = await api.createProjectGroup(normalizedName, orderedFolders);
+  if (!runtime.navigationIntentIsCurrent(intent)) return;
+  const groupPrimary = created.group.primaryPath || primary;
+  const workspace = await get().activateProject(groupPrimary, {
+    navigationIntent: intent,
+  });
+  if (!workspace || !runtime.navigationIntentIsCurrent(intent)) return;
+  // Keep the existing renderer-local metadata in sync so the sidebar can
+  // render the group name immediately; the host group is authoritative on
+  // the next archive refresh and for agent context.
+  get().renameProject(groupPrimary, normalizedName);
+  const onboarding = await api.getOnboarding();
+  if (!runtime.navigationIntentIsCurrent(intent)) return;
+  set({ createProjectDialogOpen: false, onboarding, page: "chat" });
+}
+
+/**
+ * Purge renderer-local state for one session whose durable row is already gone
+ * (deleted directly, or removed together with its project). This never talks to
+ * the host: records and transcripts are deleted before it runs.
+ */
+function clearLocalSessionState(
+  {
+    get,
+    set,
+    runtime,
+    manualSessionTitles,
+    withoutRecordKey,
+  }: Pick<
+    ProjectSliceDependencies,
+    "get" | "set" | "runtime" | "manualSessionTitles" | "withoutRecordKey"
+  >,
+  id: string,
+): void {
+  manualSessionTitles.delete(id);
+  runtime.pendingSessionConfigurations.delete(id);
+  runtime.sessionTranscriptCache.delete(id);
+  runtime.sessionHistoryCache.delete(id);
+  runtime.liveSessionTranscripts.delete(id);
+  if (get().activeSessionId === id) get().resetWorkPanelContext();
+  set((state) => {
+    const sessionMeta = { ...state.sessionMeta };
+    delete sessionMeta[id];
+    const sessions = state.sessions.filter((session) => session.id !== id);
+    const runningSessions = { ...state.runningSessions };
+    delete runningSessions[id];
+    const agentStatuses = { ...state.agentStatuses };
+    delete agentStatuses[id];
+    const sessionOutcomes = { ...state.sessionOutcomes };
+    delete sessionOutcomes[id];
+    const queuedPrompts = withoutRecordKey(state.queuedPrompts, id);
+    const workPanelContexts = withoutRecordKey(state.workPanelContexts, id);
+    const pendingPermissions = clearSessionPermissions(
+      state.pendingPermissions,
+      id,
+    );
+    const pendingAsks = clearSessionAsks(state.pendingAsks, id);
+    const latestTurnResults = withoutRecordKey(state.latestTurnResults, id);
+    const planningStates = withoutRecordKey(state.planningStates, id);
+    const pendingPlans = withoutRecordKey(state.pendingPlans, id);
+    const planCheckpoints = withoutRecordKey(state.planCheckpoints, id);
+    const sessionCompactions = withoutRecordKey(state.sessionCompactions, id);
+    const sessionHistory = withoutRecordKey(state.sessionHistory, id);
+    const retainedNav = state.navStack.filter(
+      (entry) => entry.sessionId !== id,
+    );
+    const navStack =
+      retainedNav.length > 0 ? retainedNav : [{ page: "chat" as const }];
+    return {
+      ...releaseSessionPane(state, id),
+      sessionMeta,
+      sessions,
+      runningSessions,
+      agentStatuses,
+      sessionOutcomes,
+      queuedPrompts,
+      workPanelContexts,
+      activeSessionId:
+        state.activeSessionId === id ? undefined : state.activeSessionId,
+      selectingSessionId:
+        state.selectingSessionId === id ? undefined : state.selectingSessionId,
+      messages: state.activeSessionId === id ? [] : state.messages,
+      isRunning: state.activeSessionId === id ? false : state.isRunning,
+      pendingPermissions,
+      pendingAsks,
+      latestTurnResults,
+      planningStates,
+      pendingPlans,
+      planCheckpoints,
+      sessionCompactions,
+      sessionHistory,
+      navStack,
+      navIndex: Math.min(state.navIndex, navStack.length - 1),
+    };
+  });
+}
+
 export function createProjectSlice({
   get,
   set,
@@ -81,7 +222,9 @@ export function createProjectSlice({
   | "openProject"
   | "closeProjectDialog"
   | "createProjectFromFolders"
+  | "createProjectFromGit"
   | "clearProject"
+  | "deleteProject"
   | "toggleSessionPinned"
   | "toggleSessionArchived"
   | "archiveSession"
@@ -234,46 +377,19 @@ export function createProjectSlice({
     closeProjectDialog: () => {
       set({ createProjectDialogOpen: false });
     },
-    createProjectFromFolders: async ({ name, folders, primaryPath }) => {
-      const normalizedName = name.trim();
-      if (!normalizedName) {
-        throw new Error(i18n.t("errors.projectNameLength"));
-      }
-      const uniqueFolders = folders.filter(
-        (path, index, all) =>
-          Boolean(normalizeProjectPath(path)) &&
-          all.findIndex(
-            (candidate) => normalizeProjectPath(candidate) === normalizeProjectPath(path),
-          ) === index,
+    createProjectFromFolders: async ({ name, folders, primaryPath }) =>
+      createNamedProjectGroup(
+        { get, set, runtime },
+        { name, folders, primaryPath },
+      ),
+    createProjectFromGit: async ({ name, url, parentPath }) => {
+      // Clone first, then create the project through the same group path, so a
+      // checkout and a folder pick produce identical project semantics.
+      const checkout = await api.cloneProjectInto(url, parentPath);
+      await createNamedProjectGroup(
+        { get, set, runtime },
+        { name, folders: [checkout.path], primaryPath: checkout.path },
       );
-      if (uniqueFolders.length === 0) {
-        throw new Error(i18n.t("project.createFolderRequired"));
-      }
-      const normalizedPrimary = normalizeProjectPath(primaryPath);
-      const primary =
-        uniqueFolders.find((path) => normalizeProjectPath(path) === normalizedPrimary) ??
-        uniqueFolders[0];
-      const orderedFolders = [
-        primary,
-        ...uniqueFolders.filter(
-          (path) => normalizeProjectPath(path) !== normalizeProjectPath(primary),
-        ),
-      ];
-      const intent = runtime.beginNavigationIntent();
-      for (const path of orderedFolders) {
-        await get().activateProject(path, { navigationIntent: intent });
-        if (!runtime.navigationIntentIsCurrent(intent)) return;
-      }
-      get().renameProject(primary, normalizedName);
-      if (
-        normalizeProjectPath(get().activeProjectPath) !==
-        normalizeProjectPath(primary)
-      ) {
-        await get().activateProject(primary, { navigationIntent: intent });
-      }
-      const onboarding = await api.getOnboarding();
-      if (!runtime.navigationIntentIsCurrent(intent)) return;
-      set({ createProjectDialogOpen: false, onboarding, page: "chat" });
     },
 
     clearProject: async (opts) => {
@@ -298,6 +414,44 @@ export function createProjectSlice({
       const onboarding = await api.getOnboarding();
       if (!runtime.navigationIntentIsCurrent(intent)) return;
       set({ onboarding });
+    },
+
+    deleteProject: async (path) => {
+      const key = normalizeProjectPath(path);
+      if (!key) return;
+      const removedSessionIds = get()
+        .sessions.filter(
+          (session) => normalizeProjectPath(session.projectPath) === key,
+        )
+        .map((session) => session.id);
+      // A path the host has no durable row for is not a failure: the local
+      // records cleared below are the only thing that can keep such a row
+      // visible, so an already-removed project still leaves the desktop.
+      await api.removeProject(path);
+      for (const id of removedSessionIds) {
+        clearLocalSessionState(
+          { get, set, runtime, manualSessionTitles, withoutRecordKey },
+          id,
+        );
+      }
+      set((state) => {
+        const projectMeta = { ...state.projectMeta };
+        delete projectMeta[key];
+        return { projectMeta };
+      });
+      try {
+        removeRecentProject(path);
+      } catch {
+        // Recent projects are a best-effort renderer cache.
+      }
+      const isOpen =
+        normalizeProjectPath(get().activeProjectPath) === key ||
+        get().openProjectPaths.some(
+          (openPath) => normalizeProjectPath(openPath) === key,
+        );
+      if (isOpen) await get().closeProjectPath(path);
+      persistCurrentSidebar(get);
+      await get().refreshSessions();
     },
 
     toggleSessionPinned: (id) => {
@@ -405,68 +559,10 @@ export function createProjectSlice({
     deleteSession: async (id) => {
       if (!id) return;
       await api.deleteSession(id);
-      manualSessionTitles.delete(id);
-      runtime.pendingSessionConfigurations.delete(id);
-      runtime.sessionTranscriptCache.delete(id);
-      runtime.sessionHistoryCache.delete(id);
-      runtime.liveSessionTranscripts.delete(id);
-      runtime.sessionOlderLoads.delete(id);
-      if (get().activeSessionId === id) get().resetWorkPanelContext();
-      set((state) => {
-        const sessionMeta = { ...state.sessionMeta };
-        delete sessionMeta[id];
-        const sessions = state.sessions.filter((session) => session.id !== id);
-        const runningSessions = { ...state.runningSessions };
-        delete runningSessions[id];
-        const agentStatuses = { ...state.agentStatuses };
-        delete agentStatuses[id];
-        const sessionOutcomes = { ...state.sessionOutcomes };
-        delete sessionOutcomes[id];
-        const queuedPrompts = withoutRecordKey(state.queuedPrompts, id);
-        const workPanelContexts = withoutRecordKey(state.workPanelContexts, id);
-        const pendingPermissions = clearSessionPermissions(
-          state.pendingPermissions,
-          id,
-        );
-        const pendingAsks = clearSessionAsks(state.pendingAsks, id);
-        const latestTurnResults = withoutRecordKey(state.latestTurnResults, id);
-        const planningStates = withoutRecordKey(state.planningStates, id);
-        const pendingPlans = withoutRecordKey(state.pendingPlans, id);
-        const planCheckpoints = withoutRecordKey(state.planCheckpoints, id);
-        const sessionCompactions = withoutRecordKey(state.sessionCompactions, id);
-        const sessionHistory = withoutRecordKey(state.sessionHistory, id);
-        const retainedNav = state.navStack.filter(
-          (entry) => entry.sessionId !== id,
-        );
-        const navStack =
-          retainedNav.length > 0 ? retainedNav : [{ page: "chat" as const }];
-        return {
-          ...releaseSessionPane(state, id),
-          sessionMeta,
-          sessions,
-          runningSessions,
-          agentStatuses,
-          sessionOutcomes,
-          queuedPrompts,
-          workPanelContexts,
-          activeSessionId:
-            state.activeSessionId === id ? undefined : state.activeSessionId,
-          selectingSessionId:
-            state.selectingSessionId === id ? undefined : state.selectingSessionId,
-          messages: state.activeSessionId === id ? [] : state.messages,
-          isRunning: state.activeSessionId === id ? false : state.isRunning,
-          pendingPermissions,
-          pendingAsks,
-          latestTurnResults,
-          planningStates,
-          pendingPlans,
-          planCheckpoints,
-          sessionCompactions,
-          sessionHistory,
-          navStack,
-          navIndex: Math.min(state.navIndex, navStack.length - 1),
-        };
-      });
+      clearLocalSessionState(
+        { get, set, runtime, manualSessionTitles, withoutRecordKey },
+        id,
+      );
       persistCurrentSidebar(get);
       await get().refreshSessions();
     },

@@ -22,3 +22,5 @@ export * from "./compression-prompts.js";
 export * from "./rtk-compressor.js";
 export * from "./provider-retry.js";
 export * from "./antigravity.js";
+export { startAuthenticatedProxyRelay } from "./authenticated-proxy-relay.js";
+export type { AuthenticatedProxyRelay } from "./authenticated-proxy-relay.js";

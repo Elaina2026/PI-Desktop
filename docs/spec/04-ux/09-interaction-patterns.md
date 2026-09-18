@@ -15,7 +15,7 @@
 | `Cmd/Ctrl + Shift + P` | Open command palette | Global (D014) |
 | `Cmd/Ctrl + N` | New chat/session | Global |
 | `Cmd/Ctrl + O` | Open project | Global |
-| `Cmd/Ctrl + W` | Close window | Global |
+| `Alt + Shift + W` | Show or hide the window (toggle) | OS-global (D439); hides to the tray, never quits |
 | `Cmd/Ctrl + ,` | Open settings | Global |
 | `Cmd/Ctrl + B` | Toggle sidebar | Global |
 | `Cmd/Ctrl + J` | Toggle work panel | Global; active session |
@@ -74,6 +74,16 @@
   the panel's normal activation instead of issuing a second application
   activation or window-stack move. The launcher always opens on the display
   nearest the pointer.
+- The window visibility key is one toggle (`Alt + Shift + W`): a visible,
+  focused window hides to the tray, and anything else — hidden, minimized, or
+  behind another application — is shown and focused. Hiding never enters the
+  close path, so it raises no close-behaviour prompt, destroys nothing, and
+  never quits the app. The key is globally registered, so it deliberately
+  avoids `Cmd/Ctrl + W`, which macOS spends on its own close-window command and
+  which would be taken from every application if the app claimed it. The
+  retired `Cmd/Ctrl + Shift + W` summon chord is not registered either, and
+  stored `closeWindow`/`summonWindow` overrides are folded into the toggle when
+  the map is read (D438, D439).
 
 ### 1.5 Plugin launcher shortcuts
 
@@ -137,7 +147,9 @@ recency only breaks ties between equally relevant matches.
   (Cmd+Q, application-menu Quit, tray Quit) is a separate confirm step
   (D363): Cancel leaves the app running; Confirm runs the ordered shutdown.
   A D230 window-close Quit does not ask again. Automated boot, supervision,
-  and capture probes skip the dialog. macOS keeps the
+  and capture probes skip the dialog, as does the restart that installs an
+  already-downloaded update — its installer is already running and gives up
+  when the app stays alive. macOS keeps the
   native Dock lifecycle (close keeps the app in the Dock; activating recreates
   the window). The bounds watchdog never restores a minimized or tray-hidden
   window.
@@ -200,11 +212,14 @@ may be retained while exactly one workspace supplies the visible shell context.
   blank values are not submittable. The title is metadata only, so the task's
   transcript, activity ordering, project binding, and empty-session state are
   unchanged. Escape, Cancel, or clicking the scrim dismisses the editor.
-- **Rename project** — the project overflow menu in the sidebar and Project
-  archive opens the same modal editor for the selected project. Saving trims
-  and persists a 1–80 Unicode-code-point display name in renderer-local
-  sidebar preferences. The normalized path remains authoritative, so the
-  workspace, sessions, transcript data, and on-disk folder are unchanged.
+- **Edit project** — the project overflow menu in the sidebar and Project
+  archive opens the same editor for the selected logical project. The editor
+  trims and persists a 1–80 Unicode-code-point group name and lists every
+  registered folder. The Primary folder stays first and cannot be removed;
+  additional folders can be added through the native multi-selection picker or
+  removed individually. Saving updates the host-owned group while preserving
+  the normalized paths, workspace identity, sessions, transcripts, and on-disk
+  folders. A folder with existing chats cannot be removed.
 - **Pin** toggles presentation priority. Pinned projects/conversations appear
   before unpinned rows within the selected secondary order. In the sidebar, a
   pinned project replaces its Folder glyph with a filled accent Star so its
@@ -212,6 +227,14 @@ may be retained while exactly one workspace supplies the visible shell context.
 - **Archive** is non-destructive. Archived rows are hidden by default,
   available through Show archived, and restorable. Archiving does not cancel
   a turn or delete a transcript.
+- **Delete** removes a session or a project permanently and takes two clicks:
+  the first arms the overflow item and relabels it (`nav.deleteTaskConfirm` /
+  `project.deleteMenuConfirm`), and only the second click removes the row. The
+  arm expires on its own, so a row never stays one stray click away from a
+  permanent delete, and the folder on disk is never touched. A project whose
+  turn is still live still opens the confirmation dialog that names those
+  sessions and stops them first; an idle project is removed on that second
+  click.
 - **Create branch** snapshots an idle conversation's complete active
   transcript into an independent session in the same project/Temporary scope.
   The command is disabled while the source runs. Success selects the child and
@@ -913,6 +936,15 @@ Running turns and pending approvals continue to gate the controls.
 - Clicking an action dismisses its tooltip immediately and suppresses it until
   the pointer leaves or focus moves away; keyboard focus still reveals the
   tooltip before activation.
+- A tooltip is bound to one live trigger. It closes when that trigger unmounts
+  or is detached, when the window loses focus, when the document is hidden, and
+  on Escape; a trigger that moves in the DOM within a quarter second without
+  being replaced keeps the tooltip instead of blinking it. A tooltip revealed
+  by keyboard focus is not closed by unrelated pointer movement, and at most one
+  themed tooltip is ever painted, so a pointer crossing between two adjacent
+  buttons never shows both. The guard listeners behind this are shared by the
+  whole renderer, so a long transcript does not add one listener set per row.
+
 
 ## 7. Focus management
 
@@ -999,9 +1031,14 @@ Work-panel and application-window resizing are implemented in MVP:
 
 - Preview mode unmounts MainChat and lets the work panel fill the client area
   beside the sidebar. A window-level 46px chrome row keeps New Task, sidebar,
-  and native window controls available. In collapsed-sidebar macOS preview, the
-  panel header reserves the 76px windowed (8px fullscreen) traffic-light inset,
-  the preview action lane, and an 8px gap before its first tab.
+  and native window controls available through a pointer-transparent row that
+  declares neither drag nor no-drag across the panel. The panel header's drag
+  border box starts after the shell actions plus an 8px gap, including expanded
+  sidebar New Task. All platforms use an 8px left inset, except collapsed-sidebar
+  windowed macOS (88px). That reserve uses `--ds-window-lead-inset`: the
+  traffic-light cluster's 76px right edge (from `@pi-desktop/shared`) plus 12px.
+  Native pointer clicks must operate the controls and dragging empty header
+  space must move the window; DOM/CDP clicks alone do not establish native hit testing.
 
 The expanded sidebar is fixed at 275px. Collapse/open changes only whether the
 column is present; the historical resize handle is hidden and legacy width
@@ -1074,11 +1111,16 @@ Project drag/drop follows these patterns:
 
 ### 8a.2 Reference chips and clipboard files
 
-- A paste containing one or more OS `File` objects is intercepted in the
-  textarea. Text-only paste stays native when its character count is at or
-  below the persisted `largePasteThreshold` (default 600); text-only paste
-  above the threshold is intercepted and converted into a temporary session
-  file reference.
+- Select non-whitespace `text/plain` over accompanying generated `image/*`
+  copies only when every file lacks a native path (Word text selection).
+  Native files, any non-image file, and image-only/whitespace-plus-image paste
+  retain their attachment flow. This uses the existing preload file-path
+  resolver and does not reread the system clipboard.
+- Selected text stays editable when its character count is at or below the
+  persisted `largePasteThreshold` (default 600); larger text becomes a temporary
+  session file reference. Small multiline paste preserves blank/trailing lines,
+  surrounding text, caret, and native undo; CRLF/CR becomes editor LF. Literal
+  HTML remains text: only escaped text and generated line breaks are inserted.
 - While bytes are being transferred, the textarea is read-only and exposes
   `aria-busy="true"`; the send and autocomplete controls are disabled.
 - Electron main saves bounded bytes under the originating session's scratch
@@ -1136,9 +1178,26 @@ Project drag/drop follows these patterns:
 - After a successful send, the user bubble parses those serialized `@path`
   tokens back into composer-matching leaf-name chips for display only. The
   persisted message and model context stay canonical `@path` text. Clicking a
-  workspace HTML chip previews it in the side browser; clicking any other
-  allowed file opens it with the OS default application (`pi-desktop/fs/open`,
-  contained to the workspace, session scratch, and attachments roots).
+  chip completes the reference through `pi-desktop/fs/resolveRef`, which
+  searches the whole open project — its group's folders, primary first
+  (ADR 0263) — and then opens where it resolved: a project file in the bundled
+  `pi.file-manager` work-panel view (the host `file:` tab when that view is not
+  available), a session-scratch or attachment file in the host `file:` tab, and
+  a `.html`/`.htm` page of the project's primary folder in the side browser,
+  because the side browser is rooted at that folder. The address handed to
+  the work panel follows the folder that answered: a file of the primary folder
+  travels as a project-relative path, a file of a sibling folder of the same
+  project as an absolute one, exactly as a scratch or attachment file does. A
+  chip whose reference matches nothing opens nothing and reports itself; the OS
+  default application is no longer what this click does, though that action
+  stays reachable from the file view's own context menu.
+- The same destination rule governs every other surface of the transcript that
+  names a file, because one opener serves them all: clicking the file path in a
+  tool row's summary (Read, Write, Edit, fetch) and clicking a path in a tool
+  result's file or match list both complete the reference the same way and open
+  where it resolved (ADR 0262). A tool surface therefore picks no destination of
+  its own, and a reference it cannot resolve reports itself instead of opening a
+  panel.
 
 ### 8a.3 Keyboard while open
 
@@ -1186,6 +1245,24 @@ Project drag/drop follows these patterns:
   a multi-line draft: the bottom reserve is padding on the transcript content, so
   the content is observed on its border box and the newest turn moves up with
   the composer instead of sliding behind it (D287).
+- A manual disclosure — a tool, thinking or activity title, a delegate's brief
+  toggle, or an error-detail toggle — holds the reading position of the scroller
+  that owns it (issue #324). The title is handed to that scroller before the
+  expansion state changes, follow mode is left, and the scroller restores the
+  title's viewport offset from its own resize observer for every frame of the
+  height change, so an animated activity group cannot drag the clicked title out
+  of view. A scroller nested inside another one (the delegate run dock, D302)
+  holds its own position and passes the hold outward, because growing it grows
+  the outer content too.
+- Leaving follow for a disclosure is not a re-pin: after a toggle the transcript
+  stays where the reader put it, with the jump-to-latest control visible, until
+  real scroll input, that control, a new turn or a navigation releases the hold.
+  There is no delayed "take the bottom back" correction (D430).
+- Scroll input is attributed to the scroller that can consume it. A press on a
+  row, a control or an editable field is an ordinary click rather than the start
+  of a scroll; a keystroke inside a text field belongs to that field; and input a
+  nested scroller consumes is not the outer scroller's gesture. Arrow keys still
+  scroll and Space still activates a focused title.
 - User send / retry / regenerate: re-pins, hides the jump control, and positions the latest content in the layout phase so the new turn is visible without a top-of-history flash; subsequent persisted and streamed rows continue to follow the bottom
 - Scroll-to-bottom button: position fixed at bottom-right of transcript area, offset 12px
 - Button appears as soon as upward scrolling releases follow mode
@@ -1231,14 +1308,20 @@ Project drag/drop follows these patterns:
 - Hovering or focusing a session row reveals a multi-line hover card after
   the same 500ms delay used by the project path tooltip; the card never
   anchors to a torn-down row.
-- The card surfaces the row's metadata in this order, top to bottom: title,
-  tag chips, **Workspace**, branch (when the project exposes one), and
-  **Updated {{when}}**. Temporary/scratch sessions show the localized
-  "Temporary" / "临时对话" placeholder instead of a workspace name.
+- The card surfaces only key metadata, in this order, top to bottom: title;
+  a Session task chip when the session was created by another session; the
+  mode/permission chip; live status; collaboration details when present;
+  the readable model display name (falling back to the provider's readable
+  name); workspace name and branch on one row; and **Updated {{when}}**
+  without seconds. Temporary/scratch sessions show the localized
+  "Temporary" / "临时对话" placeholder instead of a workspace name. The
+  card does not show the session UUID, a Local task chip, a separate
+  Provider/Model label pair, or the collaboration poll timestamp.
 - For a session with host-owned collaboration activity, the card adds a
-  bounded collaboration section after the standard metadata: localized
-  status, creator/source session when present, current task preview, and up to
-  four recent exchanges with direction, kind, and terminal result. It may
+  bounded collaboration section after the chips: creator/source session
+  when present (title, not UUID), current task preview, up to two recent
+  exchanges with direction, and terminal result. Created-session
+  references remain keyboard-navigable buttons (at most eight). It may
   show a live `running` or `waiting_permission` state, but never loads the
   complete transcript or exposes message content beyond the host's bounded
   preview. Completion and failure results are derived from the durable target
@@ -1249,13 +1332,46 @@ Project drag/drop follows these patterns:
   changing the selected conversation. If the read fails, the last cached
   branch is used.
 - The card is rendered through a portal at `document.body`, never widens
-  beyond 320px, never causes horizontal scroll on the underlying row, and
-  stays non-interactive so the row keeps receiving pointer events.
+  beyond 320px, and never causes horizontal scroll on the underlying row. It is
+  interactive only through its own session links (real buttons with an
+  accessible open-session name); the rest of the card is not a control, so a
+  click on the card's background never leaks into the row behind it.
 - The session row does not set a native `title` attribute. The hover card is
   the only full-title surface, so the browser tooltip never stacks on the
   card.
 - The card cancels on pointer leave, focus blur, scroll (any scroll
   container), resize, and the moment a context menu opens.
+
+### 9.1c Session row hover and row actions
+
+- A session row and a project header are each one click target. Their
+  hover-revealed actions (the row overflow control, the header's add and menu
+  controls) are inert while hidden: the space they occupy before they appear
+  never swallows a click that belonged to the row. A click in that space opens
+  the conversation, or activates and toggles the project group, exactly as a
+  click on the title does; a no-hover pointer gets the controls revealed so it
+  never meets a hidden target.
+- Project headers and conversation rows (project, pinned and standalone) use
+  the same full-row hover surface, radius and transition. The title button is
+  transparent; hover never draws a nested title tile. The selected conversation
+  keeps its selected fill on hover. A current workspace uses only the project
+  dot, not another selected background; folding a selected child or leaving the
+  chat page never promotes its project to a selected navigation item.
+- Keyboard focus keeps its outline independently of selection. The add and
+  overflow buttons retain local hover feedback, and drag-target paint takes
+  precedence over ordinary header hover.
+- Hover paint belongs to the pointer that caused it. When the window loses
+  focus the row and the project header drop their hover background and their
+  revealed actions hide, so nothing is left lit or armed after the window
+  returns; moving the pointer over the row again re-arms it.
+- Revealed actions become clickable the moment the row is hovered or focused,
+  and remain reachable through keyboard focus (`:focus-within` /
+  `:focus-visible`) without a pointer. A spelled-out control never triggers the
+  row or header underneath it as well.
+- The hover card's own navigation controls are the only interactive surfaces
+  inside the card; the row keeps receiving pointer events everywhere else on
+  it.
+
 
 ### 9.2 Sidebar scrolling
 

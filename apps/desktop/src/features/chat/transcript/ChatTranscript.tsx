@@ -17,6 +17,9 @@ import {
 } from "./ActivityGroup";
 import { TranscriptHistory, TranscriptTail } from "./AssistantTurn";
 import { useTranscriptScroll } from "./hooks/useTranscriptScroll";
+import type { TranscriptSearchTarget } from "../../../lib/transcript-reading";
+import { TranscriptSearchContext } from "../../../lib/transcript-search-context";
+import { DisclosureAnchorContext } from "../../../lib/disclosure-anchor-context";
 
 export const ChatTranscript = memo(function ChatTranscript({
   sessionId,
@@ -29,6 +32,12 @@ export const ChatTranscript = memo(function ChatTranscript({
   askPending = false,
   planningState,
   paneVisible = true,
+  searchTarget = null,
+  readingWindow = false,
+  hasMoreAfter = false,
+  onLoadNewer,
+  onReturnToLatest,
+  navigationLoading = false,
 }: {
   sessionId: string | undefined;
   messages: UiMessage[];
@@ -46,8 +55,15 @@ export const ChatTranscript = memo(function ChatTranscript({
    * or re-anchor, because its scroller has no visible viewport to correct.
    */
   paneVisible?: boolean;
+  searchTarget?: TranscriptSearchTarget | null;
+  readingWindow?: boolean;
+  hasMoreAfter?: boolean;
+  onLoadNewer?: () => Promise<void>;
+  onReturnToLatest?: () => void;
+  navigationLoading?: boolean;
 }) {
   const { t } = useTranslation();
+  const transcriptRunning = isRunning && !readingWindow;
   const latestTurnResult = useAppStore((state) =>
     sessionId ? state.latestTurnResults[sessionId] : undefined,
   );
@@ -87,26 +103,28 @@ export const ChatTranscript = memo(function ChatTranscript({
     veilPhase,
     handleScroll,
     revealEarlierHistory,
-    scrollToBottom,
     jumpToLatest,
+    disclosureAnchorNotifier,
   } = useTranscriptScroll({
     sessionId,
     messages,
     compactions,
     hasMoreBefore,
     onLoadOlder,
-    isRunning,
+    isRunning: transcriptRunning,
     pendingPermission,
     askPending,
     approvalPending,
     planningState,
     paneVisible,
+    searchTarget,
+    readingWindow,
   });
 
   const lastEntry = tailEntry;
   const lastTurnPart =
     lastEntry?.kind === "assistant-turn" ? lastEntry.parts.at(-1) : undefined;
-  const activeToolGroup = isRunning && lastTurnPart?.kind === "activity";
+  const activeToolGroup = transcriptRunning && lastTurnPart?.kind === "activity";
   const assistantIsAnswering =
     lastTurnPart?.kind === "message" &&
     lastTurnPart.message.status === "streaming" &&
@@ -114,7 +132,7 @@ export const ChatTranscript = memo(function ChatTranscript({
   const specializedActivity = agentActivity;
   const hasSpecializedActivity = specializedActivity !== undefined;
   const showRunActivity =
-    isRunning &&
+    transcriptRunning &&
     !pendingPermission &&
     !askPending &&
     !approvalPending &&
@@ -123,7 +141,7 @@ export const ChatTranscript = memo(function ChatTranscript({
   // Show immediate feedback after send, then let the concrete activity row
   // (thinking/tool/answer) take over so the transcript never duplicates state.
   const showWorking =
-    isRunning &&
+    transcriptRunning &&
     !pendingPermission &&
     !askPending &&
     !approvalPending &&
@@ -135,7 +153,7 @@ export const ChatTranscript = memo(function ChatTranscript({
   // rows carry the live state so a Planning label does not sit orphaned above
   // the composer. The Composer mode chip keeps pulsing for the turn.
   const showPlanning =
-    isRunning &&
+    transcriptRunning &&
     planningState === "planning" &&
     !approvalPending &&
     !pendingPermission &&
@@ -144,7 +162,16 @@ export const ChatTranscript = memo(function ChatTranscript({
     !assistantIsAnswering &&
     !hasSpecializedActivity;
 
+  // The tail status lane is part of the layout for the whole running turn: the
+  // indicators below mount and clear with the turn's phase, and a lane that
+  // came and went with them would resize `.thread-content` and push the rows
+  // the user is already reading (issue #323). An idle transcript renders no
+  // lane at all, so a finished transcript keeps its exact layout.
+  const runtimeStatusLane = transcriptRunning;
+
   return (
+    <TranscriptSearchContext.Provider value={searchTarget}>
+    <DisclosureAnchorContext.Provider value={disclosureAnchorNotifier}>
     <div
       className="thread-wrap"
       ref={wrapRef}
@@ -168,6 +195,7 @@ export const ChatTranscript = memo(function ChatTranscript({
       <div
         className="thread-scroll"
         ref={scrollRef}
+        data-scroll-owner="transcript"
         onScroll={handleScroll}
         role="log"
         aria-live="polite"
@@ -194,14 +222,26 @@ export const ChatTranscript = memo(function ChatTranscript({
             <TranscriptTail
               entry={tailEntry}
               isRunning={isRunning}
-              isActive={isRunning && tailEntry.kind === "assistant-turn"}
+              isActive={transcriptRunning && tailEntry.kind === "assistant-turn"}
               runtimeActivity={specializedActivity}
             />
           ) : null}
-          <TurnOutcomeCard
-            messages={messages}
-            result={latestTurnResult}
-          />
+          {hasMoreAfter ? (
+            <button
+              type="button"
+              className="transcript-load-later"
+              disabled={navigationLoading}
+              onClick={() => void onLoadNewer?.()}
+            >
+              {t("chat.loadLaterMessages")}
+            </button>
+          ) : null}
+          {!readingWindow ? (
+            <TurnOutcomeCard
+              messages={messages}
+              result={latestTurnResult}
+            />
+          ) : null}
           {pendingPermission ? (
             <PermissionCard
               key={pendingPermission.requestId}
@@ -209,11 +249,15 @@ export const ChatTranscript = memo(function ChatTranscript({
               queued={queuedPermissions}
             />
           ) : null}
-          {showRunActivity && specializedActivity ? (
-            <RunActivityIndicator activity={specializedActivity} />
+          {runtimeStatusLane ? (
+            <div className="transcript-runtime-status">
+              {showRunActivity && specializedActivity ? (
+                <RunActivityIndicator activity={specializedActivity} />
+              ) : null}
+              {showPlanning ? <PlanningIndicator kind={planningKind} /> : null}
+              {showWorking ? <WorkingIndicator /> : null}
+            </div>
           ) : null}
-          {showPlanning ? <PlanningIndicator kind={planningKind} /> : null}
-          {showWorking ? <WorkingIndicator /> : null}
         </div>
       </div>
       {veilPhase !== "off" ? (
@@ -246,16 +290,24 @@ export const ChatTranscript = memo(function ChatTranscript({
           </div>
         </div>
       ) : null}
-      {showJump && !veilCovering ? (
+      {navigationLoading ? (
+        <div className="transcript-navigation-loading" role="status">{t("chat.loadingSession")}</div>
+      ) : null}
+      {(showJump || readingWindow) && !veilCovering ? (
         <TooltipButton
           className="jump-latest-btn"
           ariaLabel={t("chat.scrollToBottom")}
           tooltip={t("chat.scrollToBottom")}
-          onClick={jumpToLatest}
+          onClick={() => {
+            onReturnToLatest?.();
+            jumpToLatest();
+          }}
         >
           <IconArrowDown size={14} />
         </TooltipButton>
       ) : null}
     </div>
+    </DisclosureAnchorContext.Provider>
+    </TranscriptSearchContext.Provider>
   );
 });

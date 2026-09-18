@@ -18,7 +18,7 @@
 | `Cmd/Ctrl + Shift + P` | 打开命令面板 | 全球 (D014) |
 | `Cmd/Ctrl + N` | 新 chat/session | 全球 |
 | `Cmd/Ctrl + O` | 打开项目 | 全球 |
-| `Cmd/Ctrl + W` | 关闭窗口 | 全球 |
+| `Alt + Shift + W` | 呼出或隐藏窗口（切换） | 系统级全局（D439）；隐藏到托盘，绝不退出 |
 | `Cmd/Ctrl + ,` | 打开设置 | 全球 |
 | `Cmd/Ctrl + B` | 切换侧边栏 | 全球 |
 | `Cmd/Ctrl + J` | 打开工作面板 | 全球；活动会话 |
@@ -70,6 +70,13 @@
   专注。如果钩子无法被安装，聚焦窗口后备仍然可用。未绑定时会同时关闭钩子和
   聚焦窗口后备。自定义绑定继续使用 Electron 的全局快捷方式 API。
   启动器始终在最靠近指针的显示屏上打开。
+- 窗口可见性只有一个开关键（`Alt + Shift + W`）：可见且在前台的窗口隐藏到托盘，
+  其余情况 —— 已隐藏、已最小化或被其它应用挡在后面 —— 显示并获得焦点。隐藏
+  不走关闭路径，因此不会弹出关闭行为询问、不会销毁窗口，也绝不会退出应用。
+  该键是系统级全局注册，因此刻意避开 `Cmd/Ctrl + W` —— macOS 把它用于自己的
+  关闭窗口命令，应用一旦占用就会从所有应用程序手里把它抢走。已弃用的
+  `Cmd/Ctrl + Shift + W` 呼出组合键同样不再注册；读取配置映射时，已存储的
+  `closeWindow` / `summonWindow` 覆盖项会并入该开关键（D438、D439）。
 
 ### 1. 5 插件启动器快捷方式
 
@@ -166,15 +173,21 @@
 
 #### 组织行动
 
-- **重命名项目** — 侧边栏和项目存档中的项目溢出菜单打开同一个项目名称
-  弹窗。保存时去除首尾空格，并将 1–80 个 Unicode 字符的显示名称写入
-  renderer 本地侧边栏偏好。规范化路径仍是权威身份，因此工作区、会话、
-  转录数据和磁盘文件夹均不改变。
+- **编辑项目** — 侧边栏和项目存档中的项目溢出菜单打开同一个项目编辑器。
+  编辑器可以调整项目名称和文件夹列表；Primary 文件夹保持在首位且不能移除，
+  其他文件夹可以通过原生多选文件夹选择器添加，也可以单独移除。保存时由
+  host 持久化逻辑项目组，同时保留规范化路径、工作区身份、会话、转录和磁盘文件夹。
+  已有聊天记录的文件夹不能直接移除。
 - **Pin** 切换演示优先级。出现固定的 projects/conversations
   在所选二级订单中取消固定的行之前。
 - **存档**是非破坏性的。默认情况下，存档的行是隐藏的，
   可通过显示已存档且可恢复。存档不会取消
   转动或删除成绩单。
+- **删除**会永久移除会话或项目，并且需要点击两次：第一次点击武装该溢出菜单项并改写其
+  标签（`nav.deleteTaskConfirm` / `project.deleteMenuConfirm`），只有第二次点击才会移除
+  该行。武装会在几秒后自行失效，因此一行永远不会停留在“再点一次就永久删除”的状态，磁盘
+  上的文件夹也永远不会被触碰。仍有运行中轮次的项目依然会打开确认对话框，由它指明这些会话
+  并先将其停止；空闲的项目在第二次点击时即被移除。
 - **创建分支**快照空闲对话的完整活动状态
   转录到同一 project/Temporary 范围内的独立会话中。
   当源运行时该命令被禁用。成功选择了孩子
@@ -856,9 +869,16 @@ Mode/provider/model/permission/shell 配置和新提示仍然存在
   （预订始终为 0）。
 - 后台会话工件永远不会更新可见面板。
 
-- 预览模式会卸载 MainChat，让工作面板填充侧边栏之外的客户区。窗口级 46px
-  chrome 行保留新建任务、侧边栏和本机窗口控件；侧边栏折叠时，macOS 窗口模式
-  左侧预留 76px，全屏预留 8px 给交通灯。
+- Preview mode unmounts MainChat and fills the client area beside the sidebar.
+  The 46px chrome row keeps shell/native controls but declares neither drag nor
+  no-drag across the panel and passes pointer events through outside controls.
+  The panel header alone owns dragging in the preview pane; its border box
+  excludes shell actions plus an 8px gap in both sidebar states on all platforms.
+  The left inset is 8px except collapsed-sidebar windowed macOS (88px through
+  `--ds-window-lead-inset`: the 76px native cluster edge from
+  `@pi-desktop/shared` plus a 12px gap).
+  Native clicks must operate controls and empty-header drags must move the
+  window; DOM/CDP clicks alone are not native hit-test proof.
 
 展开侧边栏固定为 275px。折叠/展开只改变列是否存在；历史上的调整大小手柄
 会隐藏，旧的宽度偏好不会继续持久化。
@@ -902,9 +922,13 @@ Mode/provider/model/permission/shell 配置和新提示仍然存在
 
 ### 8a.2 参考芯片和剪贴板文件
 
-- 包含一个或多个 OS `File` 对象的粘贴在
-  文本区域中被拦截。字符数不超过持久化的 `largePasteThreshold`（默认 600）时，
-  纯文本粘贴保持原生；超过阈值时会被拦截并转换为会话临时文件引用。
+- 仅当全部文件都是无原生路径的 `image/*` 副本时，非空白 `text/plain`
+  正文优先（Word 文本选择）。真实文件、任意非图片文件、纯图片及空白文字加
+  图片的粘贴仍走附件流程。只复用已有 preload 文件路径解析，不重新读取系统剪贴板。
+- 选中的正文不超过持久化的 `largePasteThreshold`（默认 600）时保持可编辑；
+  超过阈值时转为会话临时文件引用。短多行文本保留空行、末尾换行、前后正文、
+  光标及原生撤销；CRLF/CR 转为编辑器 LF。HTML 字面量仍为文本，只插入经过
+  转义的正文和生成的换行。
 - 传输字节时，文本区域是只读的并公开
   `aria-busy="true"`；发送和自动完成控件被禁用。
 - Electron main 在原始会话的暂存下保存有界字节
@@ -936,7 +960,7 @@ Mode/provider/model/permission/shell 配置和新提示仍然存在
   撤消发送。该撤消操作将恢复原始芯片顺序和标签；它
   从不解析序列化的 `@path` 文本。一旦回复内容开始，中止就会继续
   部分抄本，不恢复草稿。
-- 发送成功后，用户气泡仅把这些序列化的 `@path` 标记解析回与输入框一致的叶子名芯片用于展示。持久化消息和模型上下文仍是规范 `@path` 文本。点击工作区 HTML 芯片在侧边浏览器预览；点击其余允许的文件用系统默认应用打开（`pi-desktop/fs/open`，限制在工作区、会话临时目录和附件根）。
+- 发送成功后，用户气泡仅把这些序列化的 `@path` 标记解析回与输入框一致的叶子名芯片用于展示。持久化消息和模型上下文仍是规范 `@path` 文本。点击芯片先经 `pi-desktop/fs/resolveRef` 补全引用——该通道搜索整个打开的项目，按项目组自身的文件夹顺序、主文件夹优先（ADR 0263）——再按解析结果打开：项目文件在随应用打包的 `pi.file-manager` 工作面板视图中打开（该视图不可用时退回宿主 `file:` 选项卡），会话临时目录或附件文件在宿主 `file:` 选项卡中打开，项目主文件夹中的 `.html`/`.htm` 页面仍在侧边浏览器中打开，因为侧边浏览器本就以该文件夹为根。交给工作面板的地址跟随应答的文件夹：主文件夹中的文件按项目内相对路径传递，同一项目的同级文件夹中的文件按绝对路径传递，与会话临时目录或附件文件一致。什么都没匹配到的芯片不打开任何东西，而是自己报告出来；系统默认应用不再由这次点击触发，该动作仍可从文件视图自己的右键菜单使用。
 
 ### 8a.3 打开时的键盘
 
@@ -997,6 +1021,16 @@ Mode/provider/model/permission/shell 配置和新提示仍然存在
   行动。
 - 选择**打开文件夹**打开系统文件中的项目目录
   管理器而不更改活动会话记录。
+
+### 9.1c 侧边栏行状态与操作
+
+- 项目标题与项目、置顶、独立会话行共享整行悬停背景、圆角和过渡。
+  标题按钮透明，不叠加内层背景；已选中会话在悬停时保持选中背景。
+- 当前工作区仅通过项目圆点表达，不再使用另一份选中背景。折叠选中会话
+  的分组、离开聊天页或没有选中会话，都不会让项目标题成为选中导航项。
+- 键盘焦点保留独立轮廓；新建和更多操作按钮保留局部悬停反馈；拖拽目标
+  提示优先于普通悬停背景。
+- 窗口失焦时释放悬停背景和操作显露，不清除当前会话选中背景。
 
 ### 9. 2 侧边栏滚动
 

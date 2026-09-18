@@ -37,6 +37,7 @@ export type RegisterIpcDependencies = {
   getNotificationViewingSessionId: () => string | null;
   setNotificationViewingSessionId: (sessionId: string | null) => void;
   activeUserSubagentDocuments: (...args: any[]) => Promise<any>;
+  disabledBuiltinSubagents: () => Promise<string[]>;
   [name: string]: any;
 };
 
@@ -67,7 +68,7 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     updater,
     dataDir,
     activeTurns,
-    turnFinalizations,
+    isTurnDispatchable,
     sessionProjects,
     persistenceOutbox,
     logger,
@@ -93,6 +94,7 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     agentExtensions,
     activeUserSkills,
     activeUserSubagentDocuments,
+    disabledBuiltinSubagents,
     pluginActiveInProject,
     getWorkPanelReservationWidth,
     setWorkPanelReservationWidth,
@@ -115,6 +117,7 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     claimedExecutionSessions,
     resolveAgentRuntimeLaunch,
     finishTurn,
+    lockAbortReason,
     finishApprovedExecution,
     dispatchApprovedPlan,
     dispatchExecutionForProposal,
@@ -123,6 +126,7 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     refreshUserMcp,
     describeError,
     pluginViews,
+    pluginSettingsViews,
     pluginScopes,
     rememberPluginScopes,
     pluginPanels,
@@ -309,13 +313,14 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     persistenceOutbox,
     dataDir,
     activeTurns,
-    turnFinalizations,
+    isTurnDispatchable,
     activeTurnUsages,
     approvedExecutionIdsBySession,
     claimedExecutionSessions,
     resolveAgentRuntimeLaunch,
     acquireSessionOperation,
     finishTurn,
+    lockAbortReason,
     finishApprovedExecution,
     dispatchApprovedPlan,
     dispatchExecutionForProposal,
@@ -333,6 +338,7 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     agentExtensions,
     browserHost,
     pluginViews,
+    pluginSettingsViews,
     pluginScopes,
     rememberPluginScopes,
     sendToRenderer,
@@ -359,8 +365,10 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     fetchSkillMarketDocument,
     optionalWorkspaceRoot,
     activeUserSubagentDocuments,
+    disabledBuiltinSubagents,
     stripWinLongPrefix,
     sendToRenderer,
+    logger,
   });
 
 
@@ -369,6 +377,7 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     plugins,
     browserHost,
     pluginViews,
+    pluginSettingsViews,
     pluginPanels,
     pluginActiveInProject,
     currentWorkspacePath,

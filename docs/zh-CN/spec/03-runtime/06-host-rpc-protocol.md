@@ -191,6 +191,11 @@ type ToolBudgetHealth = {
   按上次开放时间；包括通过会话导入具体化的记录
 - `projects.create({ path })` — 创建或复用持久项目记录，不切换当前工作区，
   并返回宿主生成的项目 id
+- `projects.remove({ path })` — 删除一条持久项目行，并连同附加到它的每个会话一起删除，
+  移除这些会话的转录本、scratch 和 review 文件以及该项目的持久记忆，且从不触碰磁盘上的
+  项目文件夹。幂等：未知路径返回 `{ removed: false, sessionsRemoved: 0 }`。作为已存储
+  多文件夹项目组根目录的路径会被拒绝，以便该组保留有效的 Primary 根目录；而只要其中仍有会话
+  在运行，调用就会被拒绝（1008 / `CONFLICT`），因此运行中的轮次绝不会丢失它正在写入的转录本。
 
 ### 秘密
 - `secrets.set`
@@ -285,8 +290,13 @@ ids 和非负 `tokensBefore`；它不会插入 message/search 行
   存在于持久转录本中时，恢复分支之前的前缀取自转录本而非调用方。幸存
   消息保留所属的 `turn_id`
 - `session.beginTurn`
-- `session.queuePush` / `session.queueList` / `session.queueRemove` —— Host 拥有的
-  回合队列（D386 / ADR 0213，架构 v15）；push 按主体与 key 幂等，每会话最多八条
+- `session.queuePush` / `session.queueList` / `session.queueRemove` /
+  `session.queuePrioritize` / `session.queueReorder` —— Host 拥有的回合队列
+  （D386 / ADR 0213 / ADR 0265，架构 v18）；push 按主体与 key 幂等，每会话最多八条。
+  `queuePrioritize` 把条目的 `priority` 写为其会话优先区块的 `MAX + 1`（追加到区块末尾），
+  对已经带优先级的条目返回 `CONFLICT`；`queueReorder` 让一个未优先条目与其相邻的未优先
+  条目互换并返回 `{ moved }`。列出与投递顺序为：已优先条目按 `priority` 升序，其余按
+  `position` 升序
 - `session.endTurn` — 以原子方式将正在运行的回合移动到其终止状态，并且
 有条件地返回新创建的 `completed`/`error` 通知；它还会落定该会话的进行中回复
   检查点（D299）：`completed`/`error` 移除它；`recoverInflight: true`（sidecar
@@ -421,7 +431,13 @@ off | minimal | low | medium | high | xhigh | max
 
 ### 提供商与模型
 - `providers.list` / `providers.get` / `providers.create` /
-  `providers.update` / `providers.delete`
+- `providers.update` / `providers.delete` 拒绝插件自有的行
+  （`ownerPluginId`）：该行每次加载都由 manifest 刷新，因此只由其所属插件的
+  生命周期改动或删除，错误信息以 `PROVIDER_OWNED_BY_PLUGIN` 开头（ADR 0259）
+- `providers.setSecret({ id, secretValue })` — 写入或清除某一行 provider 的
+  API key（`secret:provider:<id>:api_key` 与行的 `secret_ref`）。这是插件自有行
+  接受的写入：只改声明要求的凭据，绝不改 manifest 拥有的字段。`secretValue`
+  为空或省略即删除已存 key。返回 `{ provider }`，未知 id 返回 `null`
 - `providers.getSecret` — 仅限 main/host，渲染器永远无法触达
 - `providers.listModels` / `providers.cacheModels` — 已发现的模型行及其
   宿主侧缓存（ADR 0027 / ADR 0134）
@@ -870,6 +886,12 @@ JSON-RPC 错误携带一个数字 `code` 以及 `data.errorCode`，后者是来�
 | 1016 | SKILL_INVALID | 用户技能文档校验失败 |
 | 1017 | SUBAGENT_INVALID | 用户子代理文档校验失败 |
 | 1018 | CAPABILITY_INVALID | Agent 能力 root/scope 设置校验失败 |
+| 1019 | PLUGIN_CANCELLED | 用户在下载过程中取消了市场安装 |
+| 1020 | PLUGIN_MARKET_NOT_PUBLISHED | 平台有该版本但尚未对外提供 |
+| 1021 | PLUGIN_MARKET_ARCHIVED | 插件已被平台下架 |
+| 1022 | PLUGIN_MARKET_NOT_FOUND | 平台没有该插件或该版本 |
+| 1023 | PLUGIN_MARKET_RATE_LIMITED | 下载接口要求客户端等待后重试 |
+| 1024 | PLUGIN_MARKET_NO_SOURCE | 没有任何分发目标能提供该包 |
 | -32029 | HOST_OVERLOADED | RPC 调度程序容量已耗尽 |
 | -32601 | — | 未知方法 |
 | -32700 | — | 无法解析的请求行 |

@@ -5,8 +5,22 @@ import type { PermissionMode } from "./permissions.js";
 import type { UiMessage } from "./messages.js";
 import type { PlanningState } from "./plans.js";
 
+export type SessionSource = "desktop" | "pi-native";
+
+export type SessionCapabilities = {
+  canPrompt: boolean;
+  canStop: boolean;
+  canRefresh: boolean;
+};
+
 export type SessionSummary = {
   id: string;
+  /** Transcript authority. Omitted by older hosts and normalized to `desktop`. */
+  source?: SessionSource;
+  /** Native sessions expose only safe actions in the first continuation slice. */
+  capabilities?: SessionCapabilities;
+  /** Stable machine-readable reason why a native session cannot be continued. */
+  readOnlyReason?: string;
   title: string;
   /** Number of messages in the current canonical transcript. */
   messageCount: number;
@@ -28,8 +42,13 @@ export type SessionSummary = {
 
 export type SessionDetail = SessionSummary & {
   messages: UiMessage[];
+  /** Owning Task for a nested search target; context only, outside page cursors. */
+  navigationParent?: UiMessage;
   /** Zero-based offset of the first message returned by a bounded history read. */
   messageStart?: number;
+  /** Exclusive physical end of a bounded read; not the deduplicated length. */
+  messageEnd?: number;
+  hasMoreAfter?: boolean;
   /** True when older messages must be requested with another bounded read. */
   hasMoreBefore?: boolean;
   /** The checkpoint that governs the next model request, i.e. the last of
@@ -115,6 +134,8 @@ export type AgentActivityError = {
   code: string;
   message: string;
   providerStatus?: number;
+  /** Transport errno behind a NETWORK_ERROR, e.g. ENOTFOUND or ECONNRESET. */
+  networkCode?: string;
 };
 
 /** Coarse child-agent action shown while the parent waits on delegates. */
@@ -151,3 +172,40 @@ export type AgentActivity =
       /** Running targets, in wait order, with the latest coarse child action. */
       agents?: AgentActivityAgent[];
     };
+
+/** Host-owned global search, grouped and paginated by session. */
+export type SessionMessageMatch = {
+  messageId: string;
+  role: "user" | "assistant";
+  createdAt: string;
+  snippet: string;
+};
+
+export type SessionSearchHit = {
+  session: SessionSummary;
+  projectName?: string | null;
+  metadataMatch: boolean;
+  messageCount: number;
+  matches: SessionMessageMatch[];
+};
+
+export type SessionSearchPage = {
+  hits: SessionSearchHit[];
+  nextOffset: number | null;
+};
+
+export type SessionSearchContext = {
+  /** Read-only canonical text projection; no mutation or model-facing fields. */
+  messages: Pick<UiMessage, "id" | "role" | "content" | "createdAt" | "toolName">[];
+  hasMoreBefore: boolean;
+  hasMoreAfter: boolean;
+  previousMatchId: string | null;
+  nextMatchId: string | null;
+};
+
+export type SessionSearchContextRequest = {
+  sessionId: string;
+  messageId: string;
+  query: string;
+  direction?: "around" | "before" | "after";
+};

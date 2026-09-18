@@ -11,7 +11,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
-const [apiSource, appSource, composerSource, settingsSource, commandsSource, storeSource, surfaceSource, transcriptSource, barSource, topbarSource, componentSpec, englishSource, chineseSource, planStateSource] =
+const [apiSource, appSource, composerSource, settingsSource, commandsSource, storeSource, surfaceSource, transcriptSource, barSource, topbarSource, componentSpec, englishSource, chineseSource, planStateSource, composerCss] =
   await Promise.all([
     read("../src/lib/api.ts"),
     readAppSource(),
@@ -27,6 +27,7 @@ const [apiSource, appSource, composerSource, settingsSource, commandsSource, sto
     read("../../../packages/i18n/src/locales/en/index.ts"),
     read("../../../packages/i18n/src/locales/zh-CN/index.ts"),
     read("../src/lib/plan-mode-state.ts"),
+    read("../src/styles/composer.css"),
   ]);
 const eventsSource = readStoreModuleSync("slices/events-slice.ts");
 const interactionSource = readStoreModuleSync("slices/interaction-slice.ts");
@@ -106,6 +107,7 @@ test("reject or interruption returns editable planning without changing durable 
     queueSource.slice(queueSource.indexOf("sendPrompt: async"));
   assert.match(sendPromptBlock, /get\(\)\.pendingPlans\[sessionId\]\?\.status === "pending"/);
   assert.match(sendPromptBlock, /await api\.prompt\(\{/);
+  // The send ships the submitted content through the prompt call.
   assert.match(sendPromptBlock, /sessionId,\s*content,/);
   assert.match(
     sendPromptBlock,
@@ -139,6 +141,7 @@ test("the component spec assigns mode ownership to Composer", () => {
   assert.doesNotMatch(topbarSpec, /Agent \| Plan|mode toggle|mode indicator/);
   assert.match(composerSpec, /combined model ×\s+reasoning-level control/);
   assert.match(composerSpec, /Composer-left Agent\/Plan\/Goal chip is the sole mode/);
+  assert.match(composerSpec, /--ds-bg-composer/);
 });
 
 test("plan approval sends exact identities and waits for host confirmation", () => {
@@ -173,6 +176,13 @@ test("plan approval sends exact identities and waits for host confirmation", () 
   assert.doesNotMatch(resolveBlock, /finally[\s\S]*pendingPlans/);
 });
 
+test("plan approval bar paints the composer plate over the transparent dock", () => {
+  const barRule = composerCss.match(/\.plan-approval-bar \{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(barRule, /background:\s*var\(--ds-bg-composer\)/);
+  assert.match(barRule, /box-shadow:\s*var\(--ds-shadow-composer\)/);
+  assert.doesNotMatch(barRule, /--ds-tile\b/);
+});
+
 test("terminal Plan checkpoints stop rendering the approval bar", () => {
   for (const status of ["rejected", "expired", "interrupted", "approved", "queued", "running"]) {
     assert.match(planStateSource, new RegExp(`"${status}"`));
@@ -199,8 +209,8 @@ test("pending approval keeps the draft while gating every composer control", () 
   assert.match(composerSource, /aria-readonly=\{inputBlocked\}/);
   assert.match(composerSource, /enabled: !inputBlocked/);
   assert.match(composerSource, /disabled=\{controlsBlocked\}/);
-  assert.match(composerSource, /const controlsBlocked = approvalPending;/);
-  assert.match(composerSource, /const sendBlocked = approvalPending \|\| pasting;/);
+  assert.match(composerSource, /const controlsBlocked = approvalPending \|\| nativeSession;/);
+  assert.match(composerSource, /const sendBlocked = approvalPending \|\| pasting \|\| nativeInputBlocked;/);
   assert.match(storeSource, /if \(get\(\)\.pendingPlans\[sessionId\]\?\.status === "pending"\) return/);
 });
 
@@ -221,10 +231,6 @@ test("Plan approval labels and remembered modes are locale-backed", () => {
   assert.match(chineseSource, /approvalRegion: "规划审批"/);
   assert.match(englishSource, /approvalRegion: "Goal approval"/);
   assert.match(chineseSource, /approvalRegion: "目标审批"/);
-  assert.match(englishSource, /statusQueued: "Plan queued"/);
-  assert.match(chineseSource, /statusQueued: "规划已排队"/);
-  assert.match(englishSource, /statusQueued: "Goal queued"/);
-  assert.match(chineseSource, /statusQueued: "目标已排队"/);
   assert.match(englishSource, /approveAuto: "Approve \(Auto\)"/);
   assert.match(chineseSource, /approveAuto: "批准（全自动）"/);
   assert.doesNotMatch(englishSource, /expiresAt:/);

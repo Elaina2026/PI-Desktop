@@ -186,9 +186,18 @@ HTTP 429 处理是一个逻辑回合策略。此路径禁用了 pi-ai 的嵌套
 当 429 预算耗尽时，最终的助手错误和生命周期 `error` 只发出一次。
 提供程序故障在可用时于 `AppError.details` 中携带有界诊断：
 `phase`（`request` 或 `stream`）、`providerStatus`、`providerCode`、
-`providerWaitMs`、`streamMs` 和 `retryAttempt`。对于持续的 429，
+`providerWaitMs`、`streamMs`、`retryAttempt`、网络诊断
+（`networkCategory`、`networkCode`、`networkSyscall`、`networkHost`、
+`networkRoute`）以及请求关联字段（`requestMessages`、`requestBytes`、
+`compactionGeneration`）。
+对于持续的 429，
 `retryAttempt` 为 `5`；对于持续的非 429 瞬时故障，它为 `4`。凭据与不受限制的
-响应正文永远不会进入事件或日志。
+响应正文永远不会进入事件或日志。每次重试都会新建请求、流和 `AbortController`；
+重试唯一共享的状态是进程级 undici dispatcher。当同一来源在一轮内连续两次没有
+任何响应、且新尝试仍无法到达它时，下一次尝试前会重建一次传输（每 30 秒最多一次，
+`dns` 除外），避免重试继续复用连接已死的连接池。重建先安装替换、再优雅关闭旧
+的 dispatcher，并复现已配置的链路，因此其他会话正在进行的请求仍会在原连接池上
+完成，代理也不会被悄悄丢弃。
 
 ### 5e。静默回合恢复
 
@@ -502,7 +511,8 @@ Goal 批准所承诺的内容与 Plan 批准所承诺的内容完全相同：`mo
 **目录。** 定义是来自两个来源的 Markdown 文档：`agent-runtime` 中内嵌的五个
 内置函数（`explorer`、`code-reviewer`、`test-runner`、`fixer`、`ui-designer`），以及
 `~/.agents/subagents/*.md` 下的全局用户文档。没有项目级子代理目录，`.pi/agents`
-不会作为能力来源被扫描。用户文档在进入加载器前会根据应用本地启用状态过滤。
+不会作为能力来源被扫描。用户文档在进入加载器前会根据应用本地启用状态过滤，
+内置定义则由加载器按同一份应用本地状态过滤（ADR 0270）。
 Electron main 每次启动加载全局目录，并在 sidecar 参数中传递
 `subagents` / `subagentProviders`，因此编辑定义会在下一次提示时生效。目录上限
 为 `MAX_SUBAGENT_DEFINITIONS`（16）；格式错误或不可读文档只产生启动诊断，
@@ -559,19 +569,18 @@ Frontmatter 新增 `permission: inherit | ask | accept-edits | auto`（默认
 **委托循环。** `SubagentRun` 是同一 sidecar 进程中的第二个 pi `Agent`，
 使用该定义的系统提示、其（可能已固定的）provider/model、其声明的工具，
 以及与父级相同的主机连接，并遵循与父级相同的有界提供程序重试策略。
-`maxTurns` 是可选的按定义兜底（最大 80）；省略、`none` 或 `0` 表示不限轮数。
+委托没有轮次上限：它会在自己结束时、父级调用 `TaskStop` 时、用户 Stop 时结束，
+或因父级终态错误而被中止（ADR 0253）。仍声明 `maxTurns` 的文档会正常加载，该键
+会像其他任何无法识别的 frontmatter 键一样被忽略。
 `maxTokens` 是可选的按定义输出上限（最大 200000）；省略、`none` 或 `0` 表示跟随模型
 已发布的上限。它会覆盖为该委托构建的模型上的 `maxTokens`，因此适配器派生出的
 `max_tokens` / `max_completion_tokens` / `max_output_tokens` 都会带上它；它只约束该
 委托自身的响应 —— 会话自己的请求仍沿用模型绑定。超过天花板的值属于笔误，会被钳制
 而不会转发给 provider。
-内置委托各自声明与其工作量相称的值 —— `explorer` 60、`code-reviewer` 50、
-`test-runner` 40、`fixer` 80、`ui-designer` 80 —— 因此始终无法收敛的委托会以 `truncated`
-连同其部分报告结束，而不是一直跑到时长上限。内置的 `explorer` 声明 `Read`、
+内置的 `explorer` 声明 `Read`、
 `Glob`、`Grep` 和 `Bash`，而 `code-reviewer` 保持只读；`fixer` 与 `ui-designer`
 会在工作区内写入，`ui-designer` 另外声明 `BrowserPreview`，以便在报告前检查渲染结果。
-其状态为 `completed`、
-`truncated`、`failed`、`aborted`、`timed_out` 以及仅存在于注册表的
+其状态为 `completed`、`failed`、`aborted`、`timed_out` 以及仅存在于注册表的
 `stopped`；终态通过 `TaskWait` 呈现，其文本是报告（上限为
 `MAX_SUBAGENT_REPORT_CHARS`，12k），其 details 携带 `delegationId`、`agent`、
 `status`、`startedAt`、结算后的 `completedAt`、`turns`、`toolCalls`，以及失败或
@@ -581,17 +590,56 @@ Frontmatter 新增 `permission: inherit | ask | accept-edits | auto`（默认
 
 **委托生命周期（D328）。** 运行时不再用空闲或总时长掐死委托。
 `idle-timeout` / `max-duration` 仍会解析以便旧文档能加载，但不会被武装。
-委托一直跑到自己结束、碰到显式 `maxTurns`、失败、被 `TaskStop`，或用户
+委托一直跑到自己结束、失败、被 `TaskStop`，或用户
 Stop / 运行时销毁。主 Agent 用 `TaskStop` 判断要不要取消；运行中只能看到
 一行心跳（谁、状态、已用时、轮数、最后工具）。
 
 当父级在委托仍在跑时停止调用工具，运行时吞掉这次 `agent_end`，保持持久
 回合打开，等委托完成后再把报告塞回父级。父级收工不会中止它们。
 
-致命的 provider/stream 错误（包括耗尽的 HTTP 429）、父级中止以及显式的
-`maxTurns`，仍分别保留它们既有的 `failed`、`aborted` 和 `truncated` 结果。
+致命的 provider/stream 错误（包括耗尽的 HTTP 429）、父级中止，仍分别保留它们既有的
+`failed` 和 `aborted` 结果。
 父级终态错误还会中止残留委托、跳过续跑提示，并把会话恢复为空闲，这样
 “继续”不会变成 `AGENT_BUSY`（D352）。
+
+**可恢复的委托（ADR 0279）。** `Task` 接受一个可选的 `resume` 参数，携带同一会话中
+某个已结算委托的 `delegationId`。恢复后的委托是一个新的 `SubagentRun`，以该链此前的
+消息为种子 —— 最初的 `task` 简述，加上这条链产出的每一行 —— 然后再以新的 `task`
+提示它，于是一个已经读过或改过某个文件的委托会从那份上下文继续，而不是从零开始。
+种子完全由 transcript 支撑：链的行恰好是那些 `parentToolCallId` 属于该链某个 `Task`
+调用的行，它们用委托自己的绑定（固定的委托模型未必是会话模型）转换成 provider 消息。
+不保活任何内存对象，也不引入新的事件类型、存储 schema 或工具参数。
+
+一条链是共享同一个委托会话的那些 `Task` 调用的序列：第一次调用，加上此后每一个把更早
+的 `delegationId` 当作 `resume` 传入的调用。运行时在启动时从持久化的 transcript 重建
+链索引 —— 每个 `Task` 行都在 `toolResult.details` 里带着自己的 `delegationId` 与结算
+状态、在 `toolArgs.resume` 里带着被恢复的 id，并在重建时归一化 agent 名 —— 因此可恢复性
+能挺过一次 sidecar 重启。链的身份（`delegateSessionId`）始终留在内部；父级只会传
+`delegationId`，由反向映射解析它。
+
+只有 `completed` 与 `failed` 的链可恢复；`stopped` 和 `aborted` 的运行是终态，只能靠
+新建委托重来；而应用在它还在工作时被关掉的那种运行会重建成 `interrupted`，同样不可
+恢复。只读工具输出超过 `MAX_RESUMABLE_READ_LINES`（50000）的链会从可复用清单里消失，
+且不做链内裁剪，因此恢复绝不会悄悄丢掉历史。注册表按定义名最多保留
+`MAX_RESUMABLE_CHAINS_PER_AGENT`（2）条可复用链，并在每次委托结算时淘汰最久未活动的
+那些；仍在工作的链永不淘汰，所以这个上限只算可复用链，活跃链可以让它暂时超出。
+
+恢复严格限定在同一会话内，且从不排队：对正在运行的委托做恢复是一个工具错误，提示父级
+先用 `TaskWait` 收敛；一条链在任何时刻最多只有一条活跃记录。`model` 与 `resume` 同时
+给出会被拒绝，而恢复后的运行会沿用该链记录的绑定：优先使用链解析出的
+`providerId/modelId` 键，从 transcript 重建的链则按模型 id 匹配；当什么都匹配不上时，
+运行会继续使用定义当前的绑定，并把先前的模型 id 记进它生命周期 details 的
+`modelChangedFrom`。有意换模型意味着新建一个委托。未知 id、属于另一个定义的 id、
+不可恢复的状态、超出读预算的链，以及行已经不在的链，各自返回一个说明原因的工具错误；
+对未知 id，还会一并列出当前可复用的 id。
+
+父级通过系统提示发现可复用的链：那里列出每条链最新的 `delegationId`、它的目标，以及它
+读过的文件最多 `MAX_RESUMABLE_LISTED_FILES`（8）个（超出部分带 `(+N more)` 后缀）。
+清单会在委托结算时围绕既有的提示段落重新组装。对 `MAX_SUBAGENT_CONCURRENCY`、
+`TaskWait`、`TaskList`、`TaskStop` 以及生命周期快照而言，恢复来的运行就是一个普通
+委托。`Task` 的立即返回结果与生命周期 details 会增加 `resumedFrom` 以便追溯；
+transcript 把一条链渲染成它最新 `Task` 卡片下的一段连续多轮对话，不带单独的
+“已恢复”标记。
 
 **模型引脚。** Frontmatter 中的 `model: <provider>/<model>` 在每次启动时于
 Electron main 里解析一次——凭据与 models.dev 快照都在那里——匹配提供商 id、
@@ -688,9 +736,10 @@ Composer 增强使用与 agent 请求相同的已解析提供商绑定和重试�
 
 ### 6.2 OpenCode 会话路由标头
 
-对话、子代理、提示增强以及插件的一次性补全，只要其提供商满足下列任一条件——
-`apiStyle` 为 `opencode_go`、`vendorKey` 为 `opencode` 或 `opencode-go`、
-pi-ai 提供商 id 为上述值之一，或 base URL 的主机为 `opencode.ai`——都会发送：
+对话、子代理、上下文压缩摘要、提示增强以及插件的一次性补全，只要其提供商满足
+下列任一条件——`apiStyle` 为 `opencode_go`、`vendorKey` 为 `opencode` 或
+`opencode-go`、pi-ai 提供商 id 为上述值之一，或 base URL 的主机为
+`opencode.ai`——都会发送：
 
 - `x-opencode-session`：持久的对话 id；调用方没有会话时则为一个按次生成的 UUID
 - `x-opencode-client: pi-desktop`
@@ -702,6 +751,11 @@ pi-ai 提供商 id 为上述值之一，或 base URL 的主机为 `opencode.ai`�
 默认值，也优先于适配器的最后写入。保留键无法冲掉 `x-opencode-session`。这属于
 agent 运行时的职责，与官方 Pi 编码 agent 的归属层保持一致；pi-ai 的 `sessionId`
 流选项并不会发出 `x-opencode-session`。
+
+上下文压缩摘要同样是这一类提供商请求，但 harness 会自行组装其流选项，不会经过
+会话的 stream 函数，因此 agent 运行时把这次标头合并应用到交给压缩的模型集合
+上。该请求携带会话自己的对话 id，而不是 harness 否则会生成的按次 id，这样摘要
+就与它所压缩的对话落在同一个网关后端。
 
 
 ## 7. 系统提示组成

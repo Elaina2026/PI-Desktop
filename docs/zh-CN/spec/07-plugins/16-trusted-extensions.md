@@ -246,6 +246,7 @@ v1 不改任何 host-core RPC 方法、协议版本或 SQLite schema。
 | `extensions.commands.publish` | 替换会话已注册的命令列表 |
 | `extensions.ui.request` | §9 中的一次交互或状态调用 |
 | `extensions.diagnostics.publish` | 替换会话的诊断列表 |
+| `extensions.model.configure` | 校验插件自有的 provider/模型绑定，经 `session.configure` 持久化，然后广播 `session:modelChanged` |
 | `session.rename`、`session.create`、`session.fork`、`session.queuePush`、`session.queuePrioritize` | 已有方法，现可从适配层到达 |
 
 ### 10.2 main ↔ 渲染层（Electron IPC）
@@ -282,6 +283,7 @@ main 在 `logs/app/plugin.log` 审计每个提示 id。
 | v1 | loader、每会话 Runner、支持矩阵、事件、工具、命令、UI 桥接 | 已交付（D387） |
 | v1.1 | 模块成为带 `agent.extension` 授权的 `contributes.agentExtensions`；把 pi CLI 扩展导入为开发插件；独立注册表和设置标签移除 | 已交付（D388） |
 | v2 | 自定义会话条目（`sendMessage`、`appendEntry`）含 schema 升版和通用渲染、`sessionManager` 只读 shim、`switchSession`、编辑器读写、补全 provider、`registerShortcut`、markdown 转换器 | 已规划，需先决定条目持久化与压缩 |
+| v2 | 自定义会话条目（`sendMessage`、`appendEntry`）与一次 schema 升级及通用渲染层、`sessionManager` 只读 shim、`switchSession`、编辑器读写、自动补全 provider、`registerShortcut`、markdown 转换器 | 计划中，需要就条目持久化与压缩作出决定 |
 | v3 | `pi` 包 manifest 与安装、pi CLI `settings.json` 的只读提示、统一 skill 与提示发现、提示的远程控制路由、市场列出 | 未排期 |
 
 v1 交付顺序：打包 spike（E2E-245）、shared 协议类型，然后运行时、main、渲染层
