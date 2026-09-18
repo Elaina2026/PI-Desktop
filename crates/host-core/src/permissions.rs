@@ -252,7 +252,7 @@ impl PermissionManager {
             return Some(PermissionDecision::AllowOnce);
         }
         let mode_allows = match permission_mode {
-            "auto" => true,
+            "bypass" | "auto" => true,
             "accept-edits" => matches!(tool_name, "Write" | "Edit"),
             _ => false,
         };

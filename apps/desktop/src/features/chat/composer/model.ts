@@ -4,6 +4,9 @@ import type {
   PermissionMode,
   ProviderPublic,
   ThinkingLevel,
+  UnifiedModeId,
+  resolveUnifiedMode,
+  unifiedModeToSessionConfig,
 } from "@pi-desktop/shared";
 import {
   modelIdsMatch,
@@ -35,11 +38,58 @@ export const MODE_LABEL_KEYS: Record<Mode, string> = {
   goal: "settings.modeGoal",
 };
 
+export type UnifiedModeDefinition = {
+  id: UnifiedModeId;
+  labelKey: string;
+  descKey: string;
+  defaultLabel: string;
+  defaultDesc: string;
+};
+
+export const UNIFIED_MODES: readonly UnifiedModeDefinition[] = [
+  {
+    id: "manual",
+    labelKey: "mode.manual",
+    descKey: "mode.manualDesc",
+    defaultLabel: "Manual",
+    defaultDesc: "Claude will ask for approval before making each edit",
+  },
+  {
+    id: "edit-auto",
+    labelKey: "mode.editAuto",
+    descKey: "mode.editAutoDesc",
+    defaultLabel: "Edit automatically",
+    defaultDesc: "Claude will edit your selected text or the whole file",
+  },
+  {
+    id: "plan",
+    labelKey: "mode.plan",
+    descKey: "mode.planDesc",
+    defaultLabel: "Plan",
+    defaultDesc: "Claude will explore the code and present a plan before editing",
+  },
+  {
+    id: "auto",
+    labelKey: "mode.auto",
+    descKey: "mode.autoDesc",
+    defaultLabel: "Auto",
+    defaultDesc: "Claude will approve actions that pass a safety check and pause for anything risky",
+  },
+  {
+    id: "bypass",
+    labelKey: "mode.bypass",
+    descKey: "mode.bypassDesc",
+    defaultLabel: "Bypass permissions",
+    defaultDesc: "Claude will bypass permission checks and execute actions autonomously",
+  },
+] as const;
+
 export const PERMISSION_MODE_I18N_KEYS: Record<PermissionMode, string> = {
   inherit: "chat.permissionInherit",
   ask: "chat.permissionAsk",
   "accept-edits": "chat.permissionAcceptEdits",
   auto: "chat.permissionAuto",
+  bypass: "settings.permissionModeBypass",
 };
 
 export const THINKING_LEVELS: readonly ThinkingLevel[] = [

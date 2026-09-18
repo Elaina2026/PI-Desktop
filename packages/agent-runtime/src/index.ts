@@ -19,6 +19,7 @@ export * from "./session-title-summarize.js";
 export * from "./stream-coalescer.js";
 export * from "./extensions/index.js";
 export * from "./compression-prompts.js";
+export * from "./deep-research.js";
 export * from "./rtk-compressor.js";
 export * from "./provider-retry.js";
 export * from "./antigravity.js";

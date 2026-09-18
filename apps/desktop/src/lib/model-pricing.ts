@@ -78,14 +78,40 @@ export const BASE_MODEL_RATES: Record<string, ModelRate> = {
   "llama-4-scout": { input: 0.27, output: 0.85, cacheRead: 0.05, cacheWrite: 0 },
 
   // Grok
+  "grok-2": { input: 2.00, output: 10.00, cacheRead: 0.50, cacheWrite: 0 },
+  "grok-3": { input: 3.00, output: 15.00, cacheRead: 0.75, cacheWrite: 0 },
   "grok-4.5": { input: 2.00, output: 6.00, cacheRead: 0.50, cacheWrite: 0 },
   "grok-4.6": { input: 2.00, output: 6.00, cacheRead: 0.50, cacheWrite: 0 },
+
+  // Mistral
+  "codestral": { input: 0.30, output: 0.90, cacheRead: 0.06, cacheWrite: 0 },
+  "mistral-large": { input: 2.00, output: 6.00, cacheRead: 0.50, cacheWrite: 0 },
+  "mistral-small": { input: 0.20, output: 0.60, cacheRead: 0.05, cacheWrite: 0 },
+
+  // Xiaomi MiMo
+  "mimo": { input: 0.20, output: 0.80, cacheRead: 0.04, cacheWrite: 0 },
+  "mimo-v1": { input: 0.20, output: 0.80, cacheRead: 0.04, cacheWrite: 0 },
+
+  // Antigravity & Special Models
+  "gpt-oss-120b": { input: 0.40, output: 1.20, cacheRead: 0.08, cacheWrite: 0 },
+  "gemini-3.1-flash-image": { input: 0.15, output: 0.60, cacheRead: 0.0375, cacheWrite: 0 },
+  "claude-3-7-sonnet-thinking": { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 },
 };
 
 export function resolveModelRate(modelId?: string | null): ModelRate {
   if (!modelId) return { input: 1.0, output: 4.0, cacheRead: 0.1, cacheWrite: 0 };
   const clean = modelId.trim().toLowerCase();
   const shortId = clean.includes("/") ? clean.split("/").pop()! : clean;
+
+  // Local models (Ollama, LM Studio) run on local hardware with zero API token cost
+  if (
+    clean.includes("ollama") ||
+    clean.includes("lmstudio") ||
+    clean.includes("local") ||
+    shortId.startsWith("ollama")
+  ) {
+    return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  }
 
   if (BASE_MODEL_RATES[clean]) return BASE_MODEL_RATES[clean];
   if (BASE_MODEL_RATES[shortId]) return BASE_MODEL_RATES[shortId];

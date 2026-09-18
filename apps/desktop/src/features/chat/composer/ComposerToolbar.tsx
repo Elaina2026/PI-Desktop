@@ -6,6 +6,9 @@ import {
   type PermissionMode,
   type ShortcutPlatform,
   type ThinkingLevel,
+  type UnifiedModeId,
+  resolveUnifiedMode,
+  unifiedModeToSessionConfig,
 } from "@pi-desktop/shared";
 import { useAppStore, type AppState } from "../../../stores/app-store";
 import { computeTokenCost, resolveModelRate } from "../../../lib/model-pricing";
@@ -23,11 +26,12 @@ import {
   IconStop,
   IconUndo2,
 } from "../../../components/icons";
-import { ModeIcon } from "./ComposerModeIcon";
+import { ModeIcon, UnifiedModeIcon } from "./ComposerModeIcon";
 import { ComposerModelPicker } from "./ComposerModelPicker";
 import {
   MODE_LABEL_KEYS,
   PERMISSION_MODE_I18N_KEYS,
+  UNIFIED_MODES,
   nextMode,
 } from "./model";
 import type { useComposerModelMenu } from "./hooks/useComposerModelMenu";
@@ -108,8 +112,11 @@ export function ComposerToolbar({
   submit,
 }: ComposerToolbarProps) {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
-  const [modeOpen, setModeOpen] = useState(false);
+  const [unifiedModeOpen, setUnifiedModeOpen] = useState(false);
   const messages = useAppStore((s) => s.messages);
+  const currentUnifiedId = resolveUnifiedMode(mode, composerPermissionMode);
+  const currentUnifiedDef =
+    UNIFIED_MODES.find((d) => d.id === currentUnifiedId) ?? UNIFIED_MODES[0];
   const sessionCost = useMemo(() => {
     let total = 0;
     for (const m of messages) {
@@ -147,7 +154,7 @@ export function ComposerToolbar({
                 aria-expanded={addMenuOpen}
                 onClick={() => {
                   modelMenu.setOpen(false);
-                  setModeOpen(false);
+                  setUnifiedModeOpen(false);
                   setPermissionOpen(false);
                   setAddMenuOpen((open) => !open);
                 }}
@@ -198,10 +205,10 @@ export function ComposerToolbar({
         </AnchoredMenu>
         <AnchoredMenu
           className="composer-mode-anchor"
-          open={modeOpen}
-          onClose={() => setModeOpen(false)}
-          menuClassName="composer-permission-menu composer-mode-menu"
-          label={t("settings.mode")}
+          open={unifiedModeOpen}
+          onClose={() => setUnifiedModeOpen(false)}
+          menuClassName="composer-unified-mode-menu"
+          label={t("settings.mode", "Mode")}
           role="menu"
           align="start"
           side="top"
@@ -210,140 +217,82 @@ export function ComposerToolbar({
               ref={ref}
               type="button"
               className="icon-btn mode-chip composer-mode-chip"
-              data-mode={mode}
-              data-open={modeOpen ? "true" : undefined}
+              data-mode={currentUnifiedId}
+              data-open={unifiedModeOpen ? "true" : undefined}
               data-planning={planningLive ? "true" : undefined}
-              tooltip={planningLive ? t(`${mode}.planning`) : t("settings.mode")}
-              ariaLabel={planningLive ? t(`${mode}.planning`) : t("settings.mode")}
-              disabled={controlsBlocked}
-              aria-haspopup="menu"
-              aria-expanded={modeOpen}
-              onClick={() => {
-                modelMenu.setOpen(false);
-                setAddMenuOpen(false);
-                setPermissionOpen(false);
-                setModeOpen((open) => !open);
-              }}
-            >
-              <span className="composer-mode-chip-face" key={mode}>
-                <ModeIcon mode={mode} />
-                <span className="composer-mode-chip-label text-sm">
-                  {t(MODE_LABEL_KEYS[mode])}
-                </span>
-              </span>
-            </TooltipButton>
-          )}
-        >
-          {(["agent", "plan", "goal"] as const).map((candidate) => (
-            <button
-              key={candidate}
-              type="button"
-              role="menuitemradio"
-              aria-checked={mode === candidate}
-              disabled={controlsBlocked}
-              className={`composer-plus-item ${mode === candidate ? "active" : ""}`}
-              onClick={async () => {
-                setModeOpen(false);
-                try {
-                  await configureActiveSession({
-                    mode: candidate,
-                    providerId,
-                    modelId,
-                    thinkingLevel,
-                  });
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : String(error), {
-                    variant: "error",
-                  });
-                }
-              }}
-            >
-              <span className="composer-model-thinking-icon">
-                <ModeIcon mode={candidate} />
-              </span>
-              <span className="flex-1 text-left">
-                {t(MODE_LABEL_KEYS[candidate])}
-              </span>
-              {mode === candidate ? <IconCheck size={13} /> : null}
-            </button>
-          ))}
-        </AnchoredMenu>
-        <AnchoredMenu
-          className="composer-permission"
-          open={permissionOpen && mode !== "goal"}
-          onClose={() => setPermissionOpen(false)}
-          menuClassName="composer-permission-menu"
-          label={t("chat.permissionMode")}
-          role="menu"
-          align="start"
-          side="top"
-          trigger={(ref) => (
-            <TooltipButton
-              ref={ref}
-              type="button"
-              className={`icon-btn mode-chip ${permissionOpen ? "active" : ""}`}
               tooltip={
-                mode === "goal"
-                  ? `${t("chat.permissionMode")} · ${t("goal.autoWarning")}`
-                  : mode === "plan" && composerPermissionMode === "auto"
-                    ? `${t("chat.permissionMode")} · ${t("plan.autoWarning")}`
-                    : t("chat.permissionMode")
+                planningLive
+                  ? t(`${mode}.planning`)
+                  : t(currentUnifiedDef.labelKey, currentUnifiedDef.defaultLabel)
               }
               ariaLabel={
-                mode === "goal"
-                  ? `${t("chat.permissionMode")} · ${t("goal.autoWarning")}`
-                  : mode === "plan" && composerPermissionMode === "auto"
-                    ? `${t("chat.permissionMode")} · ${t("plan.autoWarning")}`
-                    : t("chat.permissionMode")
+                planningLive
+                  ? t(`${mode}.planning`)
+                  : t(currentUnifiedDef.labelKey, currentUnifiedDef.defaultLabel)
               }
-              aria-haspopup={mode === "goal" ? undefined : "menu"}
-              aria-expanded={mode === "goal" ? false : permissionOpen}
-              disabled={controlsBlocked || mode === "goal"}
+              disabled={controlsBlocked}
+              aria-haspopup="menu"
+              aria-expanded={unifiedModeOpen}
               onClick={() => {
                 modelMenu.setOpen(false);
-                setModeOpen(false);
                 setAddMenuOpen(false);
-                setPermissionOpen((open) => !open);
+                setPermissionOpen(false);
+                setUnifiedModeOpen((open) => !open);
               }}
             >
-              <span className="text-sm">
-                {t(PERMISSION_MODE_I18N_KEYS[composerPermissionMode])}
+              <span className="composer-mode-chip-face" key={currentUnifiedId}>
+                <UnifiedModeIcon unifiedMode={currentUnifiedId} />
+                <span className="composer-mode-chip-label text-sm">
+                  {t(currentUnifiedDef.labelKey, currentUnifiedDef.defaultLabel)}
+                </span>
+                <IconChevronDown size={11} style={{ opacity: 0.7, marginLeft: 2 }} />
               </span>
-              <IconChevronDown size={12} />
             </TooltipButton>
           )}
         >
-          {(["ask", "accept-edits", "auto"] as const).map((candidate) => (
-            <button
-              key={candidate}
-              type="button"
-              role="menuitemradio"
-              aria-checked={composerPermissionMode === candidate}
-              disabled={controlsBlocked}
-              className={`composer-plus-item ${composerPermissionMode === candidate ? "active" : ""}`}
-              onClick={async () => {
-                setPermissionOpen(false);
-                try {
-                  await configureActiveSession({
-                    mode,
-                    providerId,
-                    modelId,
-                    thinkingLevel,
-                    permissionMode: candidate,
-                  });
-                } catch (error) {
-                  showToast(error instanceof Error ? error.message : String(error), {
-                    variant: "error",
-                  });
-                }
-              }}
-            >
-              <span className="flex-1 text-left">
-                {t(PERMISSION_MODE_I18N_KEYS[candidate])}
-              </span>
-              {composerPermissionMode === candidate ? <IconCheck size={13} /> : null}
-            </button>
-          ))}
+          {UNIFIED_MODES.map((candidate) => {
+            const isSelected = currentUnifiedId === candidate.id;
+            return (
+              <button
+                key={candidate.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={isSelected}
+                disabled={controlsBlocked}
+                className={`composer-unified-mode-item ${isSelected ? "active" : ""}`}
+                onClick={async () => {
+                  setUnifiedModeOpen(false);
+                  const targetConfig = unifiedModeToSessionConfig(candidate.id);
+                  try {
+                    await configureActiveSession({
+                      mode: targetConfig.mode,
+                      permissionMode: targetConfig.permissionMode,
+                      providerId,
+                      modelId,
+                      thinkingLevel,
+                    });
+                  } catch (error) {
+                    showToast(error instanceof Error ? error.message : String(error), {
+                      variant: "error",
+                    });
+                  }
+                }}
+              >
+                <div className="composer-unified-mode-icon">
+                  <UnifiedModeIcon unifiedMode={candidate.id} size={15} />
+                </div>
+                <div className="composer-unified-mode-text">
+                  <div className="composer-unified-mode-title">
+                    {t(candidate.labelKey, candidate.defaultLabel)}
+                  </div>
+                  <div className="composer-unified-mode-desc">
+                    {t(candidate.descKey, candidate.defaultDesc)}
+                  </div>
+                </div>
+                {isSelected ? <IconCheck size={14} className="composer-unified-mode-check" /> : null}
+              </button>
+            );
+          })}
         </AnchoredMenu>
       </div>
 
@@ -360,7 +309,7 @@ export function ComposerToolbar({
           controlsBlocked={controlsBlocked}
           onCloseOtherMenus={() => {
             setPermissionOpen(false);
-            setModeOpen(false);
+            setUnifiedModeOpen(false);
             setAddMenuOpen(false);
           }}
         />

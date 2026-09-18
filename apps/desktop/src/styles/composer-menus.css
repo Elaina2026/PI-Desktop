@@ -67,6 +67,91 @@
   visibility: hidden;
 }
 
+.composer-unified-mode-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: auto;
+  bottom: auto;
+  z-index: 60;
+  width: min(340px, calc(100vw - 24px));
+  max-height: min(520px, calc(100vh - 92px));
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: var(--radius-lg);
+  background: var(--ds-bg-elevated-opaque);
+  box-shadow: var(--ds-shadow-dialog);
+  border: 1px solid var(--ds-border-subtle);
+  color: var(--ds-text-primary);
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.composer-unified-mode-menu.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
+}
+
+.composer-unified-mode-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 0;
+  background: transparent;
+  color: var(--ds-text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast, 150ms) ease;
+}
+
+.composer-unified-mode-item:hover,
+.composer-unified-mode-item.active {
+  background: var(--ds-tile-hover);
+}
+
+.composer-unified-mode-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+  color: var(--ds-text-muted);
+  flex-shrink: 0;
+}
+
+.composer-unified-mode-item.active .composer-unified-mode-icon {
+  color: var(--ds-accent);
+}
+
+.composer-unified-mode-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.composer-unified-mode-title {
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--ds-text-primary);
+  line-height: var(--leading-tight, 1.25);
+}
+
+.composer-unified-mode-desc {
+  font-size: var(--text-xs);
+  color: var(--ds-text-muted);
+  line-height: var(--leading-normal, 1.4);
+  margin-top: 2px;
+}
+
+.composer-unified-mode-check {
+  margin-top: 4px;
+  color: var(--ds-accent);
+  flex-shrink: 0;
+}
+
 .composer-model-menu {
   position: fixed;
   top: 0;

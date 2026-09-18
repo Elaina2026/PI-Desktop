@@ -52,7 +52,7 @@ fn default_thinking_level() -> String {
 
 /// Per-session permission mode (D115). `inherit` defers to the global
 /// default in settings; the rest override it for this session only.
-pub const PERMISSION_MODES: [&str; 4] = ["inherit", "ask", "accept-edits", "auto"];
+pub const PERMISSION_MODES: [&str; 5] = ["inherit", "ask", "accept-edits", "auto", "bypass"];
 
 pub fn is_valid_permission_mode(mode: &str) -> bool {
     PERMISSION_MODES.contains(&mode)

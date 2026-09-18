@@ -30,6 +30,8 @@ import {
   Copy,
   Dot,
   ExternalLink,
+  Eye,
+  EyeOff,
   FileDiff,
   FileSpreadsheet,
   FileText,
@@ -40,6 +42,7 @@ import {
   Globe2,
   GitFork,
   GitPullRequestArrow,
+  Hand,
   Image,
   Info,
   Keyboard,
@@ -86,6 +89,7 @@ import {
   Terminal,
   Trash2,
   TriangleAlert,
+  Unlock,
   UserRound,
   Undo2,
   Video,
@@ -93,6 +97,7 @@ import {
   Workflow,
   Wrench,
   X,
+  Zap,
   type LucideIcon,
   type LucideProps,
 } from "lucide-react";
@@ -215,6 +220,11 @@ export const IconKey = icon(KeyRound);
 export const IconLogOut = icon(LogOut);
 export const IconSparkles = icon(Sparkles);
 export const IconListChecks = icon(ListChecks);
+export const IconHand = icon(Hand);
+export const IconZap = icon(Zap);
+export const IconUnlock = icon(Unlock);
+export const IconEye = icon(Eye);
+export const IconEyeOff = icon(EyeOff);
 /** Goal mode: an outcome to reach, as opposed to Plan's list of steps. */
 export const IconTarget = icon(Target);
 export const IconBrowser = icon(AppWindow);

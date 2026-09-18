@@ -50,6 +50,17 @@ export async function runPaletteCommand(commandId: string): Promise<void> {
       }
       break;
     }
+    case "builtin.research": {
+      const inputEl = document.querySelector(".composer-input") as HTMLTextAreaElement | null;
+      if (inputEl) {
+        inputEl.focus();
+        if (!inputEl.value.trim()) {
+          inputEl.value = "/research ";
+          inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }
+      break;
+    }
     case "builtin.mode.agent":
     case "builtin.mode.plan":
     case "builtin.mode.goal": {

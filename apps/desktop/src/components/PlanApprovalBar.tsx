@@ -35,16 +35,18 @@ const APPROVAL_MODE_LABELS: Record<GlobalPermissionMode, string> = {
   ask: "ask",
   "accept-edits": "acceptEdits",
   auto: "auto",
+  bypass: "auto",
 };
 
 const APPROVE_LABELS: Record<GlobalPermissionMode, string> = {
   ask: "approveAsk",
   "accept-edits": "approveAcceptEdits",
   auto: "approveAuto",
+  bypass: "approveAuto",
 };
 
 function isApprovalMode(value: string | undefined): value is GlobalPermissionMode {
-  return value === "ask" || value === "accept-edits" || value === "auto";
+  return value === "ask" || value === "accept-edits" || value === "auto" || value === "bypass";
 }
 
 /** `plan.reject` or `goal.reject`, chosen by the approved contract kind. */

@@ -10,6 +10,7 @@ export type SettingsTabId =
   | "ai"
   | "shortcuts"
   | "usages"
+  | "quota"
   | "instructions"
   | "agent"
   | "skills"
@@ -59,6 +60,21 @@ export const SETTINGS_NAV: SettingsNavEntry[] = [
       "settings.usageTimeframes",
       "settings.usageModels",
       "settings.usageCostUsd",
+    ],
+  },
+  {
+    id: "quota",
+    labelKey: "settings.nav.quota",
+    titleKey: "settings.quotaTracker",
+    group: "preferences",
+    keywordKeys: [
+      "settings.quotaTracker",
+      "settings.quotas",
+      "settings.quotaRemaining",
+      "settings.quotaResetsIn",
+      "settings.antigravity",
+      "settings.gemini",
+      "settings.claude",
     ],
   },
   {

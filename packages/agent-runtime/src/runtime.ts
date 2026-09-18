@@ -169,6 +169,7 @@ import {
   projectMemoryPrompt,
 } from "./project-memory-prompt.js";
 import { executeWebSearch, executeWebFetch } from "./web-tools.js";
+import { executeDeepResearch } from "./deep-research.js";
 import { executeImageGeneration } from "./image-tools.js";
 import {
   pluginSkillsPrompt,
@@ -595,6 +596,7 @@ const AGENT_CORE_TOOL_NAMES = new Set([
   "Bash",
   "WebSearch",
   "WebFetch",
+  "DeepResearch",
   "GenerateImage",
   ASK_TOOL_NAME,
   // The slash menu answers a user-invoked `/skill-id` with an instruction to
@@ -3357,6 +3359,31 @@ Delegation rules:
       },
     };
 
+    const deepResearchTool: AgentTool = {
+      name: "DeepResearch",
+      label: "Deep research",
+      description:
+        "Execute multi-stage autonomous research on a complex technical or analytical topic. Expands the query, fans out across web searches in parallel, fetches full web contents, and synthesizes an executive research dossier with verified numbered citations.",
+      parameters: Type.Object({
+        topic: Type.String({ description: "Comprehensive research topic, technology, or question to investigate" }),
+        maxSources: Type.Optional(Type.Integer({ minimum: 3, maximum: 12, description: "Maximum primary sources to fetch and cross-reference (default 6, max 12)" })),
+      }),
+      executionMode: "sequential",
+      execute: async (_toolCallId, params) => {
+        const { topic, maxSources } = (params ?? {}) as { topic?: string; maxSources?: number };
+        try {
+          const report = await executeDeepResearch({ topic: topic ?? "", maxSources });
+          return { content: [{ type: "text", text: report }], details: { topic, maxSources } };
+        } catch (error) {
+          return {
+            content: [{ type: "text", text: `DeepResearch failed: ${error instanceof Error ? error.message : String(error)}` }],
+            details: { error: String(error) },
+            isError: true,
+          };
+        }
+      },
+    };
+
     const generateImageTool: AgentTool = {
       name: "GenerateImage",
       label: "Generate image",
@@ -3592,6 +3619,7 @@ Delegation rules:
       askTool,
       webSearchTool,
       webFetchTool,
+      deepResearchTool,
       generateImageTool,
       rememberTool,
       forgetTool,
@@ -3666,6 +3694,7 @@ Delegation rules:
       "Bash",
       "WebSearch",
       "WebFetch",
+      "DeepResearch",
       ASK_TOOL_NAME,
       CONTEXT_COMPACTION_TOOL_NAME,
       SUBMIT_TOOL_NAMES[kind],
@@ -3694,6 +3723,7 @@ Delegation rules:
               "BrowserPreview",
               "WebSearch",
               "WebFetch",
+              "DeepResearch",
               ASK_TOOL_NAME,
             ]).has(name) || this.isPlanSafePluginTool(name)
           : CHAT_CORE_TOOL_NAMES.has(name))

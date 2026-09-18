@@ -533,7 +533,7 @@ export function registerSessionIpc({
         providerId?: string;
         modelId?: string;
         thinkingLevel?: ThinkingLevel;
-        permissionMode?: "inherit" | "ask" | "accept-edits" | "auto";
+        permissionMode?: "inherit" | "ask" | "accept-edits" | "auto" | "bypass";
       },
     ) => {
       rejectNativeMutation(id, "configuration");

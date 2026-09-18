@@ -34,6 +34,7 @@ import { Button, cx } from "../../components/ui";
 import { AnchoredMenu } from "../../components/settings/AnchoredMenu";
 import { ModelConfigPage } from "../../components/settings/ModelConfigPage";
 import { UsagesPage } from "../../components/settings/UsagesPage";
+import { QuotaTrackerPage } from "./QuotaTrackerPage";
 import { KeyboardShortcutsSection } from "../../components/settings/KeyboardShortcutsSection";
 import { FontFamilyRow } from "../../components/settings/FontFamilyRow";
 import { FontSizeRow } from "../../components/settings/FontSizeRow";
@@ -180,6 +181,7 @@ export function SettingsPage() {
     const iconFor: Record<SettingsTab, ReactNode> = {
       // Semantic Lucide glyphs for the settings destinations.
       usages: <IconActivity size={14} />,
+      quota: <IconActivity size={14} />,
       general: <IconSliders size={14} />,
       ai: <IconSparkles size={14} />,
       shortcuts: <IconKeyboard size={14} />,
@@ -370,6 +372,10 @@ export function SettingsPage() {
                         label: t("settings.permissionModeAcceptEdits"),
                       },
                       { id: "auto", label: t("settings.permissionModeAuto") },
+                      {
+                        id: "bypass",
+                        label: t("settings.permissionModeBypass", "Bypass permissions"),
+                      },
                     ]}
                   />
                 </SettingsRow>
@@ -515,6 +521,8 @@ export function SettingsPage() {
           )}
 
           {tab === "usages" && <UsagesPage />}
+
+          {tab === "quota" && <QuotaTrackerPage />}
 
           {tab === "agent" && <ModelConfigPage />}
 
