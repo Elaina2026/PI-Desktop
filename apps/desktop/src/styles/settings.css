@@ -3248,6 +3248,330 @@
   color: var(--ds-warning);
 }
 
+/* ── Quota Tracker Page ─────────────────────────────────────────────────── */
+.quota-tracker-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 60rem;
+}
+
+.quota-tracker-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.quota-tracker-header-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quota-tracker-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--ds-text-primary);
+}
+
+.quota-tracker-desc {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ds-text-muted);
+  line-height: var(--leading-normal);
+}
+
+.quota-tracker-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.quota-account-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 36px 24px;
+  text-align: center;
+  border-radius: var(--radius-lg);
+  background: var(--ds-tile);
+  border: 1px solid var(--ds-border-subtle);
+}
+
+.quota-account-empty-icon {
+  margin-bottom: 12px;
+  color: var(--ds-text-muted);
+  opacity: 0.5;
+}
+
+.quota-account-empty-title {
+  font-size: var(--text-sm-plus);
+  font-weight: var(--font-weight-semibold);
+  color: var(--ds-text-primary);
+}
+
+.quota-account-empty-desc {
+  font-size: var(--text-xs);
+  color: var(--ds-text-muted);
+  margin-top: 6px;
+  max-width: 46ch;
+  line-height: var(--leading-normal);
+}
+
+.quota-account-empty-cta {
+  margin-top: 16px;
+}
+
+.quota-accounts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.quota-account-card {
+  padding: 16px 20px;
+  border-radius: var(--radius-lg);
+  background: var(--ds-bg-secondary);
+  border: 1px solid var(--ds-border-subtle);
+  box-shadow: var(--ds-shadow-dialog);
+}
+
+.quota-account-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--ds-border-subtle);
+  gap: 12px;
+}
+
+.quota-account-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.quota-account-name {
+  font-size: var(--text-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--ds-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quota-account-email {
+  font-size: var(--text-xs);
+  color: var(--ds-text-muted);
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quota-account-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.quota-delete-btn {
+  background: var(--ds-error);
+  border-color: var(--ds-error);
+  color: #fff;
+}
+
+.quota-delete-btn:hover {
+  background: color-mix(in oklab, var(--ds-error) 85%, #000);
+}
+
+.quota-delete-icon-btn {
+  color: var(--ds-error);
+}
+
+.quota-delete-icon-btn:hover {
+  color: var(--ds-error);
+  background: color-mix(in oklab, var(--ds-error) 15%, transparent);
+}
+
+.quota-buckets-count {
+  font-size: var(--text-xs);
+  color: var(--ds-text-muted);
+  font-weight: var(--font-weight-medium);
+  margin-top: 12px;
+  margin-bottom: 8px;
+}
+
+.quota-buckets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.quota-bucket-row {
+  --quota-status: var(--ds-success);
+  display: grid;
+  grid-template-columns: 14px minmax(120px, 180px) 85px 1fr 45px 105px 24px;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-out);
+}
+
+.quota-bucket-row.is-hidden {
+  opacity: 0.35;
+}
+
+.quota-bucket-row.status-warning {
+  --quota-status: var(--ds-warning);
+}
+
+.quota-bucket-row.status-error {
+  --quota-status: var(--ds-error);
+}
+
+.quota-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-round);
+  background-color: var(--quota-status);
+  box-shadow: 0 0 6px color-mix(in oklab, var(--quota-status) 40%, transparent);
+  flex-shrink: 0;
+}
+
+.quota-bucket-name {
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--ds-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.quota-bucket-ratio {
+  font-size: var(--text-2xs);
+  font-family: var(--font-mono);
+  color: var(--ds-text-muted);
+  white-space: nowrap;
+}
+
+.quota-progress-track {
+  height: 3px;
+  width: 100%;
+  min-width: 40px;
+  background-color: color-mix(in oklab, var(--ds-text-primary) 8%, transparent);
+  border-radius: var(--radius-3xs);
+  overflow: hidden;
+}
+
+.quota-progress-fill {
+  height: 100%;
+  background-color: var(--quota-status);
+  transition: width var(--motion-duration-normal) var(--motion-ease-out);
+}
+
+.quota-bucket-pct {
+  font-size: var(--text-2xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--quota-status);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.quota-bucket-reset {
+  font-size: var(--text-2xs);
+  color: var(--ds-text-muted);
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.quota-eye-btn {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  padding: 2px;
+  color: var(--ds-text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-3xs);
+  transition: color var(--motion-duration-fast);
+}
+
+.quota-eye-btn.is-hidden {
+  color: var(--ds-text-faint);
+}
+
+.quota-eye-btn:hover {
+  color: var(--ds-text-primary);
+}
+
+.quota-fallback-avatar {
+  border-radius: var(--radius-md);
+  background: var(--ds-tile-hover);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: var(--font-weight-bold);
+  font-size: var(--text-xs);
+  color: var(--ds-text-primary);
+  flex-shrink: 0;
+}
+
+.quota-simple-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  gap: 12px;
+}
+
+.quota-simple-status {
+  font-weight: var(--font-weight-semibold);
+}
+
+.quota-simple-status.status-success {
+  color: var(--ds-success);
+}
+
+.quota-simple-status.status-warning {
+  color: var(--ds-warning);
+}
+
+.quota-simple-status.status-error {
+  color: var(--ds-error);
+}
+
+.quota-loading-text {
+  font-size: var(--text-xs);
+  color: var(--ds-text-muted);
+  padding: 8px 0;
+}
+
+@media (max-width: 720px) {
+  .quota-account-card {
+    padding: 14px;
+  }
+  .quota-bucket-row {
+    grid-template-columns: 14px 1fr auto auto;
+    gap: 8px;
+  }
+  .quota-bucket-ratio,
+  .quota-progress-track,
+  .quota-eye-btn {
+    display: none;
+  }
+}
+
 .mcpm-badge.is-remote {
   background: color-mix(in oklab, var(--ds-accent) 10%, transparent);
   color: var(--ds-text-muted);

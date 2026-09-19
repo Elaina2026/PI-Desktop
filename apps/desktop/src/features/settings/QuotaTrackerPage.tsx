@@ -17,7 +17,7 @@ import {
   beginOAuthLogin,
   type OAuthLoginSession,
 } from "../../lib/oauth-login-session";
-import { TooltipButton, Button } from "../../components/ui";
+import { TooltipButton, Button, cx } from "../../components/ui";
 import {
   IconEye,
   IconEyeOff,
@@ -164,17 +164,10 @@ export function renderVendorLogo(vendor: OAuthVendor, size = 28) {
   if (vid.includes("grok") || vid.includes("xai")) return <GrokLogo size={size} />;
   return (
     <div
+      className="quota-fallback-avatar"
       style={{
         width: `${size}px`,
         height: `${size}px`,
-        borderRadius: "var(--radius-md, 6px)",
-        background: "var(--ds-tile-hover)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontWeight: "var(--font-weight-bold, 700)",
-        fontSize: "13px",
-        color: "var(--ds-text-primary)",
       }}
     >
       {vendor.name ? vendor.name[0]?.toUpperCase() : <IconBot size={Math.round(size * 0.65)} />}
@@ -369,19 +362,19 @@ export function QuotaTrackerPage() {
 
   return (
     <div className="settings-stack quota-tracker-page">
-      <div className="provider-section-head" style={{ marginBottom: "var(--spacing-md, 16px)" }}>
-        <div>
-          <h2 className="settings-card-heading" style={{ fontSize: "var(--text-lg)" }}>
+      <div className="quota-tracker-header">
+        <div className="quota-tracker-header-info">
+          <h2 className="quota-tracker-title">
             {t("settings.quotaTracker", "Quota Tracker")}
           </h2>
-          <p className="text-sm text-text-muted" style={{ marginTop: "4px" }}>
+          <p className="quota-tracker-desc">
             {t(
               "settings.quotaTrackerDesc",
               "Real-time usage quotas, fractional consumption, and countdown reset timers for AI providers.",
             )}
           </p>
         </div>
-        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+        <div className="quota-tracker-actions">
           <Button variant="secondary" onClick={refreshAll} disabled={accounts.length === 0}>
             <IconRefresh size={14} />
             <span>{t("settings.refreshAll", "Refresh All")}</span>
@@ -394,22 +387,22 @@ export function QuotaTrackerPage() {
       </div>
 
       {accounts.length === 0 ? (
-        <div className="vendor-account-empty" style={{ padding: "var(--spacing-xl, 32px)", textAlign: "center" }}>
-          <IconKey size={32} style={{ margin: "0 auto 12px", opacity: 0.5 }} />
-          <div className="font-medium">{t("settings.vendorNoAccounts", "No accounts connected yet")}</div>
-          <p className="text-sm text-text-muted" style={{ marginTop: "6px" }}>
+        <div className="quota-account-empty">
+          <IconKey size={32} className="quota-account-empty-icon" />
+          <div className="quota-account-empty-title">{t("settings.vendorNoAccounts", "No accounts connected yet")}</div>
+          <p className="quota-account-empty-desc">
             Connect Antigravity, Claude Code, GitHub Copilot, or OpenAI Codex to monitor live quotas.
           </p>
           <Button
             variant="primary"
-            style={{ marginTop: "16px" }}
+            className="quota-account-empty-cta"
             onClick={() => setPicking(true)}
           >
             {t("settings.vendorAddAccount", "Add Account")}
           </Button>
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+        <div className="quota-accounts-list">
           {accounts.map((entry) => {
             const { vendor, account } = entry;
             const provider = providers.find((c) => c.id === account.providerId);
@@ -424,41 +417,21 @@ export function QuotaTrackerPage() {
             const isConfirmingDelete = confirmDeleteId === account.providerId;
 
             return (
-              <div
-                key={account.providerId}
-                className="settings-card-block"
-                style={{
-                  padding: "16px 20px",
-                  borderRadius: "var(--radius-lg, 12px)",
-                  background: "var(--ds-bg-secondary, #212121)",
-                  border: "1px solid var(--ds-border-subtle, rgba(255, 255, 255, 0.08))",
-                  boxShadow: "var(--ds-shadow-dialog)",
-                }}
-              >
-                {/* Card Header matching Image 2 */}
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    paddingBottom: "12px",
-                    borderBottom: "1px solid var(--ds-border-subtle, rgba(255, 255, 255, 0.08))",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              <div key={account.providerId} className="quota-account-card">
+                <div className="quota-account-header">
+                  <div className="quota-account-info">
                     {renderVendorLogo(vendor, 28)}
                     <div>
-                      <div style={{ fontSize: "var(--text-base)", fontWeight: "var(--font-weight-semibold, 600)" }}>
+                      <div className="quota-account-name">
                         {vendor.name}
                       </div>
-                      <div className="text-xs text-text-muted" style={{ marginTop: "1px" }}>
+                      <div className="quota-account-email">
                         {accountEmail}
                       </div>
                     </div>
                   </div>
 
-                  {/* Actions right */}
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <div className="quota-account-actions">
                     <TooltipButton
                       type="button"
                       className="icon-btn icon-btn-square"
@@ -488,7 +461,7 @@ export function QuotaTrackerPage() {
                         <Button
                           variant="primary"
                           size="sm"
-                          style={{ background: "#ef4444", borderColor: "#ef4444" }}
+                          className="quota-delete-btn"
                           onClick={() => void handleDelete(account.providerId)}
                         >
                           {t("settings.delete")}
@@ -504,8 +477,7 @@ export function QuotaTrackerPage() {
                     ) : (
                       <TooltipButton
                         type="button"
-                        className="icon-btn icon-btn-square"
-                        style={{ color: "#ef4444" }}
+                        className="icon-btn icon-btn-square quota-delete-icon-btn"
                         tooltip={t("settings.delete")}
                         ariaLabel={t("settings.delete")}
                         onClick={() => setConfirmDeleteId(account.providerId)}
@@ -514,45 +486,20 @@ export function QuotaTrackerPage() {
                       </TooltipButton>
                     )}
 
-                    {/* Enable/Disable Switch with orange active track matching Image 2 */}
                     <button
                       type="button"
                       role="switch"
                       aria-checked={isEnabled}
                       aria-label="Toggle Provider Enabled"
-                      style={{
-                        width: "36px",
-                        height: "20px",
-                        borderRadius: "10px",
-                        background: isEnabled ? "#f97316" : "rgba(255, 255, 255, 0.15)",
-                        border: 0,
-                        padding: "2px",
-                        cursor: "pointer",
-                        position: "relative",
-                        transition: "background 0.2s ease",
-                        marginLeft: "4px",
-                      }}
+                      className={cx("settings-toggle", isEnabled && "on")}
                       onClick={() => void handleToggleProvider(account.providerId, isEnabled)}
                     >
-                      <div
-                        style={{
-                          width: "16px",
-                          height: "16px",
-                          borderRadius: "50%",
-                          background: "#ffffff",
-                          transform: isEnabled ? "translateX(16px)" : "translateX(0)",
-                          transition: "transform 0.2s ease",
-                        }}
-                      />
+                      <span className="settings-toggle-thumb" aria-hidden />
                     </button>
                   </div>
                 </div>
 
-                {/* Subheader: Quotas count */}
-                <div
-                  className="text-xs text-text-muted"
-                  style={{ marginTop: "12px", marginBottom: "8px", fontWeight: "var(--font-weight-medium, 500)" }}
-                >
+                <div className="quota-buckets-count">
                   {rawBuckets.length > 0
                     ? `${rawBuckets.length} quotas`
                     : quota
@@ -560,121 +507,41 @@ export function QuotaTrackerPage() {
                       : t("common.loading")}
                 </div>
 
-                {/* Buckets list matching Image 2 */}
                 {rawBuckets.length > 0 ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                  <div className="quota-buckets-list">
                     {rawBuckets.map((b) => {
                       const isHidden = hiddenBuckets.has(b.id);
                       const remPct = b.disabled ? 0 : Math.min(100, Math.max(0, b.remainingPercentage));
                       const isWarning = remPct > 15 && remPct <= 40;
-                      const dotColor = b.disabled || remPct <= 15 ? "#ef4444" : isWarning ? "#f59e0b" : "#22c55e";
-                      const progressColor = dotColor;
+                      const statusClass = b.disabled || remPct <= 15 ? "status-error" : isWarning ? "status-warning" : "status-success";
 
                       return (
                         <div
                           key={b.id}
-                          style={{
-                            display: "grid",
-                            gridTemplateColumns: "14px 180px 90px 1fr 45px 110px 24px",
-                            alignItems: "center",
-                            gap: "12px",
-                            padding: "6px 0",
-                            opacity: isHidden ? 0.4 : 1,
-                            transition: "opacity 0.2s ease",
-                          }}
+                          className={cx("quota-bucket-row", statusClass, isHidden && "is-hidden")}
                         >
-                          {/* Dot indicator */}
-                          <div
-                            style={{
-                              width: "8px",
-                              height: "8px",
-                              borderRadius: "50%",
-                              backgroundColor: dotColor,
-                              boxShadow: `0 0 6px ${dotColor}66`,
-                            }}
-                          />
-
-                          {/* Bucket name */}
-                          <div
-                            style={{
-                              fontSize: "var(--text-xs)",
-                              fontWeight: "var(--font-weight-medium, 500)",
-                              color: "var(--ds-text-primary)",
-                              whiteSpace: "nowrap",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                            }}
-                            title={b.name}
-                          >
+                          <div className="quota-status-dot" />
+                          <div className="quota-bucket-name" title={b.name}>
                             {b.name}
                           </div>
-
-                          {/* Usage fraction e.g. "0 / 1.000" */}
-                          <div
-                            style={{
-                              fontSize: "11px",
-                              fontFamily: "var(--font-mono)",
-                              color: "var(--ds-text-muted)",
-                            }}
-                          >
+                          <div className="quota-bucket-ratio">
                             {formatUsageRatio(remPct, b.disabled)}
                           </div>
-
-                          {/* Horizontal progress bar line */}
-                          <div
-                            style={{
-                              height: "3px",
-                              width: "100%",
-                              backgroundColor: "rgba(255, 255, 255, 0.08)",
-                              borderRadius: "2px",
-                              overflow: "hidden",
-                            }}
-                          >
+                          <div className="quota-progress-track">
                             <div
-                              style={{
-                                height: "100%",
-                                width: `${remPct}%`,
-                                backgroundColor: progressColor,
-                                transition: "width 0.3s ease",
-                              }}
+                              className="quota-progress-fill"
+                              style={{ width: `${remPct}%` }}
                             />
                           </div>
-
-                          {/* Percentage text */}
-                          <div
-                            style={{
-                              fontSize: "11px",
-                              fontWeight: "var(--font-weight-medium, 500)",
-                              color: dotColor,
-                              textAlign: "right",
-                            }}
-                          >
+                          <div className="quota-bucket-pct">
                             {remPct}%
                           </div>
-
-                          {/* Countdown timer e.g. "in 7h 51m" */}
-                          <div
-                            style={{
-                              fontSize: "11px",
-                              color: "var(--ds-text-muted)",
-                              textAlign: "right",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
+                          <div className="quota-bucket-reset">
                             {b.resetInSeconds && !b.disabled ? `in ${formatResetDuration(b.resetInSeconds)}` : ""}
                           </div>
-
-                          {/* Eye toggle button */}
                           <button
                             type="button"
-                            className="icon-btn"
-                            style={{
-                              background: "none",
-                              border: 0,
-                              cursor: "pointer",
-                              padding: "2px",
-                              color: isHidden ? "var(--ds-text-faint)" : "var(--ds-text-muted)",
-                            }}
+                            className={cx("quota-eye-btn", isHidden && "is-hidden")}
                             title={isHidden ? "Show quota" : "Hide quota"}
                             onClick={() => toggleBucketVisibility(b.id)}
                           >
@@ -685,30 +552,23 @@ export function QuotaTrackerPage() {
                     })}
                   </div>
                 ) : quota ? (
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      padding: "8px 0",
-                    }}
-                  >
+                  <div className="quota-simple-row">
                     <div className="text-sm">
                       Quota Status:{" "}
-                      <strong
-                        style={{
-                          color:
-                            quota.status === "healthy"
-                              ? "#22c55e"
-                              : quota.status === "low"
-                                ? "#f59e0b"
-                                : "#ef4444",
-                        }}
+                      <span
+                        className={cx(
+                          "quota-simple-status",
+                          quota.status === "healthy"
+                            ? "status-success"
+                            : quota.status === "low"
+                              ? "status-warning"
+                              : "status-error",
+                        )}
                       >
                         {quota.remainingPercentage !== undefined
                           ? `${quota.remainingPercentage}% remaining`
                           : quota.status}
-                      </strong>
+                      </span>
                     </div>
                     {quota.resetInSeconds ? (
                       <span className="text-xs text-text-muted">
@@ -717,7 +577,7 @@ export function QuotaTrackerPage() {
                     ) : null}
                   </div>
                 ) : (
-                  <div className="text-xs text-text-muted" style={{ padding: "8px 0" }}>
+                  <div className="quota-loading-text">
                     {t("common.loading")}
                   </div>
                 )}
