@@ -617,7 +617,8 @@ sklm: {
       "import": "Importation",
       "projects": "Projets",
       "info": "Informations",
-      "quota": "Suivi des quotas"
+      "quota": "Suivi des quotas",
+      "plugins": "Plugins"
     },
     "general": "Général",
     "ai": "AI",
@@ -1164,19 +1165,20 @@ sklm: {
     "presetKiloCode": "Kilo Code",
     "presetCline": "Cline / ClinePass",
     "presetCodebuddy": "CodeBuddy",
-    "presetGrokCli": "Grok CLI (Grok Build)"
+    "presetGrokCli": "Grok CLI (Grok Build)",
+    "plugins": "Extensions et plugins"
   },
   mode: {
     manual: "Manuel",
-    manualDesc: "Claude demandera l'approbation avant chaque modification",
+    manualDesc: "Pi demandera l'approbation avant chaque modification",
     editAuto: "Modifier automatiquement",
-    editAutoDesc: "Claude modifiera le texte sélectionné ou le fichier entier",
+    editAutoDesc: "Pi modifiera le texte sélectionné ou le fichier entier",
     plan: "Planifier",
-    planDesc: "Claude explorera le code et présentera un plan avant de modifier",
+    planDesc: "Pi explorera le code et présentera un plan avant de modifier",
     auto: "Automatique",
-    autoDesc: "Claude approuve les actions sûres automatiquement et pause pour les opérations risquées",
+    autoDesc: "Pi approuve les actions sûres automatiquement et pause pour les opérations risquées",
     bypass: "Contourner les permissions",
-    bypassDesc: "Claude contourne les vérifications de permissions et exécute les actions de manière autonome",
+    bypassDesc: "Pi contourne les vérifications de permissions et exécute les actions de manière autonome",
   },
   "project": {
     "open": "Ouvrir le projet",

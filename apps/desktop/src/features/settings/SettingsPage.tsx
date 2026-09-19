@@ -23,8 +23,10 @@ import {
   IconChevronLeft,
   IconDownload,
   IconFileText,
+  IconGauge,
   IconInfo,
   IconKeyboard,
+  IconPlug,
   IconSearch,
   IconServer,
   IconSliders,
@@ -43,6 +45,7 @@ import { SettingsMenuSelect } from "../../components/settings/SettingsMenuSelect
 import { ThemeRow } from "../../components/settings/ThemeRow";
 import { NetworkProxySection } from "../../components/settings/NetworkProxySection";
 import { ProjectsPage } from "../../pages/ProjectsPage";
+import { PluginsPage } from "../../pages/PluginsPage";
 import { AgentSkillsPage } from "../../components/settings/AgentSkillsPage";
 import { AgentMcpPage } from "../../components/settings/AgentMcpPage";
 import { AgentSubagentsPage } from "../../components/settings/AgentSubagentsPage";
@@ -88,7 +91,6 @@ export function SettingsPage() {
 
   const [query, setQuery] = useState("");
   const [defaultModeMenuOpen, setDefaultModeMenuOpen] = useState(false);
-  const [defaultPermissionMenuOpen, setDefaultPermissionMenuOpen] = useState(false);
   const [recoveringSettings, setRecoveringSettings] = useState(!settings);
   const [settingsRecoveryFailed, setSettingsRecoveryFailed] = useState(false);
   const [extensions, setExtensions] = useState<PluginSettingsDestinationMeta[]>([]);
@@ -181,7 +183,7 @@ export function SettingsPage() {
     const iconFor: Record<SettingsTab, ReactNode> = {
       // Semantic Lucide glyphs for the settings destinations.
       usages: <IconActivity size={14} />,
-      quota: <IconActivity size={14} />,
+      quota: <IconGauge size={14} />,
       general: <IconSliders size={14} />,
       ai: <IconSparkles size={14} />,
       shortcuts: <IconKeyboard size={14} />,
@@ -190,6 +192,7 @@ export function SettingsPage() {
       skills: <IconBookOpen size={14} />,
       mcp: <IconServer size={14} />,
       subagents: <IconBot size={14} />,
+      plugins: <IconPlug size={14} />,
       import: <IconDownload size={14} />,
       projects: <IconArchive size={14} />,
       about: <IconInfo size={14} />,
@@ -531,6 +534,8 @@ export function SettingsPage() {
           {tab === "mcp" && <AgentMcpPage />}
 
           {tab === "subagents" && <AgentSubagentsPage />}
+
+          {tab === "plugins" && <PluginsPage />}
 
           {tab === "instructions" && <AgentInstructionsSection />}
 

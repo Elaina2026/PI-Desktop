@@ -52,6 +52,9 @@ import {
   IconCheck,
   IconChevronRight,
   IconCircleAlert,
+  IconExternal,
+  IconSearch,
+  IconSparkles,
   IconStop,
 } from "../../../components/icons";
 import { TooltipButton } from "../../../components/ui";
@@ -96,6 +99,126 @@ function toolRowDelegationId(message: UiMessage): string | undefined {
   }
   const delegationId = (payload as { delegationId?: unknown }).delegationId;
   return typeof delegationId === "string" ? delegationId : undefined;
+}
+
+type SearchItem = {
+  title: string;
+  url: string;
+  snippet?: string;
+  domain?: string;
+};
+
+function parseSearchResults(raw: unknown): SearchItem[] {
+  if (!raw) return [];
+  const str =
+    typeof raw === "string"
+      ? raw
+      : typeof raw === "object" && raw && "content" in (raw as Record<string, unknown>)
+        ? String((raw as Record<string, unknown>).content)
+        : JSON.stringify(raw);
+  const results: SearchItem[] = [];
+  const regex =
+    /(?:###?\s*\d*\.?\s*|\d+\.\s*)?\*?\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)\*?(?:[\s\S]*?(?=(?:###?\s*\d*\.?|\d+\.\s*\*?\[|$)))?/g;
+  let match: RegExpExecArray | null = regex.exec(str);
+  while (match !== null) {
+    const title = match[1]?.trim();
+    const url = match[2]?.trim();
+    const rest = (match[0] || "")
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/, "")
+      .replace(/^\d+\.\s*\*?\s*/, "")
+      .trim();
+    if (title && url) {
+      let domain = "";
+      try {
+        domain = new URL(url).hostname.replace(/^www\./, "");
+      } catch {
+        domain = "";
+      }
+      results.push({ title, url, snippet: rest.slice(0, 240), domain });
+    }
+    match = regex.exec(str);
+  }
+  return results;
+}
+
+function WebSearchResultView({
+  message,
+  onOpenUrl,
+}: {
+  message: UiMessage;
+  onOpenUrl: (url: string) => void;
+}) {
+  const args = message.toolArgs as Record<string, unknown> | undefined;
+  const query = typeof args?.query === "string" ? args.query : "";
+  const payload = toolResultPayload(message);
+  const results = useMemo(() => parseSearchResults(payload), [payload]);
+
+  return (
+    <div className="tool-search-card">
+      <div className="tool-search-meta">
+        <span className="tool-search-query-tag">
+          <IconSearch size={12} />
+          <span>{query || "Search"}</span>
+        </span>
+        {results.length > 0 ? (
+          <span className="tool-search-count">{results.length} results</span>
+        ) : null}
+      </div>
+      {results.length > 0 ? (
+        <div className="tool-search-list">
+          {results.map((res, i) => (
+            <div
+              key={i}
+              className="tool-search-item"
+              onClick={() => onOpenUrl(res.url)}
+            >
+              <div className="tool-search-item-header">
+                {res.domain ? (
+                  <span className="tool-search-domain">{res.domain}</span>
+                ) : null}
+                <span className="tool-search-title">{res.title}</span>
+                <IconExternal size={12} className="tool-search-external" />
+              </div>
+              {res.snippet ? (
+                <div className="tool-search-snippet">{res.snippet}</div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="tool-search-empty">
+          {typeof payload === "string" ? payload : "No search results"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeepResearchResultView({ message }: { message: UiMessage }) {
+  const args = message.toolArgs as Record<string, unknown> | undefined;
+  const topic = typeof args?.topic === "string" ? args.topic : "";
+  const payload = toolResultPayload(message);
+  const report =
+    typeof payload === "string"
+      ? payload
+      : typeof payload === "object" && payload
+        ? JSON.stringify(payload, null, 2)
+        : "";
+
+  return (
+    <div className="tool-research-card">
+      <div className="tool-research-header">
+        <div className="tool-research-badge">
+          <IconSparkles size={13} />
+          <span>Deep Research</span>
+        </div>
+        {topic ? <div className="tool-research-topic">{topic}</div> : null}
+      </div>
+      <div className="tool-research-content">
+        <Markdown source={report} />
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -179,9 +302,12 @@ export const ToolRow = memo(function ToolRow({
   const command = runHead
     ? getToolSummaryValue(message.toolName, message.toolArgs)
     : "";
+  const rawToolLower = (message.toolName || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const isWebSearch = rawToolLower === "websearch" || rawToolLower === "searchweb";
+  const isDeepResearch = rawToolLower === "deepresearch" || rawToolLower === "research";
   // A delegation is always expandable: its brief, report and the delegate's
   // own rows all live in the body.
-  const hasDetails = hasToolDetails(message) || Boolean(delegate);
+  const hasDetails = hasToolDetails(message) || Boolean(delegate) || isWebSearch || isDeepResearch;
   const chips = toolResultChips(message);
   // A lifecycle row (ADR 0089) is about subagents, so it is presented as one:
   // the agent names it reports on replace the bare delegation ids it was
@@ -572,13 +698,22 @@ export const ToolRow = memo(function ToolRow({
           {statusLabel}
         </span>
       ) : null}
-      {blocks && blocks.length > 0 ? (
+      {inlineOpen && hasDetails ? (
         <div className="tool-row-body" id={detailsId}>
           <DisclosureCollapseRail
             label={t("chat.collapseDetails")}
             onCollapse={collapseRow}
           />
-          <ToolDetailBlocks blocks={blocks} plain={runHead} />
+          {isWebSearch ? (
+            <WebSearchResultView
+              message={message}
+              onOpenUrl={(url) => openTarget({ kind: "url", url })}
+            />
+          ) : isDeepResearch ? (
+            <DeepResearchResultView message={message} />
+          ) : blocks && blocks.length > 0 ? (
+            <ToolDetailBlocks blocks={blocks} plain={runHead} />
+          ) : null}
         </div>
       ) : null}
       {inlineOpen && delegate ? (

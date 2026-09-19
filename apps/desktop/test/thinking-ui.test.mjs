@@ -86,13 +86,11 @@ test("Composer owns the mode and model controls", () => {
   const modeControl = leftToolbar.indexOf(
     'className="icon-btn mode-chip composer-mode-chip"',
   );
-  const permissionControl = leftToolbar.indexOf('className="composer-permission"');
   const rightToolbar = composerToolbarSource.slice(
     composerToolbarSource.indexOf('<div className="composer-right">'),
   );
 
   assert.ok(modeControl >= 0);
-  assert.ok(permissionControl > modeControl);
   assert.doesNotMatch(leftToolbar, /composer-thinking|thinking-chip/);
   assert.doesNotMatch(topbarSource, /ModelSelect|model-chip/);
   assert.doesNotMatch(topbarSource, /ct-mode|ct-mode-btn|configureActiveSession/);

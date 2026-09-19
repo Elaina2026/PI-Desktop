@@ -83,18 +83,19 @@ test("the arm expires on its own and has a single owner", () => {
   assert.match(skillsPageSource, /useArmedDelete\(\)/);
 });
 
-test("the session and project rows share that arm", () => {
-  for (const [surface, source] of [
-    ["Sidebar", sidebarSource],
-    ["ProjectsPage", projectsSource],
-  ]) {
-    assert.match(
-      source,
-      /import \{ useArmedDelete \} from "\.\.\/hooks\/use-armed-delete"/,
-      surface,
-    );
-    assert.match(source, /const \{ armed: armedDelete, setArmed: setArmedDelete \} = useArmedDelete\(\)/);
-  }
+test("the session row uses the delete arm and projects page uses confirmation dialog", () => {
+  assert.match(
+    sidebarSource,
+    /import \{ useArmedDelete \} from "\.\.\/hooks\/use-armed-delete"/,
+    "Sidebar",
+  );
+  assert.match(sidebarSource, /const \{ armed: armedDelete, setArmed: setArmedDelete \} = useArmedDelete\(\)/);
+  assert.match(
+    projectsSource,
+    /import \{ ProjectDeleteDialog \} from "\.\.\/components\/ProjectDeleteDialog"/,
+    "ProjectsPage",
+  );
+  assert.match(projectsSource, /setDeleteFor\(\{/);
 });
 
 test("the session menu deletes on the second click, not the first", () => {

@@ -39,16 +39,15 @@ test("oauth and vendor accounts handle disabled quota buckets and 401 refresh", 
     new URL("../electron/main/oauth.ts", import.meta.url),
     "utf8",
   );
-  const vendorAccounts = await readFile(
-    new URL("../src/components/settings/VendorAccountsSection.tsx", import.meta.url),
+  const quotaTracker = await readFile(
+    new URL("../src/features/settings/QuotaTrackerPage.tsx", import.meta.url),
     "utf8",
   );
   const mainSource = await readMainSource();
   assert.match(mainSource, /IPC\.invoke\.providersOauthQuota/);
   assert.match(oauth, /quotaRes\.status === 401 && cred\.refresh_token/);
   assert.match(oauth, /isLocked:\s*isDisabled/);
-  assert.match(vendorAccounts, /0% \(Đã khóa \/ Hết hạn mức\)/);
-  assert.match(vendorAccounts, /còn lại/);
+  assert.match(quotaTracker, /remainingPercentage/);
 });
 
 test("Markdown.tsx sanitizes subagent xml tags outside code fences", async () => {

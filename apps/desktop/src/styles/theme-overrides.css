@@ -215,12 +215,13 @@
   white-space: nowrap;
 }
 
-/* Keep the Agent/Plan/Goal control stable while its localized label changes. */
+/* Flexible mode chip width so unified labels like Manual, Edit automatically, Plan, Auto, Bypass permissions show properly. */
 .composer-mode-chip {
-  width: 88px;
-  min-width: 88px;
-  max-width: 88px;
-  flex: 0 0 88px;
+  width: auto;
+  min-width: 72px;
+  max-width: 220px;
+  flex: 0 0 auto;
+  padding: 0 var(--spacing-sm, 8px);
   justify-content: flex-start;
 }
 

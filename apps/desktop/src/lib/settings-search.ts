@@ -16,6 +16,7 @@ export type SettingsTabId =
   | "skills"
   | "mcp"
   | "subagents"
+  | "plugins"
   | "import"
   | "projects"
   | "about";
@@ -218,6 +219,18 @@ export const SETTINGS_NAV: SettingsNavEntry[] = [
       "extensions.subagents.presetFixerName",
       "extensions.subagents.presetUiDesignerName",
       "extensions.subagents.tools",
+    ],
+  },
+  {
+    id: "plugins",
+    labelKey: "settings.nav.plugins",
+    titleKey: "settings.plugins",
+    group: "agent",
+    keywordKeys: [
+      "plugins.title",
+      "plugins.installed",
+      "plugins.marketplace",
+      "plugins.search",
     ],
   },
   {

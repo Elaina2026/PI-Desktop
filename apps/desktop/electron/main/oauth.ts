@@ -335,48 +335,6 @@ export class VendorOAuth {
         isSubscription: true,
         baseUrl: "https://api.githubcopilot.com",
       },
-      {
-        vendorId: "cursor",
-        name: "Cursor IDE",
-        loginLabel: "Connect Cursor IDE Account",
-        isSubscription: true,
-        baseUrl: "https://api2.cursor.sh",
-      },
-      {
-        vendorId: "qoder",
-        name: "Qoder",
-        loginLabel: "Connect Qoder Account",
-        isSubscription: true,
-        baseUrl: "https://api.qoder.ai/v1",
-      },
-      {
-        vendorId: "kilo-code",
-        name: "Kilo Code",
-        loginLabel: "Sign in with Kilo Code",
-        isSubscription: true,
-        baseUrl: "https://api.kilo.ai/v1",
-      },
-      {
-        vendorId: "cline",
-        name: "Cline / ClinePass",
-        loginLabel: "Connect Cline / ClinePass",
-        isSubscription: true,
-        baseUrl: "https://api.cline.bot/v1",
-      },
-      {
-        vendorId: "codebuddy",
-        name: "CodeBuddy / CodeBuddy CN",
-        loginLabel: "Connect CodeBuddy Account",
-        isSubscription: true,
-        baseUrl: "https://api.codebuddy.ca/v1",
-      },
-      {
-        vendorId: "xiaomi",
-        name: "Xiaomi MiMo",
-        loginLabel: "Sign in with Xiaomi MiMo",
-        isSubscription: false,
-        baseUrl: "https://api.xiaomimimo.com/v1",
-      },
     ];
 
     for (const extra of extraVendors) {
@@ -441,49 +399,6 @@ export class VendorOAuth {
       };
       this.logins.set(session.loginId, session);
       session.finished = this.runAntigravity(session);
-      return { loginId: session.loginId };
-    }
-
-    const customVendor = [
-      { vendorId: "cursor", name: "Cursor IDE", baseUrl: "https://api2.cursor.sh" },
-      { vendorId: "qoder", name: "Qoder", baseUrl: "https://api.qoder.ai/v1" },
-      { vendorId: "kilo-code", name: "Kilo Code", baseUrl: "https://api.kilo.ai/v1" },
-      { vendorId: "cline", name: "Cline / ClinePass", baseUrl: "https://api.cline.bot/v1" },
-      { vendorId: "codebuddy", name: "CodeBuddy", baseUrl: "https://api.codebuddy.ca/v1" },
-      { vendorId: "xiaomi", name: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/v1" },
-    ].find((v) => v.vendorId === vendorId);
-
-    if (customVendor) {
-      const superseded = [...this.logins.values()].filter(
-        (running) => running.vendorId === vendorId,
-      );
-      for (const running of superseded) this.cancel(running.loginId);
-      for (const running of superseded) {
-        await running.finished?.catch(() => undefined);
-      }
-
-      const { provider: row } = await this.deps.call<{
-        provider: OAuthProviderRow;
-      }>("providers.create", {
-        name: customVendor.name,
-        vendorKey: vendorId,
-        type: "native",
-        authKind: OAUTH_AUTH_KIND,
-        baseUrl: customVendor.baseUrl,
-      });
-      const account = this.createAccount(vendorId, row.id);
-      const session: LoginSession = {
-        loginId: this.nextId(),
-        vendorId,
-        providerId: row.id,
-        account,
-        createdRow: true,
-        controller: new AbortController(),
-        prompts: new Map(),
-        tail: Promise.resolve(),
-      };
-      this.logins.set(session.loginId, session);
-      session.finished = this.runCustomOAuth(session, customVendor);
       return { loginId: session.loginId };
     }
 
@@ -1007,56 +922,6 @@ export class VendorOAuth {
           vendorId: session.vendorId,
           message,
         });
-        this.push(session, { kind: "error", message });
-      }
-    } finally {
-      for (const pending of session.prompts.values()) {
-        pending.reject(new Error("login finished"));
-      }
-      await session.tail;
-      this.logins.delete(session.loginId);
-    }
-  }
-
-  private async runCustomOAuth(
-    session: LoginSession,
-    vendor: { vendorId: string; name: string; baseUrl?: string },
-  ): Promise<void> {
-    try {
-      this.push(session, {
-        kind: "progress",
-        message: `Connecting to ${vendor.name}...`,
-      });
-      const token = await this.ask(session, {
-        type: "secret",
-        message: `Enter your ${vendor.name} access token or API key:`,
-        placeholder: "API key or access token",
-      });
-      if (!token || !token.trim()) {
-        throw new Error("Token cannot be empty.");
-      }
-      const cred = { access_token: token.trim() };
-      await this.deps.call("secrets.set", {
-        secretRef: secretRefForProviderOauth(session.providerId),
-        value: JSON.stringify(cred),
-      });
-      const accountLabel = `${vendor.name} User`;
-      await this.deps.call("providers.update", {
-        id: session.providerId,
-        hasOauth: true,
-        oauthAccountLabel: accountLabel,
-      });
-      this.push(session, {
-        kind: "done",
-        providerId: session.providerId,
-        accountLabel,
-      });
-    } catch (error) {
-      await this.discardRow(session);
-      if (session.controller.signal.aborted) {
-        this.push(session, { kind: "cancelled" });
-      } else {
-        const message = error instanceof Error ? error.message : String(error);
         this.push(session, { kind: "error", message });
       }
     } finally {

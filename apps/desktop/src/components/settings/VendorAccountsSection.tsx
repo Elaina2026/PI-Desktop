@@ -7,7 +7,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
-  AccountQuotaInfo,
   OAuthAccount,
   OAuthVendor,
   ProviderPublic,
@@ -19,7 +18,7 @@ import {
   type OAuthLoginSession,
 } from "../../lib/oauth-login-session";
 import { Badge, Button, TooltipButton, cx } from "../ui";
-import { IconKey, IconPencil, IconPlug, IconRefresh, IconTrash } from "../icons";
+import { IconKey, IconPencil, IconPlug, IconTrash } from "../icons";
 import { OAuthLoginDialog } from "./OAuthLoginDialog";
 import {
   VendorAccountDialog,
@@ -36,27 +35,6 @@ type AccountEntry = {
   ordinal: number;
   totalForVendor: number;
 };
-
-function formatResetDuration(totalSeconds: number): string {
-  if (totalSeconds <= 0) return "now";
-  const weeks = Math.floor(totalSeconds / 604800);
-  const remainderAfterWeeks = totalSeconds % 604800;
-  const days = Math.floor(remainderAfterWeeks / 86400);
-  const remainderAfterDays = remainderAfterWeeks % 86400;
-  const hours = Math.floor(remainderAfterDays / 3600);
-  const minutes = Math.floor((remainderAfterDays % 3600) / 60);
-
-  if (weeks > 0) {
-    return days > 0 ? `${weeks}w ${days}d` : `${weeks}w`;
-  }
-  if (days > 0) {
-    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
-  }
-  if (hours > 0) {
-    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
-  }
-  return `${Math.max(1, minutes)}m`;
-}
 
 function providerIsReady(provider: ProviderPublic, excludedId?: string): boolean {
   return (
@@ -82,36 +60,6 @@ export function VendorAccountsSection() {
   const [editingAccount, setEditingAccount] = useState<AccountEntry | null>(null);
   const [savingAccount, setSavingAccount] = useState(false);
   const [testingAccount, setTestingAccount] = useState<string | null>(null);
-  const [quotas, setQuotas] = useState<Record<string, AccountQuotaInfo>>({});
-  const [refreshingQuota, setRefreshingQuota] = useState<string | null>(null);
-
-  const fetchAccountQuota = useCallback(
-    async (providerId: string, force = false) => {
-      setRefreshingQuota(providerId);
-      try {
-        const quota = await api.getOauthAccountQuota(providerId, { force });
-        setQuotas((prev) => ({ ...prev, [providerId]: quota }));
-        if (force) {
-          if (quota.error) {
-            showToast(quota.error, { variant: "error" });
-          } else {
-            showToast(t("settings.quotaRefreshed", "Quota updated"), {
-              variant: "success",
-            });
-          }
-        }
-      } catch (e) {
-        if (force) {
-          showToast(e instanceof Error ? e.message : String(e), {
-            variant: "error",
-          });
-        }
-      } finally {
-        setRefreshingQuota(null);
-      }
-    },
-    [showToast, t],
-  );
 
   const loadVendors = useCallback(async () => {
     try {
@@ -144,22 +92,6 @@ export function VendorAccountsSection() {
       }));
     });
   }, [vendors]);
-
-  useEffect(() => {
-    for (const entry of accounts) {
-      if (entry.account.connected && !quotas[entry.account.providerId]) {
-        void fetchAccountQuota(entry.account.providerId);
-      }
-    }
-    const interval = setInterval(() => {
-      for (const entry of accounts) {
-        if (entry.account.connected) {
-          void fetchAccountQuota(entry.account.providerId);
-        }
-      }
-    }, 30_000);
-    return () => clearInterval(interval);
-  }, [accounts, fetchAccountQuota, quotas]);
 
   const removeAccount = async (entry: AccountEntry) => {
     const { account, vendor } = entry;
@@ -353,143 +285,6 @@ export function VendorAccountsSection() {
                         {duplicateLabel}
                       </span>
                     </div>
-                    {connected && (
-                      <div className="vendor-account-quota" style={{ marginTop: "6px" }}>
-                        {quotas[account.providerId] ? (
-                          quotas[account.providerId].buckets && quotas[account.providerId].buckets!.length > 0 ? (
-                            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                              {quotas[account.providerId].buckets!.map((b) => (
-                                <div key={b.id}>
-                                  <div
-                                    style={{
-                                      display: "flex",
-                                      justifyContent: "space-between",
-                                      fontSize: "10.5px",
-                                      marginBottom: "2px",
-                                      color: "var(--color-text-subtle, #888)",
-                                    }}
-                                  >
-                                    <span>
-                                      {b.name}:{" "}
-                                      <strong style={{ color: b.disabled ? "var(--color-text-subtle, #888)" : b.remainingPercentage <= 15 ? "#ef4444" : "var(--color-text-normal, #ddd)" }}>
-                                        {b.disabled
-                                          ? t("settings.quotaLocked", "0% (Đã khóa / Hết hạn mức)")
-                                          : t("settings.quotaRemaining", {
-                                              percent: b.remainingPercentage,
-                                              defaultValue: `${b.remainingPercentage}% còn lại`,
-                                            })}
-                                      </strong>
-                                    </span>
-                                    {b.resetInSeconds && !b.disabled ? (
-                                      <span>
-                                        {t("settings.quotaResetsIn", {
-                                          duration: formatResetDuration(b.resetInSeconds),
-                                          defaultValue: `Resets in ${formatResetDuration(b.resetInSeconds)}`,
-                                        })}
-                                      </span>
-                                    ) : null}
-                                  </div>
-                                  <div
-                                    style={{
-                                      height: "4px",
-                                      width: "100%",
-                                      backgroundColor: "rgba(255, 255, 255, 0.1)",
-                                      borderRadius: "2px",
-                                      overflow: "hidden",
-                                    }}
-                                  >
-                                    <div
-                                      style={{
-                                        height: "100%",
-                                        width: `${b.disabled ? 0 : Math.min(100, Math.max(0, b.remainingPercentage))}%`,
-                                        backgroundColor: b.disabled
-                                          ? "rgba(255, 255, 255, 0.15)"
-                                          : b.remainingPercentage > 40
-                                            ? "#22c55e"
-                                            : b.remainingPercentage > 15
-                                              ? "#f59e0b"
-                                              : "#ef4444",
-                                        transition: "width 0.3s ease",
-                                      }}
-                                    />
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <>
-                              <div
-                                style={{
-                                  display: "flex",
-                                  justifyContent: "space-between",
-                                  fontSize: "11px",
-                                  marginBottom: "4px",
-                                  color: "var(--color-text-subtle, #888)",
-                                }}
-                              >
-                                <span>
-                                  Quota:{" "}
-                                  <strong style={{ color: "var(--color-text-normal, #ddd)" }}>
-                                    {quotas[account.providerId].remainingPercentage !== undefined
-                                      ? t("settings.quotaRemaining", {
-                                          percent: quotas[account.providerId].remainingPercentage,
-                                          defaultValue: `${quotas[account.providerId].remainingPercentage}% remaining`,
-                                        })
-                                      : t("settings.quotaActive", "Active")}
-                                  </strong>
-                                </span>
-                                {quotas[account.providerId].resetInSeconds ? (
-                                  <span>
-                                    {t("settings.quotaResetsIn", {
-                                      duration: formatResetDuration(quotas[account.providerId].resetInSeconds!),
-                                      defaultValue: `Resets in ${formatResetDuration(quotas[account.providerId].resetInSeconds!)}`,
-                                    })}
-                                  </span>
-                                ) : null}
-                              </div>
-                              <div
-                                style={{
-                                  height: "4px",
-                                  width: "100%",
-                                  backgroundColor: "rgba(255, 255, 255, 0.1)",
-                                  borderRadius: "2px",
-                                  overflow: "hidden",
-                                }}
-                              >
-                                <div
-                                  style={{
-                                    height: "100%",
-                                    width: `${Math.min(
-                                      100,
-                                      Math.max(0, quotas[account.providerId].remainingPercentage ?? 100),
-                                    )}%`,
-                                    backgroundColor:
-                                      (quotas[account.providerId].remainingPercentage ?? 100) > 40
-                                        ? "#22c55e"
-                                        : (quotas[account.providerId].remainingPercentage ?? 100) > 15
-                                          ? "#f59e0b"
-                                          : "#ef4444",
-                                    transition: "width 0.3s ease",
-                                  }}
-                                />
-                              </div>
-                            </>
-                          )
-                        ) : (
-                          <div style={{ fontSize: "11px", opacity: 0.7 }}>
-                            {quotas[account.providerId]?.error ? (
-                              <span style={{ color: "var(--ds-danger, #ef4444)" }}>
-                                {quotas[account.providerId].error}
-                              </span>
-                            ) : refreshingQuota === account.providerId ? (
-                              "Checking quota…"
-                            ) : (
-                              ""
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
                     {!connected ? (
                       <div className="vendor-account-status">
                         {t("settings.vendorDisconnectedDesc")}
@@ -497,19 +292,6 @@ export function VendorAccountsSection() {
                     ) : null}
                   </div>
                   <div className="provider-row-actions">
-                    <TooltipButton
-                      type="button"
-                      className={cx(
-                        "icon-btn provider-icon-btn",
-                        refreshingQuota === account.providerId && "is-testing",
-                      )}
-                      tooltip="Refresh Quota"
-                      ariaLabel="Refresh Quota"
-                      disabled={rowBusy || !provider || !connected}
-                      onClick={() => void fetchAccountQuota(account.providerId, true)}
-                    >
-                      <IconRefresh size={14} />
-                    </TooltipButton>
                     <TooltipButton
                       type="button"
                       className="icon-btn provider-icon-btn"

@@ -138,9 +138,7 @@ test("both project menus expose a destructive delete action", () => {
     ["ProjectsPage", projectsSource],
     ["Sidebar", sidebarSource],
   ]) {
-    // The item keeps its destructive styling and adds the armed state on top.
-    // The item keeps its destructive styling and adds the armed state on top.
-    assert.match(source, /className=\{cx\(\s*"danger",/, surface);
+    assert.match(source, /className=\{cx\(\s*"danger"/, surface);
     assert.match(source, /data-action="delete-project"/, surface);
     assert.match(source, /<ProjectDeleteDialog/, surface);
   }
@@ -171,72 +169,75 @@ test("both project menus expose a destructive delete action", () => {
   assert.match(sidebarSource, /onError=\{reportError\}/);
 });
 
-test("the menu item arms first and only a live task reaches the dialog", () => {
-  for (const [surface, source] of [
-    ["ProjectsPage", projectsSource],
-    ["Sidebar", sidebarSource],
-  ]) {
-    const handler = deleteHandler(source);
-    // The item is now the first step of a two-click delete, so the running-task
-    // refusal can no longer live in the menu: the click only arms the row.
-    assert.doesNotMatch(handler, /deleteRunningBlocked/, `${surface} drops the toast refusal`);
-    assert.doesNotMatch(handler, /showToast/, `${surface} does not toast instead of confirming`);
-    assert.doesNotMatch(
-      handler,
-      /setDelete(?:Project)?For\(/,
-      `${surface} arms instead of opening the dialog`,
-    );
-    assert.match(
-      handler,
-      /requestDeleteProject\(/,
-      `${surface} routes the click through the two-step handler`,
-    );
-    assert.match(handler, /data-armed=/, `${surface} exposes the armed state`);
-    // The label has to name the second click while the item is armed.
-    assert.match(source, /project\.deleteMenuConfirm/, `${surface} relabels the armed item`);
-    assert.match(
-      source,
-      /t\("project\.delete"(?:, \{ defaultValue: "[^"]*" \})?\)/,
-      `${surface} keeps the plain label`,
-    );
+test("the sidebar menu item arms first and only a live task reaches the dialog", () => {
+  const handler = deleteHandler(sidebarSource);
+  assert.doesNotMatch(handler, /deleteRunningBlocked/, "Sidebar drops the toast refusal");
+  assert.doesNotMatch(handler, /showToast/, "Sidebar does not toast instead of confirming");
+  assert.doesNotMatch(
+    handler,
+    /setDelete(?:Project)?For\(/,
+    "Sidebar arms instead of opening the dialog",
+  );
+  assert.match(
+    handler,
+    /requestDeleteProject\(/,
+    "Sidebar routes the click through the two-step handler",
+  );
+  assert.match(handler, /data-armed=/, "Sidebar exposes the armed state");
+  assert.match(sidebarSource, /project\.deleteMenuConfirm/, "Sidebar relabels the armed item");
+  assert.match(
+    sidebarSource,
+    /t\("project\.delete"(?:, \{ defaultValue: "[^"]*" \})?\)/,
+    "Sidebar keeps the plain label",
+  );
 
-    const request = requestBlock(source);
-    assert.match(request, /if \(armedDelete !== key\) \{/, `${surface} arms on the first click`);
-    assert.match(request, /setArmedDelete\(key\)/, `${surface} records the armed key`);
-    assert.ok(
-      request.indexOf("deleteProjectAction(") > request.indexOf("setArmedDelete(key)"),
-      `${surface} deletes only after arming`,
-    );
-    // A project with a live turn still gets the dialog that stops it.
-    assert.match(request, /runningSessions\[session\.id\] === true/, `${surface} checks live turns`);
-    assert.match(
-      request,
-      /setDelete(?:Project)?For\(/,
-      `${surface} opens the dialog for a project with a live task`,
-    );
-    assert.match(
-      request,
-      /showToast\(t\("project\.deleted", \{ name: (?:entry|project)\.name \}\), \{ variant: "success" \}\)/,
-      `${surface} reports the idle delete`,
-    );
-    assert.match(
-      request,
-      /errorCode === ErrorCodes\.CONFLICT[\s\S]{0,90}project\.deleteRunningBlocked/,
-      `${surface} keeps the host refusal localized`,
-    );
+  const request = requestBlock(sidebarSource);
+  assert.match(request, /if \(armedDelete !== key\) \{/, "Sidebar arms on the first click");
+  assert.match(request, /setArmedDelete\(key\)/, "Sidebar records the armed key");
+  assert.ok(
+    request.indexOf("deleteProjectAction(") > request.indexOf("setArmedDelete(key)"),
+    "Sidebar deletes only after arming",
+  );
+  assert.match(request, /runningSessions\[session\.id\] === true/, "Sidebar checks live turns");
+  assert.match(
+    request,
+    /setDelete(?:Project)?For\(/,
+    "Sidebar opens the dialog for a project with a live task",
+  );
+  assert.match(
+    request,
+    /showToast\(t\("project\.deleted", \{ name: (?:entry|project)\.name \}\), \{ variant: "success" \}\)/,
+    "Sidebar reports the idle delete",
+  );
+  assert.match(
+    request,
+    /errorCode === ErrorCodes\.CONFLICT[\s\S]{0,90}project\.deleteRunningBlocked/,
+    "Sidebar keeps the host refusal localized",
+  );
 
-    // The dialog still has to learn which of the project's sessions are live.
-    const props = dialogProps(source);
-    assert.match(props, /runningSessionIds=\{/, `${surface} passes the running sessions`);
-    assert.match(
-      props,
-      /runningSessions\[session\.id\] === true/,
-      `${surface} derives them from the live store`,
-    );
-    assert.match(props, /\.map\(\(session\) => session\.id\)/, `${surface} passes session ids`);
-  }
+  const props = dialogProps(sidebarSource);
+  assert.match(props, /runningSessionIds=\{/, "Sidebar passes the running sessions");
+  assert.match(
+    props,
+    /runningSessions\[session\.id\] === true/,
+    "Sidebar derives them from the live store",
+  );
+  assert.match(props, /\.map\(\(session\) => session\.id\)/, "Sidebar passes session ids");
+});
 
-  // Each surface counts the sessions that belong to its own row.
+test("projects page delete action opens the confirmation dialog directly", () => {
+  const handler = deleteHandler(projectsSource);
+  assert.match(handler, /setDeleteFor\(\{/, "ProjectsPage opens confirmation dialog on click");
+  assert.match(projectsSource, /t\("project\.delete"\)/, "ProjectsPage keeps delete label");
+
+  const props = dialogProps(projectsSource);
+  assert.match(props, /runningSessionIds=\{/, "ProjectsPage passes the running sessions");
+  assert.match(
+    props,
+    /runningSessions\[session\.id\] === true/,
+    "ProjectsPage derives them from the live store",
+  );
+  assert.match(props, /\.map\(\(session\) => session\.id\)/, "ProjectsPage passes session ids");
   assert.match(dialogProps(projectsSource), /sessionMatchesIndexProject\(session, deleteFor\)/);
   assert.match(dialogProps(sidebarSource), /deleteProjectFor\.sessions\s*\.filter\(/);
 });

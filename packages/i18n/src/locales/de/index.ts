@@ -617,7 +617,8 @@ sklm: {
       "import": "Importieren Sie",
       "projects": "Projekte",
       "info": "Informationen",
-      "quota": "Kontingent-Tracker"
+      "quota": "Kontingent-Tracker",
+      "plugins": "Plugins"
     },
     "general": "Allgemein",
     "ai": "AI",
@@ -1164,19 +1165,20 @@ sklm: {
     "presetKiloCode": "Kilo Code",
     "presetCline": "Cline / ClinePass",
     "presetCodebuddy": "CodeBuddy",
-    "presetGrokCli": "Grok CLI (Grok Build)"
+    "presetGrokCli": "Grok CLI (Grok Build)",
+    "plugins": "Erweiterungen & Plugins"
   },
   mode: {
     manual: "Manuell",
-    manualDesc: "Claude fragt vor jeder Bearbeitung um Genehmigung",
+    manualDesc: "Pi fragt vor jeder Bearbeitung um Genehmigung",
     editAuto: "Automatisch bearbeiten",
-    editAutoDesc: "Claude bearbeitet Ihren ausgewählten Text oder die gesamte Datei",
+    editAutoDesc: "Pi bearbeitet Ihren ausgewählten Text oder die gesamte Datei",
     plan: "Planen",
-    planDesc: "Claude erkundet den Code und präsentiert einen Plan vor der Bearbeitung",
+    planDesc: "Pi erkundet den Code und präsentiert einen Plan vor der Bearbeitung",
     auto: "Automatisch",
-    autoDesc: "Claude genehmigt sichere Aktionen automatisch und pausiert bei riskanten Vorgängen",
+    autoDesc: "Pi genehmigt sichere Aktionen automatisch und pausiert bei riskanten Vorgängen",
     bypass: "Berechtigungen umgehen",
-    bypassDesc: "Claude umgeht Berechtigungsprüfungen und führt Aktionen vollständig autonom aus",
+    bypassDesc: "Pi umgeht Berechtigungsprüfungen und führt Aktionen vollständig autonom aus",
   },
   "project": {
     "open": "Projekt öffnen",

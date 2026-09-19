@@ -617,7 +617,8 @@ sklm: {
       "import": "Importar",
       "projects": "Proyectos",
       "info": "Información",
-      "quota": "Seguimiento de cuota"
+      "quota": "Seguimiento de cuota",
+      "plugins": "Plugins"
     },
     "general": "General",
     "ai": "AI",
@@ -1164,19 +1165,20 @@ sklm: {
     "presetKiloCode": "Kilo Code",
     "presetCline": "Cline / ClinePass",
     "presetCodebuddy": "CodeBuddy",
-    "presetGrokCli": "Grok CLI (Grok Build)"
+    "presetGrokCli": "Grok CLI (Grok Build)",
+    "plugins": "Extensiones y plugins"
   },
   mode: {
     manual: "Manual",
-    manualDesc: "Claude pedirá aprobación antes de cada edición",
+    manualDesc: "Pi pedirá aprobación antes de cada edición",
     editAuto: "Editar automáticamente",
-    editAutoDesc: "Claude editará el texto seleccionado o el archivo completo",
+    editAutoDesc: "Pi editará el texto seleccionado o el archivo completo",
     plan: "Planificar",
-    planDesc: "Claude explorará el código y presentará un plan antes de editar",
+    planDesc: "Pi explorará el código y presentará un plan antes de editar",
     auto: "Automático",
-    autoDesc: "Claude aprueba acciones seguras y pausa ante operaciones arriesgadas",
+    autoDesc: "Pi aprueba acciones seguras y pausa ante operaciones arriesgadas",
     bypass: "Omitir permisos",
-    bypassDesc: "Claude omite las comprobaciones de permisos y ejecuta acciones de forma autónoma",
+    bypassDesc: "Pi omite las comprobaciones de permisos y ejecuta acciones de forma autónoma",
   },
   "project": {
     "open": "Abrir proyecto",

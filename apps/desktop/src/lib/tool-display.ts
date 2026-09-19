@@ -18,7 +18,7 @@ const SUMMARY_KEYS: Record<ToolAction, string[]> = {
   write: ["path", "file_path", "filePath"],
   edit: ["path", "file_path", "filePath"],
   run: ["command", "cmd"],
-  fetch: ["url", "query"],
+  fetch: ["url", "query", "topic"],
   fork: ["prompt", "task", "description", "name"],
   // `description` is the short label the model writes for the delegation; the
   // `task` brief is a paragraph and belongs in the expanded detail. A lifecycle
@@ -106,7 +106,7 @@ export function getToolAction(toolName?: string): ToolAction {
   if (isDelegationStartTool(toolName) || delegationLifecycleKind(toolName)) {
     return "delegate";
   }
-  if (matches(["websearch", "searchquery", "fetch", "http", "browser"])) {
+  if (matches(["websearch", "searchquery", "fetch", "http", "browser", "deepresearch", "research"])) {
     return "fetch";
   }
   if (matches(["read", "readfile", "fileread"])) return "read";

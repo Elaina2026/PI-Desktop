@@ -217,6 +217,13 @@ test("vendors are derived from pi-ai, not hardcoded", async () => {
       isSubscription: false,
       accounts: [],
     },
+    {
+      vendorId: "github-copilot",
+      name: "GitHub Copilot",
+      loginLabel: "Sign in with GitHub Copilot",
+      isSubscription: true,
+      accounts: [],
+    },
   ]);
 });
 
