@@ -413,6 +413,10 @@ export const stream = (
         wireModel = `${wireModel}-${suffix}`;
       } else if (wireModel === "gemini-3.1-pro") {
         wireModel = "gemini-3.1-pro-low";
+      } else if (wireModel === "gemini-3.1-flash-image") {
+        wireModel = "gemini-3.1-flash-image";
+      } else if (wireModel === "gemini-3.1-flash") {
+        wireModel = "gemini-3-flash";
       } else if (wireModel === "claude-opus-4-6") {
         wireModel = "claude-opus-4-6-thinking";
       } else if (wireModel === "gpt-oss-120b") {

@@ -53,6 +53,7 @@ import {
   IconChevronRight,
   IconCircleAlert,
   IconExternal,
+  IconGlobe,
   IconSearch,
   IconSparkles,
   IconStop,
@@ -221,6 +222,63 @@ function DeepResearchResultView({ message }: { message: UiMessage }) {
   );
 }
 
+function WebFetchResultView({
+  message,
+  onOpenUrl,
+}: {
+  message: UiMessage;
+  onOpenUrl: (url: string) => void;
+}) {
+  const args = message.toolArgs as Record<string, unknown> | undefined;
+  const url = typeof args?.url === "string" ? args.url : "";
+  const prompt = typeof args?.prompt === "string" ? args.prompt : "";
+  const payload = toolResultPayload(message);
+  const content =
+    typeof payload === "string"
+      ? payload
+      : typeof payload === "object" && payload && "content" in (payload as Record<string, unknown>)
+        ? String((payload as Record<string, unknown>).content)
+        : payload
+          ? JSON.stringify(payload, null, 2)
+          : "";
+
+  let domain = "";
+  try {
+    domain = new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    domain = "";
+  }
+
+  return (
+    <div className="tool-fetch-card">
+      <div className="tool-fetch-header">
+        <div
+          className="tool-fetch-tag"
+          role="button"
+          tabIndex={0}
+          onClick={() => url && onOpenUrl(url)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              if (url) onOpenUrl(url);
+            }
+          }}
+        >
+          <IconGlobe size={13} />
+          <span className="tool-fetch-domain">{domain || url || "Web page"}</span>
+          <IconExternal size={11} className="tool-fetch-external" />
+        </div>
+        {prompt ? <div className="tool-fetch-prompt">{prompt}</div> : null}
+      </div>
+      {content ? (
+        <div className="tool-fetch-content">
+          <Markdown source={content} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * Streaming updates replace one message object at a time. Regular rows only
  * depend on that message and their nested run; topology rows additionally
@@ -274,6 +332,11 @@ export const ToolRow = memo(function ToolRow({
   // (D227). Property reads only, so a streaming row can afford it every tick.
   const run = action === "run" ? runOutcome(message) : null;
   const failed = status === "error" || run === "failed";
+  const rawToolLower = (message.toolName || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const isWebSearch = rawToolLower === "websearch" || rawToolLower === "searchweb";
+  const isDeepResearch = rawToolLower === "deepresearch" || rawToolLower === "research";
+  const isWebFetch = rawToolLower === "webfetch" || rawToolLower === "fetch";
+  const isRichCard = isWebSearch || isDeepResearch || isWebFetch;
   // Tool details are always user-opened. Failure stays visible in the row head
   // through its status icon/label without expanding the payload automatically.
   const disclosure = useAutomaticDisclosure(false);
@@ -302,12 +365,9 @@ export const ToolRow = memo(function ToolRow({
   const command = runHead
     ? getToolSummaryValue(message.toolName, message.toolArgs)
     : "";
-  const rawToolLower = (message.toolName || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-  const isWebSearch = rawToolLower === "websearch" || rawToolLower === "searchweb";
-  const isDeepResearch = rawToolLower === "deepresearch" || rawToolLower === "research";
   // A delegation is always expandable: its brief, report and the delegate's
   // own rows all live in the body.
-  const hasDetails = hasToolDetails(message) || Boolean(delegate) || isWebSearch || isDeepResearch;
+  const hasDetails = hasToolDetails(message) || Boolean(delegate) || isRichCard;
   const chips = toolResultChips(message);
   // A lifecycle row (ADR 0089) is about subagents, so it is presented as one:
   // the agent names it reports on replace the bare delegation ids it was
@@ -711,6 +771,11 @@ export const ToolRow = memo(function ToolRow({
             />
           ) : isDeepResearch ? (
             <DeepResearchResultView message={message} />
+          ) : isWebFetch ? (
+            <WebFetchResultView
+              message={message}
+              onOpenUrl={(url) => openTarget({ kind: "url", url })}
+            />
           ) : blocks && blocks.length > 0 ? (
             <ToolDetailBlocks blocks={blocks} plain={runHead} />
           ) : null}

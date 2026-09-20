@@ -329,6 +329,37 @@ export function useComposerSubmit({
           }
           return;
         }
+        const isResearchCommand =
+          name === "research" ||
+          command?.name === "research" ||
+          command?.id === "builtin.research";
+        if (isResearchCommand) {
+          try {
+            const visibleDraft = text.trim();
+            const visibleCommandEnd = visibleDraft.search(/\s/);
+            const visibleCommandBody =
+              visibleCommandEnd === -1
+                ? ""
+                : visibleDraft.slice(visibleCommandEnd).trim();
+            const topic = visibleCommandBody || commandBody;
+            const researchPrompt = topic
+              ? `[Deep Research Directive]\nExecute comprehensive multi-stage deep research on the following topic using autonomous query expansion, parallel search, and synthesis with citations:\n\nTopic: ${topic}`
+              : `[Deep Research Directive]\nWhat topic or question would you like me to deeply research? Please provide the research objective.`;
+            const accepted = await sendPrompt(
+              serializeInlineComposerFileReferences(
+                researchPrompt,
+                activeFileReferences,
+              ),
+              draft.draftSnapshot(researchPrompt),
+            );
+            if (accepted) draft.clearDraftForKey(submittedDraftKey);
+          } catch (error) {
+            showToast(error instanceof Error ? error.message : String(error), {
+              variant: "error",
+            });
+          }
+          return;
+        }
         if (isModeCommand && commandBody) {
           try {
             await runPaletteCommand(command.id);

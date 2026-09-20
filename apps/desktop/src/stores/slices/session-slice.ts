@@ -577,6 +577,7 @@ export function createSessionSlice({
           session.id === sessionId
             ? {
                 ...result.session,
+                ...(payload.permissionMode ? { permissionMode: payload.permissionMode } : {}),
                 pinned: sessionIsPinned(sessionId, state.sessionMeta),
                 archived: sessionIsArchived(sessionId, state.sessionMeta),
               }

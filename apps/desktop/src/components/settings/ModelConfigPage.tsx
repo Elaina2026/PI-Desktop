@@ -39,6 +39,7 @@ import {
 import { copyProviderConfiguration, type ProviderCopyDraft } from "./provider-copy";
 import { ProviderSetupDialog } from "./ProviderSetupDialog";
 import { VendorAccountsSection } from "./VendorAccountsSection";
+import { renderVendorLogo } from "../ProviderLogo";
 
 const DELETE_CONFIRM_MS = 3000;
 
@@ -388,7 +389,8 @@ export function ModelConfigPage() {
                               index > 0 && "has-divider",
                             )}
                           >
-                            {provider.name}
+                            {renderVendorLogo(provider, 14)}
+                            <span>{provider.name}</span>
                           </div>
                         ) : null}
                         <button
@@ -465,6 +467,7 @@ export function ModelConfigPage() {
                   >
                     <div className="model-provider-row-copy">
                       <div className="model-provider-row-title">
+                        {renderVendorLogo(provider, 20)}
                         <span className="model-provider-row-name">{provider.name}</span>
                         {isDefault ? (
                           <Badge tone="success">{t("settings.default")}</Badge>

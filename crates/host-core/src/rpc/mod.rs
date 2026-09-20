@@ -1554,16 +1554,28 @@ async fn handle_request(
             let path = crate::db::canonical_project_path(path)
                 .ok_or_else(|| rpc_err(1002, "path required", "INVALID_PARAMS"))?;
             let st = state.lock().await;
-            if st
+            if let Some(group) = st
                 .db
-                .path_is_in_stored_project_group(&path)
+                .project_group_for_path(&path)
                 .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?
             {
-                return Err(rpc_err(
-                    1002,
-                    "project belongs to a multi-folder project group; remove the folder from the group first",
-                    "INVALID_PARAMS",
-                ));
+                if !group.legacy {
+                    let delete_group = params
+                        .get("deleteGroup")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if group.roots.len() <= 1 || delete_group {
+                        st.db
+                            .delete_project_group(&group.id)
+                            .map_err(|e| rpc_err(1000, e.to_string(), "INTERNAL"))?;
+                    } else {
+                        return Err(rpc_err(
+                            1002,
+                            "project belongs to a multi-folder project group; remove the folder from the group first",
+                            "INVALID_PARAMS",
+                        ));
+                    }
+                }
             }
             let session_ids = st
                 .db

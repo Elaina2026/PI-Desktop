@@ -161,7 +161,7 @@ export function PluginsPage() {
                 />
               </div>
             ) : null
-          ) : (
+          ) : tab === "market" ? (
             <div className="plugins-toolbar-end">
               {marketLoading ? (
                 <span className="plugins-result-count" aria-live="polite">
@@ -174,7 +174,7 @@ export function PluginsPage() {
                 placeholder={t("plugins.marketSearchPlaceholder")}
               />
             </div>
-          )}
+          ) : null}
         </div>
         {tab === "installed" ? (
           <InstalledPluginsPanel {...page} />

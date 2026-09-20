@@ -19,6 +19,7 @@ import {
 } from "../../lib/oauth-login-session";
 import { Badge, Button, TooltipButton, cx } from "../ui";
 import { IconKey, IconPencil, IconPlug, IconTrash } from "../icons";
+import { renderVendorLogo } from "../ProviderLogo";
 import { OAuthLoginDialog } from "./OAuthLoginDialog";
 import {
   VendorAccountDialog,
@@ -269,6 +270,7 @@ export function VendorAccountsSection() {
                 >
                   <div className="provider-row-info">
                     <div className="provider-row-title-line">
+                      {renderVendorLogo(vendor, 20)}
                       <span className="provider-row-name">{vendor.name}</span>
                       {vendor.isSubscription ? (
                         <Badge tone="neutral">{t("settings.vendorSubscription")}</Badge>

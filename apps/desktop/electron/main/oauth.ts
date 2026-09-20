@@ -46,6 +46,7 @@ import {
 } from "@pi-desktop/agent-runtime";
 import {
   OAUTH_AUTH_KIND,
+  type AccountQuotaBucket,
   type AccountQuotaInfo,
   type OAuthLoginEvent,
   type OAuthPromptRequest,
@@ -164,9 +165,11 @@ export type HostCall = <T = unknown>(
 /** The slice of a provider row this module reads; the rest stays in index.ts. */
 export type OAuthProviderRow = {
   id: string;
+  name?: string;
   vendorKey?: string;
   authKind?: string;
   hasOauth?: boolean;
+  hasSecret?: boolean;
   oauthAccountLabel?: string;
   headers?: Record<string, string>;
   baseUrl?: string;
@@ -314,6 +317,29 @@ export class VendorOAuth {
         connected: row.hasOauth === true,
       }));
 
+    const ALLOWED_OAUTH_VENDORS = new Set([
+      "antigravity",
+      "github-copilot",
+      "github",
+      "anthropic",
+      "claude",
+      "openai-codex",
+      "codex",
+      "cursor",
+    ]);
+
+    const filteredList = list
+      .filter((item) => ALLOWED_OAUTH_VENDORS.has(item.vendorId))
+      .map((item) => {
+        if (item.vendorId === "anthropic") {
+          return { ...item, name: "Claude Code", loginLabel: "Sign in with Claude" };
+        }
+        if (item.vendorId === "openai-codex") {
+          return { ...item, name: "OpenAI Codex", loginLabel: "Sign in with ChatGPT" };
+        }
+        return item;
+      });
+
     const extraVendors: Array<{
       vendorId: string;
       name: string;
@@ -328,17 +354,10 @@ export class VendorOAuth {
         isSubscription: false,
         baseUrl: "https://daily-cloudcode-pa.googleapis.com",
       },
-      {
-        vendorId: "github-copilot",
-        name: "GitHub Copilot",
-        loginLabel: "Sign in with GitHub Copilot",
-        isSubscription: true,
-        baseUrl: "https://api.githubcopilot.com",
-      },
     ];
 
     for (const extra of extraVendors) {
-      if (list.some((item) => item.vendorId === extra.vendorId)) continue;
+      if (filteredList.some((item) => item.vendorId === extra.vendorId)) continue;
       const matchingAccounts = rows
         .filter(
           (candidate) =>
@@ -350,7 +369,7 @@ export class VendorOAuth {
           accountLabel: row.oauthAccountLabel || undefined,
           connected: row.hasOauth === true,
         }));
-      list.push({
+      filteredList.push({
         vendorId: extra.vendorId,
         name: extra.name,
         loginLabel: extra.loginLabel,
@@ -359,7 +378,7 @@ export class VendorOAuth {
       });
     }
 
-    return list;
+    return filteredList;
   }
 
   /**
@@ -405,7 +424,7 @@ export class VendorOAuth {
     const models = await this.ensureCatalogModels();
     const provider = models.getProvider(vendorId);
     if (!provider?.auth.oauth) {
-      throw new Error(`unknown vendor account: ${vendorId}`);
+      throw new Error(`Vendor "${vendorId}" does not support OAuth login. Please configure it with an API key in AI Providers.`);
     }
     // A second attempt replaces the one in flight rather than racing it, and
     // waits for it to let go: both hold the same local callback port, so
@@ -486,23 +505,326 @@ export class VendorOAuth {
   }
 
   /**
-   * Fetch live quota status for an OAuth account.
+   * Fetch live quota status for an OAuth account or API key provider.
    */
   async getQuota(providerId: string, force = false): Promise<AccountQuotaInfo> {
     const row = (await this.rows()).find((candidate) => candidate.id === providerId);
-    if (row && row.vendorKey !== "antigravity") {
+    const vendorKey = (row?.vendorKey || "").toLowerCase();
+
+    if (vendorKey !== "antigravity") {
+      let token = "";
+      const rawOauth = await this.readCredential(providerId);
+      if (rawOauth) {
+        try {
+          const cred = typeof rawOauth === "string" ? JSON.parse(rawOauth) : rawOauth;
+          token = cred.access_token || cred.token || cred.apiKey || "";
+        } catch {}
+      }
+      if (!token && row?.hasSecret) {
+        try {
+          const { value } = await this.deps.call<{ value?: string | null }>(
+            "secrets.getForRuntime",
+            { secretRef: `secret:provider:${providerId}` },
+          );
+          if (value) token = value;
+        } catch {}
+      }
+
+      if (token) {
+        // GitHub Copilot
+        if (vendorKey === "github-copilot" || vendorKey === "github") {
+          try {
+            const res = await fetch("https://api.github.com/copilot_internal/user", {
+              headers: {
+                Authorization: `token ${token}`,
+                Accept: "application/json",
+                "User-Agent": "GitHubCopilot/1.0",
+                "Editor-Version": "vscode/1.100.0",
+              },
+            });
+            if (res.ok) {
+              const data = (await res.json()) as any;
+              const buckets: AccountQuotaBucket[] = [];
+              const resetDate = data.quota_reset_date || data.limited_user_reset_date;
+              let resetInSeconds = 0;
+              if (resetDate) {
+                const diff = new Date(resetDate).getTime() - Date.now();
+                if (diff > 0) resetInSeconds = Math.round(diff / 1000);
+              }
+              if (data.quota_snapshots) {
+                const s = data.quota_snapshots;
+                if (s.chat && typeof s.chat.entitlement === "number") {
+                  const rem = s.chat.entitlement > 0 ? Math.round((s.chat.remaining / s.chat.entitlement) * 100) : 100;
+                  buckets.push({ id: "copilot-chat", name: "Copilot Chat", remainingPercentage: rem, resetInSeconds });
+                }
+                if (s.completions && typeof s.completions.entitlement === "number") {
+                  const rem = s.completions.entitlement > 0 ? Math.round((s.completions.remaining / s.completions.entitlement) * 100) : 100;
+                  buckets.push({ id: "copilot-completions", name: "Code Completions", remainingPercentage: rem, resetInSeconds });
+                }
+                if (s.premium_interactions && typeof s.premium_interactions.entitlement === "number") {
+                  const rem = s.premium_interactions.entitlement > 0 ? Math.round((s.premium_interactions.remaining / s.premium_interactions.entitlement) * 100) : 100;
+                  buckets.push({ id: "copilot-premium", name: "Premium Interactions", remainingPercentage: rem, resetInSeconds });
+                }
+              } else if (data.monthly_quotas || data.limited_user_quotas) {
+                const m = data.monthly_quotas || {};
+                const u = data.limited_user_quotas || {};
+                const remChat = m.chat > 0 ? Math.max(0, Math.round(((m.chat - (u.chat || 0)) / m.chat) * 100)) : 100;
+                buckets.push({ id: "copilot-chat", name: "Copilot Chat", remainingPercentage: remChat, resetInSeconds });
+              }
+
+              if (buckets.length > 0) {
+                const minRem = Math.min(...buckets.map((b) => b.remainingPercentage));
+                return {
+                  providerId,
+                  vendorId: vendorKey,
+                  plan: data.copilot_plan || "Copilot Individual",
+                  status: minRem <= 15 ? "low" : "healthy",
+                  remainingPercentage: minRem,
+                  buckets,
+                  resetInSeconds,
+                  lastUpdated: new Date().toISOString(),
+                };
+              }
+            }
+          } catch {}
+        }
+
+        // Claude Code (Anthropic)
+        if (vendorKey === "anthropic" || vendorKey === "claude") {
+          try {
+            const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "anthropic-beta": "oauth-2025-04-20",
+                "anthropic-version": "2023-06-01",
+              },
+            });
+            if (res.ok) {
+              const data = (await res.json()) as any;
+              const buckets: AccountQuotaBucket[] = [];
+              if (data.five_hour && typeof data.five_hour.utilization === "number") {
+                const rem = Math.max(0, 100 - data.five_hour.utilization);
+                let rSec = 0;
+                if (data.five_hour.resets_at) {
+                  const diff = new Date(data.five_hour.resets_at).getTime() - Date.now();
+                  if (diff > 0) rSec = Math.round(diff / 1000);
+                }
+                buckets.push({ id: "claude-5h", name: "Session Limit (5h)", remainingPercentage: rem, resetInSeconds: rSec });
+              }
+              if (data.seven_day && typeof data.seven_day.utilization === "number") {
+                const rem = Math.max(0, 100 - data.seven_day.utilization);
+                let rSec = 0;
+                if (data.seven_day.resets_at) {
+                  const diff = new Date(data.seven_day.resets_at).getTime() - Date.now();
+                  if (diff > 0) rSec = Math.round(diff / 1000);
+                }
+                buckets.push({ id: "claude-7d", name: "Weekly Limit (7d)", remainingPercentage: rem, resetInSeconds: rSec });
+              }
+              if (Array.isArray(data.limits)) {
+                for (const lim of data.limits) {
+                  if (lim.kind === "weekly_scoped" && lim.scope?.model?.display_name) {
+                    const name = `Weekly ${lim.scope.model.display_name}`;
+                    const rem = Math.max(0, 100 - (lim.percent || 0));
+                    let rSec = 0;
+                    if (lim.resets_at) {
+                      const diff = new Date(lim.resets_at).getTime() - Date.now();
+                      if (diff > 0) rSec = Math.round(diff / 1000);
+                    }
+                    buckets.push({ id: `claude-${name}`, name, remainingPercentage: rem, resetInSeconds: rSec });
+                  }
+                }
+              }
+              if (buckets.length > 0) {
+                const minRem = Math.min(...buckets.map((b) => b.remainingPercentage));
+                return {
+                  providerId,
+                  vendorId: vendorKey,
+                  plan: "Claude Code",
+                  status: minRem <= 15 ? "low" : "healthy",
+                  remainingPercentage: minRem,
+                  buckets,
+                  lastUpdated: new Date().toISOString(),
+                };
+              }
+            }
+          } catch {}
+        }
+
+        // OpenAI Codex
+        if (vendorKey === "openai-codex" || vendorKey === "codex") {
+          try {
+            const res = await fetch("https://chatgpt.com/backend-api/wham/usage", {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "User-Agent": "codex_cli_rs/0.154.0",
+              },
+            });
+            if (res.ok) {
+              const data = (await res.json()) as any;
+              const buckets: AccountQuotaBucket[] = [];
+              const rl = data.rate_limit || data;
+              if (rl.primary_window) {
+                const rem = Math.max(0, 100 - (rl.primary_window.used_percent || 0));
+                let rSec = 0;
+                if (rl.primary_window.reset_at) {
+                  const diff = new Date(rl.primary_window.reset_at).getTime() - Date.now();
+                  if (diff > 0) rSec = Math.round(diff / 1000);
+                }
+                buckets.push({ id: "codex-primary", name: "Codex Session (5h)", remainingPercentage: rem, resetInSeconds: rSec });
+              }
+              if (rl.secondary_window) {
+                const rem = Math.max(0, 100 - (rl.secondary_window.used_percent || 0));
+                let rSec = 0;
+                if (rl.secondary_window.reset_at) {
+                  const diff = new Date(rl.secondary_window.reset_at).getTime() - Date.now();
+                  if (diff > 0) rSec = Math.round(diff / 1000);
+                }
+                buckets.push({ id: "codex-secondary", name: "Codex Weekly (7d)", remainingPercentage: rem, resetInSeconds: rSec });
+              }
+              if (buckets.length > 0) {
+                const minRem = Math.min(...buckets.map((b) => b.remainingPercentage));
+                return {
+                  providerId,
+                  vendorId: vendorKey,
+                  plan: "ChatGPT Plus/Pro",
+                  status: minRem <= 15 ? "low" : "healthy",
+                  remainingPercentage: minRem,
+                  buckets,
+                  lastUpdated: new Date().toISOString(),
+                };
+              }
+            }
+          } catch {}
+        }
+
+        // DeepSeek Balance
+        if (vendorKey === "deepseek") {
+          try {
+            const res = await fetch("https://api.deepseek.com/user/balance", {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+              },
+            });
+            if (res.ok) {
+              const data = (await res.json()) as any;
+              const infos = Array.isArray(data.balance_infos) ? data.balance_infos : [];
+              const buckets: AccountQuotaBucket[] = [];
+              for (const item of infos) {
+                const curr = item.currency || "USD";
+                const tot = Number(item.total_balance ?? 0);
+                buckets.push({
+                  id: `deepseek-${curr}`,
+                  name: `Balance (${curr}): ${tot.toFixed(2)} ${curr}`,
+                  remainingPercentage: tot > 0 ? 100 : 0,
+                  resetInSeconds: 0,
+                });
+              }
+              if (buckets.length > 0) {
+                const minRem = Math.min(...buckets.map((b) => b.remainingPercentage));
+                return {
+                  providerId,
+                  vendorId: vendorKey,
+                  plan: "DeepSeek API",
+                  status: minRem <= 0 ? "exhausted" : "healthy",
+                  remainingPercentage: minRem,
+                  buckets,
+                  lastUpdated: new Date().toISOString(),
+                };
+              }
+            }
+          } catch {}
+        }
+
+        // Zhipu / GLM / Z.AI
+        if (vendorKey === "zhipuai" || vendorKey === "zai" || vendorKey === "glm") {
+          try {
+            const res = await fetch("https://api.z.ai/api/monitor/usage/quota/limit", {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: "application/json",
+              },
+            });
+            if (res.ok) {
+              const json = (await res.json()) as any;
+              const limits = Array.isArray(json?.data?.limits) ? json.data.limits : [];
+              const buckets: AccountQuotaBucket[] = [];
+              for (const lim of limits) {
+                const name = lim.type || "Token Quota";
+                const rem = lim.limit > 0 ? Math.round(((lim.limit - (lim.usage || 0)) / lim.limit) * 100) : 100;
+                buckets.push({
+                  id: `glm-${name}`,
+                  name: `GLM ${name}`,
+                  remainingPercentage: Math.max(0, Math.min(100, rem)),
+                  resetInSeconds: lim.resetInSeconds || 0,
+                });
+              }
+              if (buckets.length > 0) {
+                const minRem = Math.min(...buckets.map((b) => b.remainingPercentage));
+                return {
+                  providerId,
+                  vendorId: vendorKey,
+                  plan: "GLM Coding",
+                  status: minRem <= 15 ? "low" : "healthy",
+                  remainingPercentage: minRem,
+                  buckets,
+                  lastUpdated: new Date().toISOString(),
+                };
+              }
+            }
+          } catch {}
+        }
+
+        // Groq rate limits
+        if (vendorKey === "groq") {
+          try {
+            const res = await fetch("https://api.groq.com/openai/v1/models", {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (res.ok) {
+              const remReq = res.headers.get("x-ratelimit-remaining-requests");
+              const limReq = res.headers.get("x-ratelimit-limit-requests");
+              const rSec = res.headers.get("x-ratelimit-reset-requests");
+              const buckets: AccountQuotaBucket[] = [];
+              if (remReq && limReq) {
+                const pct = Math.round((Number(remReq) / Number(limReq)) * 100);
+                buckets.push({
+                  id: "groq-req",
+                  name: `Requests Limit (${remReq}/${limReq})`,
+                  remainingPercentage: Math.max(0, Math.min(100, pct)),
+                  resetInSeconds: rSec ? Math.round(Number(rSec)) : 60,
+                });
+              }
+              if (buckets.length > 0) {
+                return {
+                  providerId,
+                  vendorId: vendorKey,
+                  plan: "Groq Cloud",
+                  status: "healthy",
+                  remainingPercentage: buckets[0].remainingPercentage,
+                  buckets,
+                  lastUpdated: new Date().toISOString(),
+                };
+              }
+            }
+          } catch {}
+        }
+      }
+
       return {
         providerId,
+        vendorId: vendorKey,
         status: "healthy",
         remainingPercentage: 100,
         buckets: [
           {
-            id: `${row.vendorKey}-standard`,
-            name: `${row.vendorKey || "Provider"} (Standard)`,
+            id: `${vendorKey}-standard`,
+            name: `${row?.name || vendorKey || "Provider"} (Standard)`,
             remainingPercentage: 100,
             resetInSeconds: 86400,
           },
         ],
+        lastUpdated: new Date().toISOString(),
       };
     }
 
@@ -592,9 +914,10 @@ export class VendorOAuth {
 
         if (Array.isArray(data.groups)) {
           for (const group of data.groups) {
-            const groupName = group.displayName || "";
-            const isGemini = groupName.toLowerCase().includes("gemini");
-            const groupPrefix = isGemini ? "Gemini" : "Claude/GPT";
+            const groupDisplayName = (group.displayName || group.name || "").trim();
+            const isGemini = groupDisplayName.toLowerCase().includes("gemini");
+            const groupFallback = isGemini ? "Gemini" : "Claude/GPT";
+            const effectiveGroup = groupDisplayName || groupFallback;
             if (Array.isArray(group.buckets)) {
               for (const b of group.buckets) {
                 const isDisabled = !!b.disabled;
@@ -621,26 +944,46 @@ export class VendorOAuth {
                     : typeof b.reset_in_seconds === "number"
                       ? b.reset_in_seconds
                       : undefined;
-                if (b.resetTime && resetInSeconds === undefined) {
-                  const diff = new Date(b.resetTime).getTime() - Date.now();
+                const rawResetTime = b.resetTime || b.reset_time || b.expireTime || b.expire_time;
+                if (rawResetTime && resetInSeconds === undefined) {
+                  const diff = new Date(rawResetTime).getTime() - Date.now();
                   if (diff > 0) resetInSeconds = Math.round(diff / 1000);
                 }
-                let bucketName = b.displayName || "";
-                if (!bucketName || bucketName === "5h" || bucketName === "Weekly") {
-                  const rawWindow = b.window || b.displayName || "";
-                  const windowLabel =
-                    rawWindow === "5h"
-                      ? "5h"
-                      : rawWindow.toLowerCase().includes("week")
-                        ? "Weekly"
-                        : rawWindow || "Standard";
-                  bucketName = `${groupPrefix} (${windowLabel})`;
+
+                const rawDisplayName = (b.displayName || "").trim();
+                const rawWindow = (b.window || "").trim();
+                const combinedLabel = `${rawDisplayName} ${rawWindow}`.toLowerCase();
+                const is5h =
+                  combinedLabel.includes("five hour") ||
+                  combinedLabel.includes("5h") ||
+                  combinedLabel.includes("5 hour");
+                const isWeekly = combinedLabel.includes("week");
+                const windowLabel = is5h ? "5h" : isWeekly ? "Weekly" : "";
+                const isGenericLimitPhrase =
+                  !rawDisplayName ||
+                  rawDisplayName === "5h" ||
+                  rawDisplayName === "Weekly" ||
+                  combinedLabel.includes("limit remaining") ||
+                  combinedLabel.includes("limit");
+
+                let bucketName = "";
+                if (effectiveGroup) {
+                  if (isGenericLimitPhrase) {
+                    bucketName = windowLabel
+                      ? `${effectiveGroup} (${windowLabel})`
+                      : effectiveGroup;
+                  } else {
+                    bucketName = `${effectiveGroup} - ${rawDisplayName}`;
+                  }
+                } else {
+                  bucketName = rawDisplayName || windowLabel || "Standard Limit";
                 }
+
                 buckets.push({
-                  id: b.bucketId || `${groupPrefix}-${bucketName}`,
+                  id: b.bucketId || `${effectiveGroup}-${bucketName}`,
                   name: bucketName,
                   remainingPercentage: rem,
-                  resetTime: b.resetTime,
+                  resetTime: b.resetTime || rawResetTime,
                   resetInSeconds,
                   disabled: isDisabled,
                   isLocked: isDisabled,
@@ -648,7 +991,7 @@ export class VendorOAuth {
 
                 if (rem < lowestPercentage) {
                   lowestPercentage = rem;
-                  lowestResetTime = b.resetTime || "";
+                  lowestResetTime = b.resetTime || rawResetTime || "";
                   lowestResetInSeconds = resetInSeconds;
                 }
               }
@@ -657,6 +1000,12 @@ export class VendorOAuth {
         }
 
         const activeBuckets = buckets.filter((b) => !b.disabled);
+        for (const b of activeBuckets) {
+          if (!b.resetInSeconds && lowestResetInSeconds) {
+            b.resetInSeconds = lowestResetInSeconds;
+            b.resetTime = lowestResetTime;
+          }
+        }
         let percentage =
           activeBuckets.length > 0
             ? Math.min(...activeBuckets.map((b) => b.remainingPercentage))
@@ -776,14 +1125,7 @@ export class VendorOAuth {
       if (account.vendorId === "antigravity") {
         return ANTIGRAVITY_MODELS;
       }
-      if (
-        account.vendorId === "cursor" ||
-        account.vendorId === "qoder" ||
-        account.vendorId === "kilo-code" ||
-        account.vendorId === "cline" ||
-        account.vendorId === "codebuddy" ||
-        account.vendorId === "xiaomi"
-      ) {
+      if (account.vendorId === "cursor") {
         return [
           { modelId: "claude-3-7-sonnet", apiStyle: "chat_completions", baseUrl: "https://api.openai.com/v1" },
           { modelId: "gpt-4o", apiStyle: "chat_completions", baseUrl: "https://api.openai.com/v1" },
@@ -849,14 +1191,7 @@ export class VendorOAuth {
         ...capabilities,
       };
     }
-    if (
-      account.vendorId === "cursor" ||
-      account.vendorId === "qoder" ||
-      account.vendorId === "kilo-code" ||
-      account.vendorId === "cline" ||
-      account.vendorId === "codebuddy" ||
-      account.vendorId === "xiaomi"
-    ) {
+    if (account.vendorId === "cursor") {
       const option: OAuthModelOption = {
         modelId,
         apiStyle: "chat_completions",

@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import type { OAuthVendor } from "@pi-desktop/shared";
 import { Button, portalOverlay } from "../ui";
+import { renderVendorLogo } from "../ProviderLogo";
 
 export function VendorPickerDialog({
   vendors,
@@ -44,7 +45,10 @@ export function VendorPickerDialog({
               className="oauth-option"
               onClick={() => onPick(vendor)}
             >
-              <span className="oauth-option-label">{vendor.name}</span>
+              <span className="oauth-option-label">
+                {renderVendorLogo(vendor, 20)}
+                <span>{vendor.name}</span>
+              </span>
               {/* The vendor's own call to action when it has one; otherwise
                   say whether this is a subscription rather than pay-per-use. */}
               {vendor.loginLabel || vendor.isSubscription ? (

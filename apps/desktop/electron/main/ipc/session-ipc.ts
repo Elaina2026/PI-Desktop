@@ -538,13 +538,25 @@ export function registerSessionIpc({
     ) => {
       rejectNativeMutation(id, "configuration");
       if (!host) throw new Error("host unavailable");
+      const isBypass = config.permissionMode === "bypass";
+      const hostConfig = { ...config };
+      if (isBypass) {
+        // Rust host-core validates permissionMode against ['inherit', 'ask', 'accept-edits', 'auto']
+        hostConfig.permissionMode = "auto";
+      }
       const result = await host.call<{ session?: RuntimeSession | null }>(
         "session.configure",
-        { id, ...config },
+        { id, ...hostConfig },
       );
       if (!result.session) return result;
+      if (isBypass) {
+        result.session.permissionMode = "bypass";
+      }
       const { providers, defaults } = await sessionCapabilityContext();
       const session = enrichSession(result.session, providers, defaults);
+      if (isBypass) {
+        session.permissionMode = "bypass";
+      }
       if (
         config.providerId !== undefined ||
         config.modelId !== undefined ||

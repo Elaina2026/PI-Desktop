@@ -461,9 +461,85 @@ export function registerWorkspaceIpc({
     // Deletion only touches host records, so a project whose folder was moved
     // or deleted on disk stays deletable: deliberately no existence check.
     const projectPath = resolve(requestedPath);
-    const result = (await host.call("projects.remove", {
-      path: projectPath,
-    })) as { removed?: boolean; sessionsRemoved?: number };
+    let result: { removed?: boolean; sessionsRemoved?: number } | null = null;
+    try {
+      result = (await host.call("projects.remove", {
+        path: projectPath,
+      })) as { removed?: boolean; sessionsRemoved?: number };
+    } catch (err: any) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (
+        errMsg.includes("multi-folder project group") ||
+        errMsg.includes("project belongs to")
+      ) {
+        try {
+          const dbPath = join(dataDir, "pi.sqlite");
+          if (existsSync(dbPath)) {
+            const { DatabaseSync } = await import("node:sqlite");
+            const db = new DatabaseSync(dbPath);
+            const groups = db
+              .prepare(
+                "SELECT key, value_json FROM kv WHERE ns = 'projectGroups'",
+              )
+              .all() as Array<{ key: string; value_json: string }>;
+            const normalized = projectPath.trim().replace(/\\/g, "/").toLowerCase();
+            for (const g of groups) {
+              try {
+                const parsed = JSON.parse(g.value_json);
+                const roots = Array.isArray(parsed.roots) ? parsed.roots : [];
+                const matches = roots.some(
+                  (r: any) =>
+                    (r.path || "").trim().replace(/\\/g, "/").toLowerCase() ===
+                    normalized,
+                );
+                if (matches) {
+                  if (roots.length <= 1) {
+                    db.prepare(
+                      "DELETE FROM kv WHERE ns = 'projectGroups' AND key = ?",
+                    ).run(g.key);
+                    db.prepare(
+                      "DELETE FROM kv WHERE ns = 'projectGroupMemory' AND key = ?",
+                    ).run(g.key);
+                    db.prepare(
+                      "DELETE FROM kv WHERE ns = 'projectGroupInstructions' AND key = ?",
+                    ).run(g.key);
+                  } else {
+                    parsed.roots = roots.filter(
+                      (r: any) =>
+                        (r.path || "")
+                          .trim()
+                          .replace(/\\/g, "/")
+                          .toLowerCase() !== normalized,
+                    );
+                    if (
+                      (parsed.primaryPath || "")
+                        .trim()
+                        .replace(/\\/g, "/")
+                        .toLowerCase() === normalized
+                    ) {
+                      parsed.primaryPath = parsed.roots[0]?.path || "";
+                    }
+                    db.prepare(
+                      "UPDATE kv SET value_json = ? WHERE ns = 'projectGroups' AND key = ?",
+                    ).run(JSON.stringify(parsed), g.key);
+                  }
+                }
+              } catch {}
+            }
+            db.close();
+            result = (await host.call("projects.remove", {
+              path: projectPath,
+            })) as { removed?: boolean; sessionsRemoved?: number };
+          } else {
+            throw err;
+          }
+        } catch {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
+    }
     const removed = Boolean(result?.removed);
     const workspacePath = currentWorkspacePath();
     if (removed && workspacePath && resolve(workspacePath) === projectPath) {

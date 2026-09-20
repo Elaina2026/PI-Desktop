@@ -49,6 +49,16 @@ const COMMAND_GROUP_ORDER = {
   skill: 4,
 } as const;
 
+const EXTRA_COMPOSER_COMMANDS: ComposerCommand[] = [
+  {
+    id: "builtin.research",
+    name: "research",
+    title: "Deep Research on a topic",
+    description: "Multi-stage deep research with autonomous query expansion and citations",
+    kind: "builtin",
+  },
+];
+
 function filterCommands(
   commands: ComposerCommand[],
   query: string,
@@ -113,6 +123,8 @@ function filterFiles(entries: FsIndexEntry[], query: string): AutocompleteItem[]
 export async function resolveComposerCommand(
   name: string,
 ): Promise<ComposerCommand | null> {
+  const extra = EXTRA_COMPOSER_COMMANDS.find((c) => c.name === name);
+  if (extra) return extra;
   const key = useAppStore.getState().workspace?.path ?? "";
   if (
     !commandsCache ||
@@ -121,7 +133,11 @@ export async function resolveComposerCommand(
   ) {
     try {
       const res = await api.composerCommands();
-      commandsCache = { key, at: Date.now(), commands: res.commands };
+      const list = [...res.commands];
+      for (const cmd of EXTRA_COMPOSER_COMMANDS) {
+        if (!list.some((c) => c.name === cmd.name)) list.push(cmd);
+      }
+      commandsCache = { key, at: Date.now(), commands: list };
     } catch {
       return null;
     }
@@ -187,11 +203,15 @@ export function useComposerAutocomplete({
       void api
         .composerCommands()
         .then((res) => {
-          commandsCache = { key: workspaceKey, at: Date.now(), commands: res.commands };
-          if (!cancelled) setCommands(res.commands);
+          const list = [...res.commands];
+          for (const cmd of EXTRA_COMPOSER_COMMANDS) {
+            if (!list.some((c) => c.name === cmd.name)) list.push(cmd);
+          }
+          commandsCache = { key: workspaceKey, at: Date.now(), commands: list };
+          if (!cancelled) setCommands(list);
         })
         .catch(() => {
-          if (!cancelled) setCommands([]);
+          if (!cancelled) setCommands([...EXTRA_COMPOSER_COMMANDS]);
         });
       return () => {
         cancelled = true;

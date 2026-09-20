@@ -3515,6 +3515,15 @@
   color: var(--ds-text-primary);
 }
 
+.provider-logo-img {
+  display: block;
+  object-fit: contain;
+  border-radius: var(--radius-xs);
+  user-select: none;
+  pointer-events: none;
+  flex-shrink: 0;
+}
+
 .quota-fallback-avatar {
   border-radius: var(--radius-md);
   background: var(--ds-tile-hover);

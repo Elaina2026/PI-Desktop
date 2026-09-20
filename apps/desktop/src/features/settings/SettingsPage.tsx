@@ -6,6 +6,8 @@ import type {
   PluginSettingsDestinationMeta,
   ShortcutPlatform,
 } from "@pi-desktop/shared";
+import { resolveUnifiedMode, unifiedModeToSessionConfig } from "@pi-desktop/shared";
+import { UNIFIED_MODES } from "../chat/composer/model";
 import { useAppStore } from "../../stores/app-store";
 import { api } from "../../lib/api";
 import {
@@ -41,7 +43,6 @@ import { KeyboardShortcutsSection } from "../../components/settings/KeyboardShor
 import { FontFamilyRow } from "../../components/settings/FontFamilyRow";
 import { FontSizeRow } from "../../components/settings/FontSizeRow";
 import { LanguageRow } from "../../components/settings/LanguageRow";
-import { SettingsMenuSelect } from "../../components/settings/SettingsMenuSelect";
 import { ThemeRow } from "../../components/settings/ThemeRow";
 import { NetworkProxySection } from "../../components/settings/NetworkProxySection";
 import { ProjectsPage } from "../../pages/ProjectsPage";
@@ -91,6 +92,12 @@ export function SettingsPage() {
 
   const [query, setQuery] = useState("");
   const [defaultModeMenuOpen, setDefaultModeMenuOpen] = useState(false);
+  const currentUnifiedId = resolveUnifiedMode(
+    settings?.defaultMode ?? "agent",
+    settings?.defaultPermissionMode ?? "ask",
+  );
+  const currentUnifiedMode =
+    UNIFIED_MODES.find((m) => m.id === currentUnifiedId) ?? UNIFIED_MODES[0];
   const [recoveringSettings, setRecoveringSettings] = useState(!settings);
   const [settingsRecoveryFailed, setSettingsRecoveryFailed] = useState(false);
   const [extensions, setExtensions] = useState<PluginSettingsDestinationMeta[]>([]);
@@ -354,44 +361,17 @@ export function SettingsPage() {
 
           {tab === "ai" && settings && (
             <div className="settings-stack">
-              <SettingsCard title={t("settings.permissions")}>
+              <SettingsCard title={t("mode.modes", "Modes")}>
                 <SettingsRow
-                  title={t("settings.permissionMode")}
-                  description={t("settings.permissionModeDesc")}
+                  title={t("settings.mode", "Mode")}
+                  description={t("settings.modeDesc", "Default mode and permission level for new tasks")}
                 >
-                  <SettingsMenuSelect
-                    className="settings-permission-select"
-                    label={t("settings.permissionMode")}
-                    value={settings.defaultPermissionMode ?? "ask"}
-                    onChange={(mode) =>
-                      void saveSettings({
-                        defaultPermissionMode: mode as GlobalPermissionMode,
-                      })
-                    }
-                    options={[
-                      { id: "ask", label: t("settings.permissionModeAsk") },
-                      {
-                        id: "accept-edits",
-                        label: t("settings.permissionModeAcceptEdits"),
-                      },
-                      { id: "auto", label: t("settings.permissionModeAuto") },
-                      {
-                        id: "bypass",
-                        label: t("settings.permissionModeBypass", "Bypass permissions"),
-                      },
-                    ]}
-                  />
-                </SettingsRow>
-              </SettingsCard>
-
-              <SettingsCard title={t("settings.defaultsTitle")}>
-                <SettingsRow title={t("settings.mode")} description={t("settings.modeDesc")}>
                   <AnchoredMenu
                     className="settings-theme-anchor"
                     open={defaultModeMenuOpen}
                     onClose={() => setDefaultModeMenuOpen(false)}
                     menuClassName="settings-theme-menu"
-                    label={t("settings.mode")}
+                    label={t("mode.modes", "Modes")}
                     align="end"
                     trigger={(ref) => (
                       <button
@@ -400,16 +380,13 @@ export function SettingsPage() {
                         className="settings-theme-trigger"
                         aria-haspopup="listbox"
                         aria-expanded={defaultModeMenuOpen}
-                        aria-label={t("settings.mode")}
+                        aria-label={t("mode.modes", "Modes")}
                         onClick={() => setDefaultModeMenuOpen((open) => !open)}
                       >
                         <span className="settings-theme-trigger-label">
                           {t(
-                            settings.defaultMode === "plan"
-                              ? "settings.modePlan"
-                              : settings.defaultMode === "goal"
-                                ? "settings.modeGoal"
-                                : "settings.modeAgent",
+                            currentUnifiedMode.labelKey,
+                            currentUnifiedMode.defaultLabel,
                           )}
                         </span>
                         <IconChevronDown size={14} aria-hidden />
@@ -418,11 +395,10 @@ export function SettingsPage() {
                   >
                     <div className="settings-theme-results">
                       <ul className="settings-theme-list">
-                        {(["agent", "plan", "goal"] as const).map((candidate) => {
-                          const isCurrent =
-                            (settings.defaultMode ?? "agent") === candidate;
+                        {UNIFIED_MODES.map((candidate) => {
+                          const isCurrent = currentUnifiedId === candidate.id;
                           return (
-                            <li key={candidate}>
+                            <li key={candidate.id}>
                               <button
                                 type="button"
                                 className={cx(
@@ -431,26 +407,19 @@ export function SettingsPage() {
                                 )}
                                 onClick={() => {
                                   setDefaultModeMenuOpen(false);
-                                  const value = candidate;
-                                  void saveSettings({ defaultMode: value });
+                                  const targetConfig = unifiedModeToSessionConfig(candidate.id);
+                                  void saveSettings({
+                                    defaultMode: targetConfig.mode,
+                                    defaultPermissionMode: targetConfig.permissionMode as GlobalPermissionMode,
+                                  });
                                 }}
                               >
                                 <div className="settings-theme-option-copy">
                                   <span className="settings-theme-option-title">
-                                    {t(
-                                      candidate === "plan"
-                                        ? "settings.modePlan"
-                                        : candidate === "goal"
-                                          ? "settings.modeGoal"
-                                          : "settings.modeAgent",
-                                    )}
+                                    {t(candidate.labelKey, candidate.defaultLabel)}
                                   </span>
                                   <span className="settings-theme-option-hint">
-                                    {candidate === "agent"
-                                      ? t("settings.modeAgentDesc", "Autonomous coding agent with full capability")
-                                      : candidate === "plan"
-                                        ? t("settings.modePlanDesc", "Formulate implementation plans for review")
-                                        : t("settings.modeGoalDesc", "Goal-directed execution with automated approvals")}
+                                    {t(candidate.descKey, candidate.defaultDesc)}
                                   </span>
                                 </div>
                                 {isCurrent ? <IconCheck size={14} /> : null}
@@ -482,6 +451,9 @@ export function SettingsPage() {
                     ))}
                   </div>
                 </SettingsRow>
+              </SettingsCard>
+
+              <SettingsCard title={t("settings.defaultsTitle")}>
                 <CommandShellRow settings={settings} saveSettings={saveSettings} />
                 <LinkOpenTargetRow settings={settings} saveSettings={saveSettings} />
                 <ContextUsageDisplayRow

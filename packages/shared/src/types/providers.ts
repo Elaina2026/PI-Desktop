@@ -192,10 +192,13 @@ export type AccountQuotaBucket = {
 
 export type AccountQuotaInfo = {
   providerId: string;
+  vendorId?: string;
+  plan?: string;
   remainingPercentage?: number;
   resetTime?: string;
   resetInSeconds?: number;
   status: "healthy" | "low" | "exhausted" | "unknown";
   error?: string;
   buckets?: AccountQuotaBucket[];
+  lastUpdated?: string;
 };

@@ -160,7 +160,6 @@ export function ProjectsPage() {
     sessionCount: number;
     roots: ProjectGroupRecord["roots"];
   } | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const [instructionsFor, setInstructionsFor] = useState<{
     name: string;
@@ -189,24 +188,6 @@ export function ProjectsPage() {
       canceled = true;
     };
   }, [sessions]);
-
-  // Row menus are popovers: Escape or any outside press dismisses them so a menu
-  // never outlives the row the pointer left.
-  useEffect(() => {
-    if (!menuFor) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenuFor(null);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuFor(null);
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [menuFor]);
 
   const items = useMemo(() => {
     const byPath = new Map<string, ProjectIndexItem>();

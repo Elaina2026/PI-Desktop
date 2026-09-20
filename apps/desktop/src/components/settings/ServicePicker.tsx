@@ -11,6 +11,7 @@ import { NAMED_ENDPOINT_PRESETS } from "@pi-desktop/shared";
 import { cx, Input } from "../ui";
 import { IconCheck, IconChevronDown, IconSearch } from "../icons";
 import { AnchoredMenu } from "./AnchoredMenu";
+import { renderVendorLogo } from "../ProviderLogo";
 
 export const CUSTOM_SERVICE = "custom";
 
@@ -143,7 +144,12 @@ export function ServicePicker({
             setOpen((current) => !current);
           }}
         >
-          <span className="provider-service-trigger-label">{triggerLabel}</span>
+          <span className="provider-service-trigger-label">
+            {selected && selected.id !== CUSTOM_SERVICE ? (
+              renderVendorLogo({ id: selected.id, name: selected.label }, 16)
+            ) : null}
+            <span>{triggerLabel}</span>
+          </span>
           <IconChevronDown
             className="provider-service-trigger-chevron"
             size={14}
@@ -207,7 +213,10 @@ export function ServicePicker({
                       {isCurrent ? <IconCheck size={12} /> : null}
                     </span>
                     <span className="provider-service-option-label">
-                      {option.label}
+                      {option.id !== CUSTOM_SERVICE ? (
+                        renderVendorLogo({ id: option.id, name: option.label }, 18)
+                      ) : null}
+                      <span>{option.label}</span>
                     </span>
                   </button>
                 </li>

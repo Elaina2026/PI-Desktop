@@ -484,6 +484,17 @@ impl Database {
         Ok(content.to_string())
     }
 
+    pub fn delete_project_group(&self, id: &str) -> Result<bool> {
+        let id = id.trim();
+        if id.is_empty() {
+            return Ok(false);
+        }
+        let removed = self.kv_delete(GROUP_NAMESPACE, id)?;
+        let _ = self.kv_delete(GROUP_MEMORY_NAMESPACE, id);
+        let _ = self.kv_delete(GROUP_INSTRUCTIONS_NAMESPACE, id);
+        Ok(removed)
+    }
+
     pub fn project_group_context_for_path(
         &self,
         path: &str,

@@ -573,10 +573,10 @@ export const api = {
   recordClipboardPaste: (text: string) =>
     invoke<{ ok: boolean }>(IPC.invoke.clipboardRecordPaste, { text }),
   clearProject: () => invoke(IPC.invoke.projectClear),
-  removeProject: (path: string) =>
+  removeProject: (path: string, options?: { deleteGroup?: boolean }) =>
     invoke<{ removed: boolean; sessionsRemoved: number }>(
       IPC.invoke.projectRemove,
-      { path },
+      { path, deleteGroup: options?.deleteGroup ?? true },
     ),
   setProject: (path: string) =>
     invoke<{ workspace: ProjectWorkspace | null }>(IPC.invoke.projectSet, path),
