@@ -5,6 +5,7 @@ import type { PendingAsk } from "../lib/pending-asks";
 import { useAppStore } from "../stores/app-store";
 import { Markdown } from "./Markdown";
 import { Button } from "./ui";
+import { IconCheck, IconHelp } from "./icons";
 
 type DraftAnswer = {
   values: string[];
@@ -163,6 +164,27 @@ export function AskToolCard({ request, queued = 0 }: { request: PendingAsk; queu
     else setIndex((value) => value + 1);
   };
 
+  const renderOptionMark = (selected: boolean, isMulti: boolean | undefined) => {
+    if (isMulti) {
+      return (
+        <span
+          className={`asktool-option-mark asktool-option-mark-checkbox ${selected ? "selected" : ""}`}
+          aria-hidden
+        >
+          {selected ? <IconCheck size={11} strokeWidth={2.5} /> : null}
+        </span>
+      );
+    }
+    return (
+      <span
+        className={`asktool-option-mark asktool-option-mark-radio ${selected ? "selected" : ""}`}
+        aria-hidden
+      >
+        {selected ? <span className="asktool-radio-dot" /> : null}
+      </span>
+    );
+  };
+
   const optionsElement = (
     <div className="asktool-options" role={current.multiSelect ? "group" : "radiogroup"}>
       {current.options.map((option) => {
@@ -183,10 +205,12 @@ export function AskToolCard({ request, queued = 0 }: { request: PendingAsk; queu
             onFocus={() => setHoveredOption(label)}
             onBlur={() => setHoveredOption((prev) => (prev === label ? null : prev))}
           >
-            <span className="asktool-option-mark" aria-hidden>{selected ? "✓" : ""}</span>
+            {renderOptionMark(selected, current.multiSelect)}
             <span className="asktool-option-label">{label}</span>
             {preview ? (
-              <span className="asktool-option-preview-tag" aria-hidden>Preview</span>
+              <span className="asktool-option-preview-tag" aria-hidden>
+                {t("askTool.previewBadge", "Preview")}
+              </span>
             ) : null}
           </button>
         );
@@ -201,8 +225,8 @@ export function AskToolCard({ request, queued = 0 }: { request: PendingAsk; queu
         onMouseEnter={() => setHoveredOption(CUSTOM_OPTION)}
         onMouseLeave={() => setHoveredOption((prev) => (prev === CUSTOM_OPTION ? null : prev))}
       >
-        <span className="asktool-option-mark" aria-hidden>{currentDraft.customSelected ? "✓" : ""}</span>
-        <span>{t("askTool.customOption")}</span>
+        {renderOptionMark(currentDraft.customSelected, current.multiSelect)}
+        <span className="asktool-option-label">{t("askTool.customOption")}</span>
       </button>
     </div>
   );
@@ -210,9 +234,12 @@ export function AskToolCard({ request, queued = 0 }: { request: PendingAsk; queu
   return (
     <section className="asktool-card" role="region" aria-label={t("askTool.title")}>
       <div className="asktool-card-header">
-        <div>
-          <div className="asktool-card-title" role="status" aria-live="polite">
-            {t("askTool.title")}
+        <div className="asktool-card-heading">
+          <div className="asktool-card-badge">
+            <IconHelp size={13} className="asktool-card-badge-icon" />
+            <span className="asktool-card-title" role="status" aria-live="polite">
+              {t("askTool.title")}
+            </span>
           </div>
           <div className="asktool-card-progress">
             {t("askTool.progress", { current: index + 1, total: request.questions.length })}
@@ -250,14 +277,16 @@ export function AskToolCard({ request, queued = 0 }: { request: PendingAsk; queu
       {hasAnyPreview ? (
         <div className="asktool-preview-layout">
           {optionsElement}
-          <aside className="ask-option-preview" aria-label="Option preview">
+          <aside className="ask-option-preview" aria-label={t("askTool.previewBadge", "Preview")}>
             {activePreviewOption && getOptionPreview(activePreviewOption) ? (
               <div className="ask-option-preview-card">
                 <div className="ask-option-preview-header">
                   <span className="ask-option-preview-title">
                     {getOptionLabel(activePreviewOption)}
                   </span>
-                  <span className="ask-option-preview-badge">Preview</span>
+                  <span className="ask-option-preview-badge">
+                    {t("askTool.previewBadge", "Preview")}
+                  </span>
                 </div>
                 <div className="ask-option-preview-body">
                   <Markdown source={getOptionPreview(activePreviewOption)!} />
@@ -265,7 +294,7 @@ export function AskToolCard({ request, queued = 0 }: { request: PendingAsk; queu
               </div>
             ) : (
               <div className="ask-option-preview-empty">
-                <span>Select or hover an option to preview</span>
+                <span>{t("askTool.previewPrompt", "Select or hover an option to preview")}</span>
               </div>
             )}
           </aside>
@@ -275,16 +304,25 @@ export function AskToolCard({ request, queued = 0 }: { request: PendingAsk; queu
       )}
 
       {currentDraft.customSelected ? (
-        <input
-          className="asktool-custom-input"
-          value={currentDraft.customText}
-          placeholder={t("askTool.customPlaceholder")}
-          aria-label={t("askTool.customOption")}
-          onChange={(event) =>
-            updateDraft((draft) => ({ ...draft, customText: event.target.value, skipped: false }))
-          }
-          autoFocus
-        />
+        <div className="asktool-custom-container">
+          <textarea
+            className="asktool-custom-input"
+            value={currentDraft.customText}
+            placeholder={t("askTool.customPlaceholder")}
+            aria-label={t("askTool.customOption")}
+            rows={2}
+            onChange={(event) =>
+              updateDraft((draft) => ({ ...draft, customText: event.target.value, skipped: false }))
+            }
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                next();
+              }
+            }}
+            autoFocus
+          />
+        </div>
       ) : null}
 
       <div className="asktool-card-actions">

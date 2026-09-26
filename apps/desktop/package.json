@@ -3,7 +3,7 @@
   "version": "0.15.0",
   "desktopName": "pi-desktop.desktop",
   "private": true,
-  "description": "PI-Desktop Electron application",
+  "description": "Pi-dex Electron application",
   "homepage": "https://github.com/vastsa/PI-Desktop",
   "author": {
     "name": "vastsa",
@@ -74,7 +74,7 @@
   },
   "build": {
     "appId": "net.aiuo.pi-desktop",
-    "productName": "PI-Desktop",
+    "productName": "Pi-dex",
     "directories": {
       "output": "release"
     },

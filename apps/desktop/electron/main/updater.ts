@@ -308,6 +308,10 @@ export class AppUpdaterController {
     if (this.state.mode === "disabled" || this.initialTimer || this.intervalTimer) {
       return;
     }
+    // Auto-update against upstream PI-Desktop is disabled in Pi-dex.
+    // Return early to prevent scheduling periodic background checks.
+    return;
+    /* eslint-disable-next-line no-unreachable */
     this.initialTimer = setTimeout(() => {
       void this.check().catch(() => undefined);
     }, AUTO_CHECK_INITIAL_DELAY_MS);

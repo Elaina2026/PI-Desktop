@@ -90,24 +90,44 @@
   gap: 12px;
 }
 
+.asktool-card-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.asktool-card-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.asktool-card-badge-icon {
+  color: var(--ds-accent);
+  flex-shrink: 0;
+}
+
 .asktool-card-title {
-  color: var(--ds-text-muted);
+  color: var(--ds-text-primary);
   font-size: var(--text-xs);
-  font-weight: var(--font-weight-medium);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: var(--tracking-wide);
   text-transform: uppercase;
 }
 
 .asktool-card-progress {
-  color: var(--ds-text-faint);
+  color: var(--ds-text-muted);
   font-size: var(--text-2xs);
+  font-weight: var(--font-weight-medium);
 }
 
 .asktool-question-number {
-  color: var(--ds-text-muted);
-  font-size: var(--text-xs);
-  font-weight: var(--font-weight-medium);
+  color: var(--ds-accent);
+  font-size: var(--text-2xs);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  margin-bottom: 4px;
 }
 
 .asktool-decline {
@@ -118,28 +138,43 @@
   cursor: pointer;
   font: inherit;
   font-size: var(--text-xs);
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  transition: color var(--motion-duration-fast) var(--motion-ease-out),
+    background-color var(--motion-duration-fast) var(--motion-ease-out);
 }
 
 .asktool-decline:hover {
   color: var(--ds-text-primary);
+  background: var(--ds-tile-deep);
+}
+
+.asktool-decline:focus-visible {
+  outline: 2px solid var(--ds-accent);
+  outline-offset: 1px;
 }
 
 .asktool-indicators {
   display: flex;
+  align-items: center;
   gap: 6px;
-  margin: 12px 0 14px;
+  margin: 10px 0 12px;
 }
 
 .asktool-indicator {
-  width: 8px;
-  height: 8px;
+  width: 20px;
+  height: 4px;
   padding: 0;
+  border: 0;
   border-radius: var(--radius-full);
   background: var(--ds-tile-deep);
   cursor: pointer;
+  transition: all var(--motion-duration-fast) var(--motion-ease-out);
 }
 
 .asktool-indicator.current {
+  background: var(--ds-accent);
+  width: 28px;
   outline: 2px solid color-mix(in oklab, var(--ds-accent) 30%, transparent);
   outline-offset: 2px;
 }
@@ -150,23 +185,20 @@
 
 .asktool-indicator.skipped {
   background: var(--ds-text-muted);
-}
-
-.asktool-question-number {
-  margin-bottom: 8px;
+  opacity: 0.6;
 }
 
 .asktool-question {
   margin: 0;
   color: var(--ds-text-primary);
   font-size: var(--text-md);
-  font-weight: var(--font-weight-medium);
+  font-weight: var(--font-weight-semibold);
   line-height: var(--leading-normal);
 }
 
 .asktool-options {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   max-height: min(320px, 36vh);
   max-height: min(320px, 36dvh);
   margin-top: 12px;
@@ -184,44 +216,70 @@
   display: flex;
   width: 100%;
   align-items: center;
-  gap: 8px;
-  min-height: 30px;
-  padding: 4px 8px;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 12px;
   border-radius: var(--radius-sm);
+  border: 1px solid var(--ds-border-subtle);
   background: var(--ds-tile-deep);
   color: var(--ds-text-secondary);
   cursor: pointer;
   font: inherit;
   font-size: var(--text-md);
   text-align: start;
-  transition: background-color var(--motion-duration-fast) var(--motion-ease-out);
+  transition: background-color var(--motion-duration-fast) var(--motion-ease-out),
+    border-color var(--motion-duration-fast) var(--motion-ease-out),
+    color var(--motion-duration-fast) var(--motion-ease-out);
 }
 
-.asktool-option:hover,
+.asktool-option:hover {
+  background: color-mix(in oklab, var(--ds-accent) 8%, var(--ds-tile-deep));
+  border-color: color-mix(in oklab, var(--ds-accent) 35%, var(--ds-border-subtle));
+  color: var(--ds-text-primary);
+}
+
 .asktool-option.selected {
-  background: color-mix(in oklab, var(--ds-accent) 10%, var(--ds-tile-deep));
+  background: color-mix(in oklab, var(--ds-accent) 12%, var(--ds-tile-deep));
+  border-color: var(--ds-accent);
   color: var(--ds-text-primary);
 }
 
 .asktool-option-mark {
   display: grid;
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   flex: none;
   place-items: center;
   border-radius: var(--radius-2xs);
-  background: var(--ds-tile-deep);
+  border: 1.5px solid var(--ds-border-strong);
+  background: transparent;
   color: var(--ds-accent);
   font-size: var(--text-xs);
   line-height: var(--leading-none);
+  transition: all var(--motion-duration-fast) var(--motion-ease-out);
 }
 
-.asktool-option[role="radio"] .asktool-option-mark {
+.asktool-option[role="radio"] .asktool-option-mark,
+.asktool-option-mark-radio {
   border-radius: var(--radius-full);
 }
 
-.asktool-option.selected .asktool-option-mark {
-  background: color-mix(in oklab, var(--ds-accent) 18%, transparent);
+.asktool-option.selected .asktool-option-mark,
+.asktool-option-mark.selected {
+  border-color: var(--ds-accent);
+}
+
+.asktool-option-mark-checkbox.selected {
+  background: var(--ds-accent);
+  border-color: var(--ds-accent);
+  color: var(--ds-bg-elevated);
+}
+
+.asktool-radio-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--ds-accent);
 }
 
 .asktool-option-label {
@@ -233,10 +291,11 @@
 
 .asktool-option-preview-tag {
   margin-left: auto;
-  padding: 1px 5px;
+  padding: 2px 6px;
   border-radius: var(--radius-3xs);
   background: var(--ds-bg-chip);
-  color: var(--ds-text-faint);
+  border: 1px solid var(--ds-border-subtle);
+  color: var(--ds-text-muted);
   font-size: var(--text-3xs);
   font-weight: var(--font-weight-medium);
   letter-spacing: var(--tracking-wide);
@@ -352,22 +411,31 @@
   }
 }
 
+.asktool-custom-container {
+  margin-top: 10px;
+}
+
 .asktool-custom-input {
   box-sizing: border-box;
   width: 100%;
-  margin-top: 10px;
-  padding: 6px 8px;
-  border: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--ds-border-subtle);
   border-radius: var(--radius-sm);
   background: var(--ds-tile-deep);
   color: var(--ds-text-primary);
   font: inherit;
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  resize: vertical;
+  min-height: 56px;
+  transition: border-color var(--motion-duration-fast) var(--motion-ease-out),
+    box-shadow var(--motion-duration-fast) var(--motion-ease-out);
 }
 
 .asktool-custom-input:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--ds-accent) 30%, transparent);
+  border-color: var(--ds-accent);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--ds-accent) 25%, transparent);
 }
 
 .asktool-card-actions {

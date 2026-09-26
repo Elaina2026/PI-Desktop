@@ -1,8 +1,8 @@
 export const en = {
   app: {
-    shellName: "PI-Desktop",
+    shellName: "Pi-dex",
     tagline: "Local AI coding partner",
-    starting: "Starting PI-Desktop…",
+    starting: "Starting Pi-dex…",
     loadingView: "Loading view…",
     uiCrashed: "Something went wrong with the interface",
   },
@@ -27,13 +27,13 @@ export const en = {
     close: "Close",
   },
   tray: {
-    open: "Open PI-Desktop",
-    quit: "Quit PI-Desktop",
-    askTitle: "Keep PI-Desktop running in the background?",
+    open: "Open Pi-dex",
+    quit: "Quit Pi-dex",
+    askTitle: "Keep Pi-dex running in the background?",
     askBody:
-      "When you close the window, PI-Desktop can keep running in the system tray so nothing is lost. You can change this any time in Settings.",
+      "When you close the window, Pi-dex can keep running in the system tray so nothing is lost. You can change this any time in Settings.",
     closeToTray: "Close to tray",
-    confirmQuitTitle: "Quit PI-Desktop?",
+    confirmQuitTitle: "Quit Pi-dex?",
     confirmQuitBody:
       "Are you sure you want to quit? All running sessions will be stopped and unsaved changes may be lost.",
     confirmQuit: "Quit",
@@ -91,7 +91,7 @@ export const en = {
     zoomOut: "Zoom Out",
     toggleFullScreen: "Toggle Full Screen",
     toggleDevTools: "Developer Tools",
-    appHelp: "PI-Desktop Help",
+    appHelp: "Pi-dex Help",
     openLogs: "Open Logs",
     checkForUpdates: "Check for Updates…",
   },
@@ -220,7 +220,7 @@ export const en = {
     emptyTitle: "What can I help you build?",
     emptyTitleInProject: "What can we build in {{project}}?",
     emptyTitleTemporary: "What would you like to explore temporarily?",
-    placeholder: "Ask PI-Desktop to help with anything",
+    placeholder: "Ask Pi-dex to help with anything",
     placeholderHome: "Ask anything",
     placeholderHint: "Type / for commands · @ for files",
     placeholderHomeHint: "Type / for commands · @ for files",
@@ -1379,6 +1379,8 @@ sklm: {
     skip: "Skip",
     decline: "Decline all",
     queued: "{{count}} more prompt is waiting",
+    previewBadge: "Preview",
+    previewPrompt: "Select or hover an option to preview",
     status: {
       answered: "Question {{number}} answered",
       unanswered: "Question {{number}} not answered",
