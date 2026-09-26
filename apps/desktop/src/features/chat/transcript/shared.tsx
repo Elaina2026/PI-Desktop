@@ -1,8 +1,8 @@
 import {
   memo,
   useCallback,
+  useContext,
   useId,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -15,14 +15,22 @@ import type {
 } from "@pi-desktop/shared";
 import {
   formatCompactTokenCount,
+  isCertificateVerificationError,
   THINKING_LEVELS,
   type ThinkingLevel,
 } from "@pi-desktop/shared";
 import { useOpenChatFileRef, useOpenPreviewTarget } from "../../../hooks/use-preview-target";
+import { useChatFileMenu } from "../../../hooks/use-chat-file-menu";
+import { ContextMenu } from "../../../components/ContextMenu";
 import { useDisclosureAnchorNotifier } from "../../../lib/disclosure-anchor-context";
+import { isThinkingActive, resolveThinkingDisplayMode } from "../../../lib/turn-process";
+import { TranscriptSearchContext } from "../../../lib/transcript-search-context";
+import { disclosureKey, useAutomaticDisclosure } from "./disclosure";
+export { useAutomaticDisclosure } from "./disclosure";
 import { messageThinking as thinkingText } from "../../../lib/assistant-turns";
 import { useReferencedImageDataUrl } from "../../../lib/use-referenced-image-data-url";
-import { isHtmlFilePath, splitChatText } from "../../../lib/chat-links";
+import { useVerifiedChatText } from "../../../hooks/use-verified-chat-text";
+import { isHtmlFilePath } from "../../../lib/chat-links";
 import type { SourcePositionProps } from "../../../lib/markdown-source";
 import { getToolAction, type ToolAction } from "../../../lib/tool-display";
 import { calculateTokenRate } from "../../../lib/context-usage";
@@ -52,8 +60,64 @@ import {
   IconTerminal,
   IconVideo,
   IconWrench,
+  IconX,
 } from "../../../components/icons";
 import { TooltipButton } from "../../../components/ui";
+
+/**
+ * Legacy message navigation reveals the row it names, at message precision.
+ * Item-level targeting is not part of this change.
+ */
+export function useMessageRevealRequest(messageId: string) {
+  const target = useContext(TranscriptSearchContext);
+  return target && target.messageId === messageId
+    ? target.requestId
+    : undefined;
+}
+
+
+/**
+ * Format a message timestamp for the toolbar.
+ * Today → HH:mm:ss; other days → YYYY-MM-DD HH:mm:ss.
+ */
+function formatMessageTime(iso: string, locale: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const now = new Date();
+  const isToday =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  if (isToday) {
+    return date.toLocaleTimeString(locale, {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+  }
+  return date.toLocaleString(locale, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+export function MessageTimestamp({ createdAt }: { createdAt?: string }) {
+  const { i18n } = useTranslation();
+  if (!createdAt) return null;
+  const display = formatMessageTime(createdAt, i18n.language);
+  if (!display) return null;
+  return (
+    <span className="message-timestamp" title={createdAt}>
+      {display}
+    </span>
+  );
+}
 
 export function CopyButton({
   text,
@@ -151,9 +215,24 @@ export function AssistantErrorMessage({ message }: { message: UiMessage }) {
   const detailsToggleRef = useRef<HTMLButtonElement | null>(null);
   const notifyDisclosureAnchor = useDisclosureAnchorNotifier();
   const detailsId = useId();
+  const dismissed = useAppStore(
+    (state) => state.dismissedAssistantErrorMessages[message.id] === true,
+  );
+  const dismissAssistantErrorMessage = useAppStore(
+    (state) => state.dismissAssistantErrorMessage,
+  );
   const error = message.error;
-  if (!error) return null;
-  const localizedKey = `errors.${error.code}`;
+  if (!error || dismissed) return null;
+  const networkDetails = error.details;
+  const certificateFailure =
+    error.code === "NETWORK_ERROR" &&
+    networkDetails !== null && typeof networkDetails === "object" &&
+    isCertificateVerificationError(
+      (networkDetails as { networkCode?: unknown }).networkCode,
+    );
+  const localizedKey = certificateFailure
+    ? "errors.providerCertificate"
+    : `errors.${error.code}`;
   const localized = t(localizedKey);
   const summary = localized === localizedKey ? t("chat.responseFailed") : localized;
   const configurationError = [
@@ -225,6 +304,15 @@ export function AssistantErrorMessage({ message }: { message: UiMessage }) {
               {t("errors.action.openSettings")}
             </button>
           ) : null}
+          <button
+            type="button"
+            className="message-error-dismiss"
+            aria-label={t("chat.dismissError")}
+            title={t("chat.dismissError")}
+            onClick={() => dismissAssistantErrorMessage(message.id)}
+          >
+            <IconX size={14} aria-hidden />
+          </button>
         </div>
       </div>
       <div
@@ -327,57 +415,6 @@ export function ToolActionIcon({ action }: { action: ToolAction }) {
   }
 }
 
-/**
- * Automatic disclosure is deliberately separate from user disclosure state.
- * A running process may open its latest details and close them when it settles,
- * but one user click takes ownership for the rest of that component's lifetime.
- * Layout effects keep the automatic transition from moving the transcript for a
- * painted frame.
- *
- * A *manual* toggle also hands its own title to the scroller that owns it,
- * before the state changes (#324): the height under the click may keep changing
- * for several frames, and the reader's place in the transcript is the one thing
- * that must not move while it does. The automatic transition below goes through
- * `setOpen` directly and never claims a reading position.
- */
-export function useAutomaticDisclosure(automaticOpen: boolean, revealRequest?: number) {
-  const [open, setOpen] = useState(automaticOpen || revealRequest !== undefined);
-  const notifyAnchor = useDisclosureAnchorNotifier();
-  const titleRef = useRef<HTMLButtonElement | null>(null);
-  const userInteractedRef = useRef(false);
-  const previousAutomaticOpenRef = useRef(automaticOpen);
-
-  useLayoutEffect(() => {
-    if (userInteractedRef.current) return;
-    if (previousAutomaticOpenRef.current === automaticOpen) return;
-    previousAutomaticOpenRef.current = automaticOpen;
-    setOpen(automaticOpen);
-  }, [automaticOpen]);
-
-  const claim = useCallback(() => {
-    userInteractedRef.current = true;
-  }, []);
-
-  useLayoutEffect(() => {
-    if (revealRequest === undefined) return;
-    claim();
-    setOpen(true);
-  }, [claim, revealRequest]);
-
-  const toggle = useCallback(() => {
-    claim();
-    notifyAnchor?.(titleRef.current);
-    setOpen((value) => !value);
-  }, [claim, notifyAnchor]);
-
-  const collapse = useCallback(() => {
-    claim();
-    notifyAnchor?.(titleRef.current);
-    setOpen(false);
-  }, [claim, notifyAnchor]);
-
-  return { open, toggle, collapse, claim, titleRef };
-}
 
 /** Actions whose path/url argument makes sense to preview in the panel. */
 export const PREVIEWABLE_ACTIONS = new Set<ToolAction>(["read", "write", "edit", "fetch"]);
@@ -415,21 +452,26 @@ export function FileRefChip({
 } & SourcePositionProps) {
   const { t } = useTranslation();
   const Icon = fileChipIcon(name, kind);
+  const { fileMenu, openFileMenu, closeFileMenu } = useChatFileMenu();
   const html = isHtmlFilePath(path) || isHtmlFilePath(name);
   return (
-    <button
-      type="button"
-      className="composer-chip chat-file-chip"
-      {...position}
-      title={`${html ? t("chat.previewUrl") : t("chat.openFile")} — ${path}`}
-      aria-label={`${name} — ${path}`}
-      onClick={() => onOpen(path)}
-    >
-      <span className="composer-chip-icon" aria-hidden>
-        <Icon size={13} />
-      </span>
-      <span className="composer-chip-name">{name}</span>
-    </button>
+    <>
+      <button
+        type="button"
+        className="composer-chip chat-file-chip"
+        {...position}
+        title={`${html ? t("chat.previewUrl") : t("chat.openFile")} — ${path}`}
+        aria-label={`${name} — ${path}`}
+        onClick={() => onOpen(path)}
+        onContextMenu={(event) => openFileMenu(event, { path })}
+      >
+        <span className="composer-chip-icon" aria-hidden>
+          <Icon size={13} />
+        </span>
+        <span className="composer-chip-name">{name}</span>
+      </button>
+      <ContextMenu state={fileMenu} onClose={closeFileMenu} />
+    </>
   );
 }
 
@@ -445,6 +487,7 @@ export function MessageAttachmentImage({
   attachment: MessageAttachment;
   onOpenFile: (path: string) => void;
 }) {
+  const { fileMenu, openFileMenu, closeFileMenu } = useChatFileMenu();
   const dataUrl = useReferencedImageDataUrl(attachment.ref, attachment.mimeType);
   if (!dataUrl) {
     return (
@@ -457,29 +500,30 @@ export function MessageAttachmentImage({
     );
   }
   return (
-    <button
-      type="button"
-      className="message-attachment-image"
-      role="listitem"
-      title={`${attachment.name} — ${attachment.ref}`}
-      onClick={() => {
-        useAppStore.getState().openLightbox(dataUrl, attachment.name);
-        // Fallback for work panel inspector:
-        // openFileInWorkPanel(attachment.ref, attachment.mimeType)
-      }}
-    >
-      <img src={dataUrl} alt={attachment.name} />
-    </button>
+    <>
+      <button
+        type="button"
+        className="message-attachment-image"
+        role="listitem"
+        title={`${attachment.name} — ${attachment.ref}`}
+        onClick={() => {
+          useAppStore.getState().openLightbox(dataUrl, attachment.name);
+        }}
+        onContextMenu={(event) => openFileMenu(event, { path: attachment.ref })}
+      >
+        <img src={dataUrl} alt={attachment.name} />
+      </button>
+      <ContextMenu state={fileMenu} onClose={closeFileMenu} />
+    </>
   );
 }
 
 /** Plain user text: @paths become composer-like chips; URLs stay text links. */
-export function LinkifiedText({ text }: { text: string }) {
+export function LinkifiedText({ text, attachments }: { text: string; attachments?: readonly MessageAttachment[] }) {
   const { t } = useTranslation();
-  const root = useAppStore((s) => s.workspace?.path);
   const openTarget = useOpenPreviewTarget();
   const openFileRef = useOpenChatFileRef();
-  const segments = useMemo(() => splitChatText(text, root), [text, root]);
+  const segments = useVerifiedChatText(text, attachments);
   let offset = 0;
   return (
     <>
@@ -564,7 +608,8 @@ export const ThinkingRow = memo(function ThinkingRow({
 }) {
   const { t } = useTranslation();
   const detailsId = useId();
-  const disclosure = useAutomaticDisclosure(autoOpen);
+  const revealRequest = useMessageRevealRequest(message.id);
+  const disclosure = useAutomaticDisclosure(autoOpen, revealRequest, disclosureKey("thinking", message.id));
   const { open, toggle: toggleDisclosure, collapse: collapseDisclosure } = disclosure;
   const titleRef = disclosure.titleRef;
   const toggleRow = useCallback(() => {
@@ -575,6 +620,21 @@ export const ThinkingRow = memo(function ThinkingRow({
     onUserInteraction?.();
     collapseDisclosure();
   }, [collapseDisclosure, onUserInteraction]);
+  const compact = useAppStore(
+    (state) => resolveThinkingDisplayMode(state.settings?.thinkingDisplayMode) === "compact",
+  );
+  if (compact) {
+    return isThinkingActive(message, streaming) ? (
+      <div className="tool-row thinking thinking-compact" role="status">
+        <span className="tool-row-icon" aria-hidden>
+          <IconSparkles size={15} />
+        </span>
+        <span className="tool-row-name running">
+          {t("chat.thinking", { defaultValue: "Thinking" })}
+        </span>
+      </div>
+    ) : null;
+  }
   const text = thinkingText(message);
   const summary = text.replace(/\s+/g, " ").trim();
   return (
@@ -599,7 +659,7 @@ export const ThinkingRow = memo(function ThinkingRow({
         </span>
       </button>
       {open ? (
-        <div className="tool-row-body" id={detailsId}>
+        <div className="tool-row-body" id={detailsId} ref={disclosure.bodyRef} {...disclosure.bodyEvents}>
           <DisclosureCollapseRail
             label={t("chat.thinkingHide")}
             onCollapse={collapseRow}

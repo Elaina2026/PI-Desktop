@@ -1,6 +1,6 @@
 # ADR 0238: Prioritize MainChat in the three-column shell
 
-- Status: Accepted
+- Status: Accepted (sidebar width clamp amended by [ADR 0290](0290-resizable-sidebar-collapse-threshold.md))
 - Date: 2026-09-13
 - Amends: ADR 0226 ·
   [ADR 0151](0151-internal-work-panel-dock.md) ·

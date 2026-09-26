@@ -23,6 +23,7 @@ const shared = {
   FileRefChip: () => null,
   LinkifiedText: ({ text }) => text,
   MessageAttachmentImage: () => null,
+  MessageTimestamp: () => null,
 };
 
 function loadComponent(name, extras = {}) {
@@ -43,6 +44,11 @@ function loadComponent(name, extras = {}) {
     "../../../components/icons": new Proxy({}, { get: () => Icon }),
     "../../../components/ui": { TooltipButton },
     "./shared": shared,
+    "./menu-items": { userMessageMenuItems: () => [] },
+    "./TranscriptMenu": {
+      useTranscriptMenu: () => () => {},
+      useChatTextActions: () => ({ copyText: () => {}, selectText: () => {} }),
+    },
     ...extras,
   };
   const module = { exports: {} };

@@ -2,11 +2,13 @@ import {
   memo,
   useMemo,
   useRef,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   AgentActivity,
   ContextCompactionMark,
+  UiMessage,
 } from "@pi-desktop/shared";
 import { formatCompactTokenCount } from "@pi-desktop/shared";
 import {
@@ -18,12 +20,19 @@ import {
   reuseReadonlyMap,
   subagentRunsEqual,
   type AssistantTurnEntry,
+  type AssistantTurnPart,
   type TranscriptEntry,
 } from "../../../lib/assistant-turns";
 import {
   collectDelegationStatuses,
   collectDelegationTimings,
 } from "../../../lib/subagent-topology";
+import {
+  isLastActivityPart,
+  projectTurnProcess,
+  resolveThinkingDisplayMode,
+  shouldGroupTurnProcess,
+} from "../../../lib/turn-process";
 import { useAppStore } from "../../../stores/app-store";
 import { Markdown } from "../../../components/Markdown";
 import { IconBranch, IconReview } from "../../../components/icons";
@@ -32,9 +41,18 @@ import {
   AssistantErrorMessage,
   CopyButton,
   MessageMeta,
+  MessageTimestamp,
 } from "./shared";
 import { activityItemsEqual, ActivityGroup } from "./ActivityGroup";
+import { GeneratedImages } from "./GeneratedImages";
 import { MessageRow } from "./MessageRow";
+import { assistantTurnMenuItems } from "./menu-items";
+import {
+  useChatTextActions,
+  useTranscriptMenu,
+} from "./TranscriptMenu";
+import { useSmoothText } from "../../../hooks/useSmoothText";
+import { TurnProcess } from "./TurnProcess";
 
 type AssistantTurnProps = {
   entry: AssistantTurnEntry;
@@ -82,7 +100,8 @@ export function compactionMarksEqual(
     previous.throughMessageId === next.throughMessageId &&
     previous.generation === next.generation &&
     previous.summaryTokens === next.summaryTokens &&
-    previous.summarized === next.summarized
+    previous.summarized === next.summarized &&
+    previous.fallback === next.fallback
   );
 }
 
@@ -204,12 +223,55 @@ export const TranscriptTail = memo(function TranscriptTail({
   transcriptEntryEqual(previous.entry, next.entry)
 );
 
+/** Message bubble that optionally applies smooth text release. */
+const SmoothMessageBubble = memo(function SmoothMessageBubble({
+  message,
+  streaming,
+}: {
+  message: UiMessage;
+  streaming: boolean;
+}) {
+  const smoothStreaming = useAppStore(
+    (s) => s.settings?.smoothStreaming !== false,
+  );
+  const prefersReducedMotion =
+    typeof window !== "undefined" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const enabled = smoothStreaming && !prefersReducedMotion;
+  const displayContent = useSmoothText(
+    message.content || "",
+    streaming,
+    enabled,
+  );
+  const showCursor = streaming && enabled && (displayContent.length < (message.content || "").length);
+
+  return (
+    <div
+      className={`message-bubble assistant-turn-fragment${
+        streaming ? " streaming" : ""
+      }${showCursor ? " smooth-cursor" : ""}`}
+      data-message-id={message.id}
+    >
+      {displayContent ? (
+        <div className="prose-chat">
+          <Markdown source={displayContent} />
+        </div>
+      ) : null}
+      {message.error ? (
+        <AssistantErrorMessage message={message} />
+      ) : null}
+    </div>
+  );
+});
+
 export const AssistantTurn = memo(function AssistantTurn({
   entry,
   isActive,
   runtimeActivity,
 }: AssistantTurnProps) {
   const { t } = useTranslation();
+  const openTranscriptMenu = useTranscriptMenu();
+  const { copyText, selectText } = useChatTextActions();
   const retryAssistantMessage = useAppStore((s) => s.retryAssistantMessage);
   const forkAssistantMessage = useAppStore((s) => s.forkAssistantMessage);
   const messages = assistantTurnMessages(entry);
@@ -238,6 +300,34 @@ export const AssistantTurn = memo(function AssistantTurn({
     !isActive && !hasError && Boolean(content) && Boolean(actionMessage);
   const streaming =
     isActive && messages.some((message) => message.status === "streaming");
+  /*
+    The turn owns the menu for its whole subtree, the answer rows it renders
+    included: Regenerate and Branch act on the turn's answer message, so a menu
+    owned by a single message part could not offer them honestly.
+  */
+  const onContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
+    openTranscriptMenu(event, {
+      label: t("chat.messageMenu"),
+      items: assistantTurnMenuItems({
+        t,
+        answer: content,
+        selectTarget:
+          [
+            ...event.currentTarget.querySelectorAll<HTMLElement>(
+              ".message-bubble",
+            ),
+          ].at(-1) ?? null,
+        complete: complete && Boolean(actionMessage),
+        actions: { copyText, selectText },
+        onRegenerate: () => {
+          if (actionMessage) void retryAssistantMessage(actionMessage.id);
+        },
+        onBranch: () => {
+          if (actionMessage) void forkAssistantMessage(actionMessage.id);
+        },
+      }),
+    });
+  };
 
   // Collect delegation statuses across ALL activity parts of this turn so that
   // a TaskWait in one part can inform the Task cards in a different part.
@@ -271,52 +361,58 @@ export const AssistantTurn = memo(function AssistantTurn({
   );
   statusesRef.current = turnDelegationStatuses;
   timingsRef.current = turnDelegationTimings;
+  const groupProcess = useAppStore((state) =>
+    shouldGroupTurnProcess(
+      resolveThinkingDisplayMode(state.settings?.thinkingDisplayMode),
+    ),
+  );
+  const { process, responses } = projectTurnProcess(entry);
+  const activePart = isActive ? entry.parts.at(-1) : undefined;
+
+  const renderPart = (part: AssistantTurnPart) =>
+    part.kind === "activity" ? (
+      <ActivityGroup
+        embedded
+        key={`activity-${part.items[0].message.id}-${part.items[0].kind}${part.items[0].kind === "hostedSearch" ? `-${part.items[0].round.id}` : ""}`}
+        items={part.items}
+        endedAt={part.endedAt}
+        isActive={part === activePart}
+        isLast={isLastActivityPart(entry.parts, part)}
+        runtimeActivity={part === activePart ? runtimeActivity : undefined}
+        turnDelegationStatuses={turnDelegationStatuses}
+        turnDelegationTimings={turnDelegationTimings}
+      />
+    ) : (
+      <SmoothMessageBubble
+        key={part.message.id}
+        message={part.message}
+        streaming={isActive && part.message.status === "streaming"}
+      />
+    );
 
   return (
     <div
       className={`message-row assistant assistant-turn${streaming ? " streaming" : ""}`}
       data-minimap-id={entry.anchorId}
       data-row-role="assistant"
+      onContextMenu={onContextMenu}
       role="article"
       aria-label={t("chat.assistantMessage")}
     >
       <div className="message-col">
-        {entry.parts.map((part, index) =>
-          part.kind === "activity" ? (
-            <ActivityGroup
-              key={`activity-${part.items[0].message.id}`}
-              items={part.items}
-              endedAt={part.endedAt}
-              isActive={isActive && index === entry.parts.length - 1}
-              runtimeActivity={
-                isActive && index === entry.parts.length - 1
-                  ? runtimeActivity
-                  : undefined
-              }
-              turnDelegationStatuses={turnDelegationStatuses}
-              turnDelegationTimings={turnDelegationTimings}
-            />
-          ) : (
-            <div
-              className={`message-bubble assistant-turn-fragment${
-                isActive && part.message.status === "streaming"
-                  ? " streaming"
-                  : ""
-              }`}
-              data-message-id={part.message.id}
-              key={part.message.id}
-            >
-              {part.message.content ? (
-                <div className="prose-chat">
-                  <Markdown source={part.message.content} />
-                </div>
-              ) : null}
-              {part.message.error ? (
-                <AssistantErrorMessage message={part.message} />
-              ) : null}
-            </div>
-          ),
+        {groupProcess ? (
+          <>
+            <TurnProcess turnId={entry.id} processParts={process} turnParts={entry.parts} isActive={isActive} delegationStatuses={turnDelegationStatuses}>
+              {process.map(renderPart)}
+            </TurnProcess>
+            {responses.map(renderPart)}
+          </>
+        ) : (
+          entry.parts.map(renderPart)
         )}
+        {turnAllActivityItems.filter((item) => item.kind === "tool" && item.message.toolName === "GenerateImages").map((item) => (
+          <GeneratedImages key={item.message.id} message={item.message} />
+        ))}
         {!isActive && metaMessage ? (
           <MessageMeta
             modelId={modelId}
@@ -325,31 +421,26 @@ export const AssistantTurn = memo(function AssistantTurn({
             responseOutputTokens={responseOutputTokens}
           />
         ) : null}
-        {(content || hasError) && actionMessage ? (
+        {complete && actionMessage ? (
           <div className="message-actions">
-            {complete ? (
-              <CopyButton text={content} label={t("chat.copy")} />
-            ) : null}
-            {complete ? (
-              <TooltipButton
-                className="copy-btn icon"
-                tooltip={t("chat.forkResponse")}
-                ariaLabel={t("chat.forkResponse")}
-                onClick={() => void forkAssistantMessage(actionMessage.id)}
-              >
-                <IconBranch size={13} />
-              </TooltipButton>
-            ) : null}
-            {complete ? (
-              <TooltipButton
-                className="copy-btn icon"
-                tooltip={t("chat.retry")}
-                ariaLabel={t("chat.retry")}
-                onClick={() => void retryAssistantMessage(actionMessage.id)}
-              >
-                <IconReview size={13} />
-              </TooltipButton>
-            ) : null}
+            <MessageTimestamp createdAt={actionMessage.createdAt} />
+            <CopyButton text={content} label={t("chat.copy")} />
+            <TooltipButton
+              className="copy-btn icon"
+              tooltip={t("chat.forkResponse")}
+              ariaLabel={t("chat.forkResponse")}
+              onClick={() => void forkAssistantMessage(actionMessage.id)}
+            >
+              <IconBranch size={13} />
+            </TooltipButton>
+            <TooltipButton
+              className="copy-btn icon"
+              tooltip={t("chat.retry")}
+              ariaLabel={t("chat.retry")}
+              onClick={() => void retryAssistantMessage(actionMessage.id)}
+            >
+              <IconReview size={13} />
+            </TooltipButton>
           </div>
         ) : null}
       </div>
@@ -362,19 +453,21 @@ export const AssistantTurn = memo(function AssistantTurn({
  * turn item: a divider that says the earlier turns above it are now a summary.
  * It carries no actions — nothing about a persisted checkpoint is undoable.
  */
-export function CompactionRow({ mark }: { mark: ContextCompactionMark }) {
+export function CompactionRow({ mark }: { mark: ContextCompactionMark & { summary?: string } }) {
   const { t } = useTranslation();
   return (
     <div className="transcript-compaction-row" role="separator">
       <span className="transcript-compaction-label">
         {t("chat.compactionRow", { times: mark.generation })}
       </span>
-      <span className="transcript-compaction-detail">
-        {mark.summarized
-          ? t("chat.compactionRowSummary", {
-              tokens: formatCompactTokenCount(mark.summaryTokens),
-            })
-          : t("chat.compactionRowNoSummary")}
+      <span className="transcript-compaction-detail" title={mark.summarized && !mark.fallback && mark.summary?.trim() ? mark.summary : undefined}>
+        {mark.fallback
+          ? t("chat.compactionRowSummaryFailed")
+          : mark.summarized
+            ? t("chat.compactionRowSummary", {
+                tokens: formatCompactTokenCount(mark.summaryTokens),
+              })
+            : t("chat.compactionRowNoSummary")}
       </span>
     </div>
   );

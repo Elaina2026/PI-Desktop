@@ -9,7 +9,9 @@ import {
 import type { ModelConfig, ThinkingCapabilitySet } from "./thinking-level.js";
 
 export {
+  agentThinkingLevel,
   clampThinkingLevel,
+  omitThinkingModel,
   type ModelConfig,
   type ThinkingCapabilitySet,
 } from "./thinking-level.js";
@@ -76,6 +78,7 @@ export function modelConfigWithBinding(
         | "thinkingLevels"
         | "supportsImages"
         | "supportsDocuments"
+        | "nativeWebSearch"
       >
     | null,
 ): ModelConfig {
@@ -98,8 +101,14 @@ export function modelConfigWithBinding(
   const contextWindow =
     effectiveContextWindow(model.contextWindow, binding.contextWindow) ??
     model.contextWindow;
+  const catalogContextWindow =
+    model.catalogContextWindow ??
+    (model.source === "models.dev" && model.contextWindow > 0
+      ? model.contextWindow
+      : undefined);
   return {
     ...model,
+    ...(catalogContextWindow !== undefined ? { catalogContextWindow } : {}),
     contextWindow,
     limit: {
       ...(model.limit ?? {}),
@@ -110,6 +119,7 @@ export function modelConfigWithBinding(
     supportedThinkingLevels: enabledThinkingLevels,
     ...(Object.keys(thinkingLevelMap).length > 0 ? { thinkingLevelMap } : {}),
     ...modalityOverride(model, binding),
+    ...(binding.nativeWebSearch === true ? { webSearch: true } : {}),
   };
 }
 

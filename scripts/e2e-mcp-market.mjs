@@ -6,14 +6,19 @@
  *   E2E-MCP-MARKET-INSTALL        builtin entry → mcp.upsert → record on disk
  *   E2E-MCP-MARKET-SEMANTICS      registry record → template keeps named
  *                                 arguments and required/optional envs
- *   E2E-MCP-MARKET-NET-BOUNDARY   the URL guard rejects loopback/private/
- *                                 mapped/ULA/link-local bypass forms
+ *   E2E-MCP-MARKET-HEADER-SCOPE   header credential stays out of the URL
+ *                                 through mapping, resolution and persistence; unbound
+ *                                 headers stay literal with a partial binding map
+ *   E2E-MCP-MARKET-NET-BOUNDARY   a user source may be loopback/private (and
+ *                                 plaintext under the stored opt-in), while a
+ *                                 registry remote, a catalog body endpoint and
+ *                                 any cloud metadata host stay public-only
  *
  * Env: PI_DESKTOP_HOST_BIN (optional), DEBUG_HOST for tracing.
  * Deterministic: no live network access.
  */
 import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
+import { readNdjsonLines } from "../packages/shared/dist/ndjson.js";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,6 +28,7 @@ import { PROTOCOL_VERSION } from "../packages/shared/dist/protocol.js";
 import {
   BUILTIN_MCP_CATALOG,
   GLOBAL_SCOPE,
+  isPublicHttpsUrl,
   isPublicIpLiteral,
   isSafeMarketSourceUrl,
   mapRegistryServer,
@@ -69,8 +75,7 @@ class Host {
     });
     this.pending = new Map();
     this.child.stderr.on("data", () => {});
-    const rl = createInterface({ input: this.child.stdout });
-    rl.on("line", (line) => {
+    readNdjsonLines(this.child.stdout, (line) => {
       let msg;
       try {
         msg = JSON.parse(line);
@@ -111,33 +116,98 @@ class Host {
 
 // ── E2E-MCP-MARKET-NET-BOUNDARY ──────────────────────────────────────────
 {
-  const bypass = [
+  // A market source URL is an address the user typed into a settings field, so
+  // their own machine and their own LAN are reachable there, and a plaintext
+  // source is reachable once the stored `networkPolicy` accepts it. Everything
+  // the source *returns* — a registry record, a catalog body, a redirect target
+  // — keeps the public-only rule, because that is the input an attacker holds.
+  const userAccepted = [
+    "https://127.0.0.1/x",
+    "https://10.1.2.3/x",
+    "https://192.168.1.5:8443/x",
     "https://localhost./x",
+    "https://nas.local/x",
     "https://[::1]/x",
     "https://[::ffff:127.0.0.1]/x",
     "https://[fd00::1]/x",
     "https://[fe80::1]/x",
     "https://[fec0::1]/x",
+  ];
+  const userRefused = [
+    "https://169.254.169.254/x",
+    "https://169.254.169.254./x",
+    "https://100.100.100.200/x",
+    "https://[fd00:ec2::254]/x",
+    "https://metadata.google.internal/x",
+    "https://metadata./x",
+    "https://instance-data/x",
+    "https://0.0.0.0/x",
+    "https://[::]/x",
+    "https://239.1.2.3/x",
+    "https://240.0.0.1/x",
+    "https://192.0.2.1/x",
+    "https://[2001:db8::1]/x",
+    "https://user:pass@example.com/x",
+    "file:///etc/passwd",
+    "not a url",
+  ];
+  const userPlaintext = [
+    "http://registry.example/x",
+    "http://10.0.0.7:8080/x",
+    "http://nas.local/x",
+  ];
+  const userGateOk =
+    userAccepted.every((url) => isSafeMarketSourceUrl(url) === true) &&
+    userRefused.every((url) => isSafeMarketSourceUrl(url) === false) &&
+    userPlaintext.every((url) => isSafeMarketSourceUrl(url) === false) &&
+    userPlaintext.every((url) => isSafeMarketSourceUrl(url, { allowInsecureHttp: true }) === true) &&
+    isSafeMarketSourceUrl("http://169.254.169.254/x", { allowInsecureHttp: true }) === false;
+
+  // The third-party positions: a registry record's remote URL and a catalog
+  // body's endpoint, neither of which the user typed.
+  const thirdPartyRefused = [
     "https://127.0.0.1/x",
     "https://10.1.2.3/x",
-    "https://192.0.0.1/x",
-    "https://198.18.0.1/x",
-    "https://240.0.0.1/x",
-    "https://192.168.1.1/x",
-    "https://[2001:2::1]/x",
-    "https://user:pass@example.com/x",
+    "https://192.168.1.5/x",
+    "https://[fd00::1]/x",
+    "https://[fe80::1]/x",
+    "https://169.254.169.254/x",
+    "https://nas.local/x",
     "http://registry.example/x",
   ];
   const accepted = "https://registry.modelcontextprotocol.io/v0/servers";
-  const rejectedAll = bypass.every((url) => isSafeMarketSourceUrl(url) === false);
   const publicOk =
     isSafeMarketSourceUrl(accepted) &&
     isSafeMarketSourceUrl("https://[2606:4700::1]/x") &&
-    isPublicIpLiteral("2606:4700:4700::1111");
+    isPublicIpLiteral("2606:4700:4700::1111") &&
+    isPublicHttpsUrl(accepted);
+  const thirdPartyOk =
+    thirdPartyRefused.every((url) => isPublicHttpsUrl(url) === false) &&
+    mapRegistryServer({
+      server: {
+        name: "io.example/private-remote",
+        remotes: [{ type: "streamable-http", url: "https://192.168.1.5/mcp" }],
+      },
+    }) === null;
+  // A catalog body that names an internal endpoint is dropped, not installed.
+  const body = validateMcpCatalogFile({
+    schemaVersion: 1,
+    servers: [
+      { id: "body-private", name: "Body private", transport: "http", url: "https://10.0.0.8/mcp" },
+      { id: "body-public", name: "Body public", transport: "http", url: "https://mcp.example/mcp" },
+    ],
+  });
+  const bodyOk =
+    body.catalog.servers.map((server) => server.id).join(",") === "body-public" &&
+    body.warnings.some((warning) => warning.includes("public https address"));
+
+  const ok = userGateOk && publicOk && thirdPartyOk && bodyOk;
   record(
     "E2E-MCP-MARKET-NET-BOUNDARY",
-    rejectedAll && publicOk,
-    rejectedAll && publicOk ? "15 bypass forms rejected, public accepted" : "guard misclassification"
+    ok,
+    ok
+      ? `${userAccepted.length} user forms accepted (${userRefused.length} refused, ${userPlaintext.length} plaintext gated), ${thirdPartyRefused.length} third-party forms rejected`
+      : "guard misclassification"
   );
 }
 
@@ -209,6 +279,57 @@ try {
       "E2E-MCP-MARKET-INSTALL",
       !!row && row.enabled === true && diskOk,
       row ? JSON.stringify({ command: row.command, args: row.args, enabled: row.enabled }) : "not listed",
+    );
+
+    const scopedUrl = "https://example.com/{token}?token={token}";
+    const scopedEntry = mapRegistryServer({ server: {
+      name: "io.example/header-scope",
+      remotes: [{ type: "streamable-http", url: scopedUrl, headers: [{
+        name: "Authorization", value: "Bearer {token}",
+        variables: { token: { isRequired: true } },
+      }] }],
+    } });
+    const scopedInput = resolveCatalogEntry(scopedEntry, { token: "synthetic-header-secret" });
+    await host.call("mcp.upsert", { server: {
+      ...scopedInput, enabled: false, level: "global", scope: GLOBAL_SCOPE,
+    } });
+    const scopedList = await host.call("mcp.list", { level: "global" });
+    const scopedRow = scopedList.servers.find((server) => server.id === scopedEntry.id);
+    const scopedDisk = JSON.parse(readFileSync(join(home, ".agents", "servers", `${scopedEntry.id}.json`), "utf8"));
+    record(
+      "E2E-MCP-MARKET-HEADER-SCOPE",
+      scopedInput.url === scopedUrl && scopedRow?.url === scopedUrl && scopedDisk.url === scopedUrl
+        && scopedDisk.headers?.Authorization === "Bearer synthetic-header-secret"
+        && scopedRow.enabled === false,
+      "header resolves while the same-named URL token remains literal in host configuration",
+    );
+
+    // A partial binding map must not authorize tokens in a different header.
+    const partialEntry = {
+      ...scopedEntry, id: "partial-header-scope", name: "Partial header scope",
+      headers: {
+        Authorization: "Bearer {token}",
+        "X-Unbound": "{token}/${token}",
+        "X-Undeclared": "${UNBOUND}",
+      },
+      headerBindings: { Authorization: { "{token}": { input: "token" } } },
+    };
+    const partialInput = resolveCatalogEntry(partialEntry, { token: "synthetic-header-secret" });
+    await host.call("mcp.upsert", { server: {
+      ...partialInput, enabled: false, level: "global", scope: GLOBAL_SCOPE,
+    } });
+    const partialList = await host.call("mcp.list", { level: "global" });
+    const partialRow = partialList.servers.find((server) => server.id === partialEntry.id);
+    const partialDisk = JSON.parse(readFileSync(join(home, ".agents", "servers", `${partialEntry.id}.json`), "utf8"));
+    const partialScopeOk = [partialInput, partialRow, partialDisk].every((server) =>
+      server?.url === scopedUrl
+      && server.headers?.Authorization === "Bearer synthetic-header-secret"
+      && server.headers?.["X-Unbound"] === "{token}/${token}"
+      && server.headers?.["X-Undeclared"] === "${UNBOUND}");
+    record(
+      "E2E-MCP-MARKET-partial-header-bindings-stay-literal",
+      partialScopeOk && partialRow?.enabled === false,
+      "partial bindings leave other headers literal through resolution, host upsert/list and persistence",
     );
   }
 } catch (error) {

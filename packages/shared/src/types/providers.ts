@@ -202,3 +202,10 @@ export type AccountQuotaInfo = {
   buckets?: AccountQuotaBucket[];
   lastUpdated?: string;
 };
+
+/** Move one provider relative to another; applies atomically to the current host list. */
+export type ProviderReorderInput = {
+  id: string;
+  targetId: string;
+  placement: "before" | "after";
+};

@@ -8,9 +8,14 @@
  * came back, and the user picks from that live list.
  */
 import assert from "node:assert/strict";
+import { register } from "node:module";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { loadStyles } from "./helpers/styles.mjs";
+
+register(new URL("./helpers/ts-import-hooks.mjs", import.meta.url));
+const { normalizeApiStyle } = await import("@pi-desktop/shared");
+const { normalizeBaseUrlInput } = await import("../src/components/settings/provider-endpoint-guidance.ts");
 
 const read = (rel) => readFile(new URL(rel, import.meta.url), "utf8");
 
@@ -19,8 +24,9 @@ const hookSource = await read("../src/components/settings/useProviderModels.ts")
 const pageSource = await read("../src/components/settings/ModelConfigPage.tsx");
 const vendorDialogSource = await read("../src/components/settings/VendorAccountDialog.tsx");
 const pickerSource = await read("../src/components/settings/ModelSelectionPanes.tsx");
+const fieldsSource = await read("../src/components/settings/ProviderConnectionFields.tsx");
 const filterSource = await read("../src/components/settings/model-chosen-filter.ts");
-const vendorAccountsSource = await read("../src/components/settings/VendorAccountsSection.tsx");
+const vendorAccountsSource = await read("../src/components/settings/useVendorAccounts.ts");
 const apiSource = await read("../src/lib/api.ts");
 const catalogContractSource = await read("../../../packages/shared/src/model-catalog.ts");
 const styles = await loadStyles();
@@ -40,10 +46,13 @@ test("adding an AI service is a single form, not a staged wizard", () => {
   assert.doesNotMatch(setupSource, /provider-preset-grid/);
   assert.doesNotMatch(setupSource, /settings\.setupStage/);
   assert.doesNotMatch(setupSource, /settings\.next"/);
-  // Name, base URL and key are all reachable without navigating a step.
-  assert.match(setupSource, /settings\.name/);
-  assert.match(setupSource, /settings\.baseUrl/);
-  assert.match(setupSource, /settings\.apiKey/);
+  assert.doesNotMatch(setupSource, /settings\.back"/);
+  // Picking a service is the only step before the form, and it is a tile
+  // click, not a Next button: name, base URL and key share one view.
+  assert.match(setupSource, /<ProviderConnectionFields/);
+  assert.match(fieldsSource, /settings\.name/);
+  assert.match(fieldsSource, /settings\.baseUrl/);
+  assert.match(fieldsSource, /settings\.apiKey/);
   assert.match(setupSource, /settings\.saveProvider/);
 });
 
@@ -89,16 +98,21 @@ test("token limits are adopted from the published record, never typed by default
 });
 
 test("custom API format is a common-path choice, named services skip it", () => {
-  assert.match(setupSource, /settings\.apiStyle/);
-  assert.match(setupSource, /API_STYLES/);
-  assert.match(setupSource, /custom \? \(/);
+  assert.match(fieldsSource, /settings\.apiStyle/);
+  assert.match(fieldsSource, /API_STYLES/);
+  assert.match(fieldsSource, /custom \? \(/);
   assert.match(setupSource, /provider-advanced-dialog/);
   assert.doesNotMatch(setupSource, /provider-setup-advanced-toggle/);
 });
 
 test("editing a provider with an unknown persisted API style stays renderable", () => {
   assert.match(setupSource, /normalizeApiStyle\(provider\?\.apiStyle\)/);
-  assert.match(setupSource, /default:\s*return \["\/chat\/completions", "\/models"\]/);
+  const style = normalizeApiStyle("future_api_format");
+  assert.equal(style, "chat_completions");
+  assert.equal(
+    normalizeBaseUrlInput("https://relay.example/v1/chat/completions", style),
+    "https://relay.example/v1",
+  );
 });
 
 test("both credential kinds share one live list and one binding shape", () => {
@@ -174,6 +188,18 @@ test("the shared picker owns the advanced per-model controls for both kinds", ()
   assert.match(pickerSource, /bindingsToPersist/);
 });
 
+test("fetched model selections stay collapsed until Advanced is requested", () => {
+  assert.match(
+    pickerSource,
+    /const \[expandedModelId, setExpandedModelId\] = useState<string \| null>\(null\)/,
+  );
+  assert.doesNotMatch(
+    pickerSource,
+    /setExpandedModelId\(\(open\) => open \?\? (?:row\.id|visibleRows\[0\])/,
+  );
+  assert.match(pickerSource, /current === binding\.id \? null : binding\.id/);
+});
+
 test("a vendor account saves explicit bindings, not raw state", () => {
   // The shared picker preserves explicit thinking levels, including a manual
   // override not present in the catalog.
@@ -196,14 +222,14 @@ test("default model selection saves the exact model and provider", () => {
   assert.match(pageSource, /defaultProviderId: provider.id,[\s\S]*defaultModelId: modelId/);
   assert.match(pageSource, /onClick=\{\(\) => void setDefaultModel\(provider, modelId\)\}/);
   assert.match(pageSource, /visibleDefaultModelOptions\.map/);
-  assert.match(pageSource, /provider\.id === settings\.defaultProviderId &&[\s\S]*modelIdsMatch/);
+  assert.match(pageSource, /provider\.id === settings\.defaultProviderId &&[\s\S]*sameWireId/);
   assert.match(pageSource, /defaultModelId: firstModelId \?\? ""/);
   assert.match(
     pageSource,
     /settings\.defaultProviderId === saved\.id && firstModelId[\s\S]*defaultModelId: firstModelId/,
   );
-  // The summary line must go through the ownership-aware resolver.
-  assert.match(pageSource, /displayedDefaultModelId\(/);
+  // The summary line must resolve a configured complete wire id.
+  assert.match(pageSource, /displayedChatModelId\(/);
   assert.doesNotMatch(pageSource, /\{settings\.defaultModelId \|\|/);
 });
 
@@ -282,4 +308,95 @@ test("the chosen pane narrows a long configured list with its own search", () =>
     styles,
     /@media \(max-width: 720px\)\s*\{[\s\S]*?\.provider-chosen-search-wrap/,
   );
+});
+
+test("selected models reorder from a dedicated handle, not the copyable id", () => {
+  // The handle is the only drag source so selecting an id still copies it.
+  assert.match(pickerSource, /useModelReorder\(visibleChosen, setModels, busy\)/);
+  assert.match(pickerSource, /provider-chosen-reorder/);
+  assert.match(pickerSource, /IconGripVertical/);
+  assert.match(pickerSource, /settings\.reorderModel/);
+  assert.match(pickerSource, /\{\.\.\.reorder\.handleEvents\(binding\.id\)\}/);
+  assert.match(pickerSource, /\{\.\.\.reorder\.rowEvents\(binding\.id\)\}/);
+  assert.doesNotMatch(pickerSource, /provider-chosen-row-id[\s\S]*draggable/);
+  assert.match(styles, /\.provider-chosen-reorder\s*\{/);
+  assert.match(styles, /\.provider-chosen-row\.is-dragging\s*\{/);
+  assert.match(styles, /\.provider-chosen-row\[data-drop-placement\]::after/);
+});
+
+test("adding a service only claims the app default while none resolves", () => {
+  // The add branch used to write defaultProviderId/defaultModelId
+  // unconditionally, so configuring a second service silently moved the app
+  // default away from the one the user was already running.
+  const branch = pageSource.match(
+    /\} else if \(!editingProvider\) \{([\s\S]*?)\n      \} else \{/,
+  );
+  assert.ok(branch, "the add-provider branch moved");
+  const guard = branch[1].indexOf("const keepsCurrentDefault =");
+  const write = branch[1].indexOf("api.setSettings(");
+  assert.ok(guard >= 0, "the add branch must ask whether a default already resolves");
+  assert.ok(write > guard, "the default write must sit inside that guard");
+  // Which provider wins is decided by the shared resolver, whose behaviour is
+  // pinned by default-model-display.test.mjs. That resolver also requires the
+  // default provider to be runnable (enabled, credentialed, a chat model
+  // configured), so a keyless default row cannot block the new provider.
+  // Provider readiness and default selection use the same exact chat choices.
+  assert.match(pageSource, /chatModelOptions\(\[currentProvider\], imageGenerationCandidates\)/);
+  assert.match(pageSource, /providerServesChatModels\(provider, imageGenerationCandidates\)/);
+});
+
+test("a saved image selection never takes the app's image default", () => {
+  // The image default follows the same rule: the candidate list grows, the
+  // default moves only when the stored binding stops resolving. The decision
+  // itself is pinned by image-generation-default.test.mjs.
+  assert.match(pageSource, /planImageGenerationDefaults\(\n\s+current,\n\s+saved\.id,/);
+  assert.doesNotMatch(pageSource, /nextActive/);
+});
+
+test("a hand-typed id is seeded from the model library, not only from generic defaults", () => {
+  // The row is inserted immediately and upgraded in place when the snapshot
+  // answers, so a slow or offline catalog never leaves the list without it. The
+  // rule itself is pinned by model-custom-lookup.test.mjs, and the channel
+  // contract by provider-lookup-model-handler.test.mjs.
+  assert.match(pickerSource, /bindingForCustomModelInfo\(id, discovered\.info\)/);
+  assert.match(pickerSource, /applyCustomModelLookup\(current, seed, info\)/);
+  assert.match(pickerSource, /api\.lookupProviderModel\(/);
+  // An id the current discovery already described needs no round trip.
+  assert.match(pickerSource, /if \(!discovered\?\.info\) void enrichCustomModel\(binding\)/);
+});
+
+test("settings match complete case-normalized wire ids, not proxy suffixes", () => {
+  const identity = pageSource.match(/const sameWireId = \(left: string, right: string\) => ([^;]+);/);
+  assert.ok(identity);
+  const sameWireId = new Function("left", "right", `return ${identity[1]}`);
+  assert.equal(sameWireId("PROXY/model", "proxy/MODEL"), true);
+  assert.equal(sameWireId("proxy/model", "model"), false);
+  assert.match(pageSource, /isImageCandidate\(imageModels, provider\.id, id\)/);
+  assert.match(pageSource, /sameWireId\(settings\.defaultModelId \?\? "", modelId\)/);
+  assert.match(pageSource, /!models\.some\(\(model\) => sameWireId\(model\.id, settings\.defaultModelId/);
+  assert.doesNotMatch(pageSource, /modelIdsMatch|isImageGenerationModel/);
+  assert.doesNotMatch(setupSource, /modelIdsMatch/);
+  assert.doesNotMatch(pickerSource, /modelIdsMatch/);
+  // The host decides identity now: a record the service's id reduces to (a route
+  // prefix, a dated stamp, a marker the deployment appends) still upgrades the
+  // row, so the picker must not re-check the spelling it asked about.
+  assert.doesNotMatch(pickerSource, /info\.modelId\.toLowerCase\(\) !== seed\.id\.toLowerCase\(\)/);
+  assert.match(pickerSource, /applyCustomModelLookup\(current, seed, info\)/);
+  assert.match(pickerSource, /bindingForCustomModelInfo\(row\.id, row\.info\)/);
+  assert.match(setupSource, /model\.id\.toLowerCase\(\) === imageModelId\.toLowerCase\(\)/);
+  assert.match(setupSource, /entry\.toLowerCase\(\) !== id\.toLowerCase\(\)/);
+});
+
+test("new chat default skips an image-only first model", () => {
+  assert.match(pageSource, /const firstModelId = models\.find\(\(model\) =>\s*!selectedImageIds\.some\(\(id\) => sameWireId\(id, model\.id\)\)/);
+  assert.match(pageSource, /if \(!keepsCurrentDefault && firstModelId\)/);
+});
+
+test("stale image-valued chat default remains visible but is not marked ready", () => {
+  assert.match(pageSource, /const defaultProviderReady = defaultProvider !== null && providerReady\(defaultProvider\) &&[\s\S]*?chatModelOptions\(\[defaultProvider\], imageGenerationCandidates\)\.some/);
+  assert.match(pageSource, /const effectiveDefaultModelId = settings\.defaultModelId\?\.trim\(\) \|\|\s*defaultProvider\?\.models\?\.\[0\]\?\.id \|\| defaultProvider\?\.defaultModelId/);
+  assert.match(pageSource, /sameWireId\(modelId, effectiveDefaultModelId \?\? ""\)/);
+  assert.match(pageSource, /return selected\?\.trim\(\) \|\| configured\[0\]/);
+  assert.match(pageSource, /className="model-default-model font-mono" title=\{t\("settings\.noDefaultProvider"\)\}/);
+  assert.match(pageSource, /\{settings\.defaultModelId\}/);
 });

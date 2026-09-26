@@ -80,8 +80,18 @@ export const ErrorCodes = {
   STREAM_FAILED: "STREAM_FAILED",
   EMPTY_MODEL_RESPONSE: "EMPTY_MODEL_RESPONSE",
   PROMPT_ENHANCEMENT_EMPTY: "PROMPT_ENHANCEMENT_EMPTY",
+  SPEECH_NOT_CONFIGURED: "SPEECH_NOT_CONFIGURED",
+  SPEECH_PROTOCOL_UNSUPPORTED: "SPEECH_PROTOCOL_UNSUPPORTED",
+  SPEECH_INPUT_TOO_LARGE: "SPEECH_INPUT_TOO_LARGE",
   SUBAGENT_IDLE_TIMEOUT: "SUBAGENT_IDLE_TIMEOUT",
   SUBAGENT_DURATION_TIMEOUT: "SUBAGENT_DURATION_TIMEOUT",
+  /**
+   * A delegate's own model context exceeded the safe budget: automatic
+   * compaction and the degraded retry both failed to bring the subagent's
+   * input back under its model's limit. Not retriable — the task itself, the
+   * delegate's model, or how much it reads at once has to change.
+   */
+  SUBAGENT_CONTEXT_OVERFLOW: "SUBAGENT_CONTEXT_OVERFLOW",
   WORKSPACE_REQUIRED: "WORKSPACE_REQUIRED",
   PATH_OUTSIDE_WORKSPACE: "PATH_OUTSIDE_WORKSPACE",
   TOOL_NOT_FOUND: "TOOL_NOT_FOUND",
@@ -168,6 +178,31 @@ export const ErrorCodes = {
   APPROVAL_STALE: "APPROVAL_STALE",
   PAYLOAD_TOO_LARGE: "PAYLOAD_TOO_LARGE",
   RATE_LIMITED: "RATE_LIMITED",
+  /**
+   * Remote Host connection codes (D448 / ADR 0284). The desktop adapter and
+   * the `pi-host` bootstrap classify a remote failure by these, never by
+   * matching message text.
+   */
+  /** The transport to a paired Host dropped; the Host itself may still be running. */
+  HOST_DISCONNECTED: "HOST_DISCONNECTED",
+  /** Installing or starting `pi-host` over the bootstrap channel failed. */
+  HOST_BOOTSTRAP_FAILED: "HOST_BOOTSTRAP_FAILED",
+  /** The paired Host runs a different release than this client. */
+  HOST_VERSION_MISMATCH: "HOST_VERSION_MISMATCH",
+  /** The device credential was refused by the Host. */
+  REMOTE_AUTH_FAILED: "REMOTE_AUTH_FAILED",
+  /** The RACP connection could not be established. */
+  REMOTE_CONNECTION_FAILED: "REMOTE_CONNECTION_FAILED",
+  /** The transport's port forward could not be set up. */
+  REMOTE_FORWARD_FAILED: "REMOTE_FORWARD_FAILED",
+  /** A Host-side path does not exist. */
+  REMOTE_PATH_NOT_FOUND: "REMOTE_PATH_NOT_FOUND",
+  /** A Host-side path is outside what the principal may reach. */
+  REMOTE_PATH_FORBIDDEN: "REMOTE_PATH_FORBIDDEN",
+  PAIRING_FAILED: "PAIRING_FAILED",
+  PAIRING_TOKEN_EXPIRED: "PAIRING_TOKEN_EXPIRED",
+  /** The Host does not advertise the capability the operation needs. */
+  CAPABILITY_UNAVAILABLE: "CAPABILITY_UNAVAILABLE",
   // Host-core RPC detail codes (spec 06 §7, 08 §3.1/§3.6). Electron surfaces
   // them unchanged through `AppError.code`.
   INVALID_PARAMS: "INVALID_PARAMS",

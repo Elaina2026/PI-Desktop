@@ -15,7 +15,7 @@ import {
 } from "@pi-desktop/shared";
 import { api } from "../../lib/api";
 import { useAppStore } from "../../stores/app-store";
-import { Button, TooltipButton, cx, Input, Textarea } from "../ui";
+import { Button, HelpIcon, SettingsToggle, TooltipButton, cx, Input, Textarea } from "../ui";
 import { IconKeyboard, IconSettings, IconX } from "../icons";
 import { SettingsMenuSelect } from "../settings/SettingsMenuSelect";
 
@@ -182,11 +182,13 @@ export function PluginSettingsSheet({ plugin, platform, onClose, onSaved }: Prop
                 <div className="plugins-setting-copy">
                   <div className="plugins-setting-title">
                     {isShortcut ? <IconKeyboard size={14} aria-hidden="true" /> : null}
-                    <span>{setting.title}</span>
+                    <span>
+                      {setting.title}
+                      {/* The plugin's own blurb about the field; a setting that
+                          declares none leaves no mark. */}
+                      {setting.description ? <HelpIcon label={setting.description} /> : null}
+                    </span>
                   </div>
-                  {setting.description ? (
-                    <p className="plugins-setting-description">{setting.description}</p>
-                  ) : null}
                   {isShortcut ? (
                     <span className="plugins-setting-scope">{t("plugins.settingsPluginScope")}</span>
                   ) : null}
@@ -201,16 +203,11 @@ export function PluginSettingsSheet({ plugin, platform, onClose, onSaved }: Prop
                       onChange={(event) => setValue(setting.key, event.target.value === "" ? 0 : Number(event.target.value))}
                     />
                   ) : setting.type === "boolean" ? (
-                    <button
-                      type="button"
-                      className={cx("settings-toggle", value === true && "on")}
-                      role="switch"
-                      aria-checked={value === true}
-                      aria-label={setting.title}
-                      onClick={() => setValue(setting.key, value !== true)}
-                    >
-                      <span className="settings-toggle-thumb" />
-                    </button>
+                    <SettingsToggle
+                      checked={value === true}
+                      label={setting.title}
+                      onChange={() => setValue(setting.key, value !== true)}
+                    />
                   ) : setting.type === "select" ? (
                     <SettingsMenuSelect
                       label={setting.title}

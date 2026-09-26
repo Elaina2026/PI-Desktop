@@ -164,16 +164,18 @@
 
 .route-surface,
 .settings-content-enter {
-  animation: route-surface-in var(--motion-duration-normal) var(--motion-ease-out)
-    both;
+  /* No `forwards`/`both` fill: this entrance ends on the element's own state,
+     so a fill would only keep the animation "in effect" — and with it the
+     stacking context that left route-level overlays (the plugin modals, the
+     plugin detail sheet) underneath the opaque titlebar band. */
+  animation: route-surface-in var(--motion-duration-normal) var(--motion-ease-out);
 }
 
 /*
-  Do not animate `.settings-content-inner`. Chromium promotes an animated
-  ancestor onto a compositor layer that becomes a containing block for
-  `position: fixed`, so settings dialogs would cover only the content pane.
-  Opacity-only keyframes still leave that layer while `animation-fill-mode:
-  both` is in effect.
+  Do not animate `.settings-content-inner`. An animated ancestor is a stacking
+  context, and it can become a containing block for `position: fixed`, which is
+  what made settings dialogs cover only the content pane. Keep the keyframes
+  opacity-only and keep the fill off.
 */
 @keyframes route-surface-in {
   from {
@@ -192,6 +194,16 @@
   flex-direction: column;
 }
 
+/* Destination pages have ordinary document scrolling. Keep this separate from
+ * `.thread-scroll`, whose Composer reserve, follow behavior, and occlusion mask
+ * are specific to the chat transcript. */
+.route-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
 .thread-scroll {
   /* Promote to own compositing layer for smooth scrolling */
   will-change: scroll-position;
@@ -203,6 +215,26 @@
   scrollbar-gutter: stable;
   /* Pinned-follow drives the scroll position; native anchoring fights it. */
   overflow-anchor: none;
+  /* Hide the transcript across the Composer reserve instead of covering it with
+   * an opaque dock band (issue #728, revised by D624). The gradient resolves
+   * against this scrollport's own box, so it stays anchored to the pane while
+   * the rows move through it. `- 16px` is exactly the trailing reserve
+   * `.thread-content` adds below the Composer's measured height, so a
+   * transcript pinned to its end keeps its last row fully opaque and only the
+   * rows crossing the boundary fade.
+   * The mask belongs here rather than on `.thread-wrap`: its other children -
+   * the minimap rail, the jump-to-latest button, the settle veil, and the
+   * navigation status - must stay fully painted. */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 calc(100% - var(--composer-dock-height, 168px) - 16px),
+    transparent calc(100% - var(--composer-dock-height, 168px) + 2px)
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    #000 calc(100% - var(--composer-dock-height, 168px) - 16px),
+    transparent calc(100% - var(--composer-dock-height, 168px) + 2px)
+  );
 }
 
 /* Floats above the docked composer fade when the user scrolls away from latest */

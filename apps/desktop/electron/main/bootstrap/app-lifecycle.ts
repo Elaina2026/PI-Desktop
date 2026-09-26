@@ -1,4 +1,7 @@
-import { app, BrowserWindow, Menu, nativeImage, nativeTheme, Tray } from "electron";
+import {
+  app, BrowserWindow, Menu, nativeImage, nativeTheme, powerSaveBlocker, Tray,
+  type MenuItemConstructorOptions,
+} from "electron";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -6,6 +9,7 @@ import {
   APP_NAME,
   IPC,
   isThemeColorScheme,
+  traySessionTitle,
   migrateKeybindingOverrides,
   type AppMenuCommand,
   type CloseBehavior,
@@ -14,6 +18,8 @@ import {
 } from "@pi-desktop/shared";
 import { catalogs, resolveLocale } from "@pi-desktop/i18n";
 import { installApplicationMenu } from "../application-menu";
+import { createTraySessions } from "../tray-sessions";
+import { createTaskbarUnreadBadge } from "../taskbar-unread-badge";
 import { createWindow, type WindowLifecycleState } from "./window";
 import { windowToggleAction } from "./window-visibility";
 import type { BrowserPane } from "../browser-view";
@@ -22,6 +28,7 @@ import type { PluginRuntime } from "../plugin-runtime";
 import type { PluginViewHost } from "../plugin-view-host";
 import type { HostProcess } from "../host-process";
 import { syncPluginDisplayLocale } from "../plugin-display-locale";
+import { createPowerSaveBlockerController } from "../keep-awake";
 import type { PluginAppearance } from "../../shared/plugin-panel-chrome";
 
 export type ApplicationLifecycleState = {
@@ -61,7 +68,6 @@ export type ApplicationLifecycleDependencies = {
   applyCloseBehavior: (behavior: CloseBehavior) => void;
   browserPane: BrowserPane;
   pluginViews: PluginViewHost;
-  pluginSettingsViews: PluginViewHost;
   plugins: PluginRuntime;
   logger: Pick<Logger, "app">;
   refreshReleaseNotes: () => void;
@@ -69,6 +75,7 @@ export type ApplicationLifecycleDependencies = {
   applyToggleWindowShortcut: (keybindings?: KeybindingOverrides) => void;
   broadcastPluginPanelEvent: (event: string, payload: unknown) => void;
   getHost: () => HostProcess | null;
+  getRunningSessionIds: () => Iterable<string>;
 };
 
 export function createApplicationLifecycle({
@@ -94,7 +101,6 @@ export function createApplicationLifecycle({
   applyCloseBehavior,
   browserPane,
   pluginViews,
-  pluginSettingsViews,
   plugins,
   logger,
   refreshReleaseNotes,
@@ -102,7 +108,22 @@ export function createApplicationLifecycle({
   applyToggleWindowShortcut,
   broadcastPluginPanelEvent,
   getHost,
+  getRunningSessionIds,
 }: ApplicationLifecycleDependencies) {
+  const traySessions = createTraySessions({
+    getHost,
+    getRunningSessionIds,
+    isQuitting: () => state.quitting,
+    onChanged: () => updateTrayMenu(),
+    logger,
+  });
+  const taskbarUnreadBadge = createTaskbarUnreadBadge({
+    getHost,
+    getMainWindow: () => state.mainWindow,
+    isQuitting: () => state.quitting,
+    logger,
+  });
+  let trayActivationGeneration = 0;
 
   function applyDevelopmentBranding() {
     if (process.platform !== "darwin" || !isDevelopmentBuild || !app.dock) return;
@@ -155,6 +176,33 @@ export function createApplicationLifecycle({
       });
   }
 
+  async function activateTraySession(sessionId: string | null) {
+    const generation = ++trayActivationGeneration;
+    await ensureWindow();
+    const window = state.mainWindow;
+    if (!window || window.isDestroyed() || !(await waitForMenuRenderer(window))) return;
+    if (generation !== trayActivationGeneration) return;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+    if (sessionId) await traySessions.refresh();
+    if (
+      generation !== trayActivationGeneration ||
+      window !== state.mainWindow ||
+      window.isDestroyed()
+    ) return;
+    if (sessionId && !traySessions.canActivate(sessionId)) return;
+    sendToRenderer(IPC.event.traySessionActivated, { sessionId });
+  }
+
+  function dispatchTrayActivation(sessionId: string | null) {
+    void activateTraySession(sessionId).catch((error) => {
+      logger.app("diagnostics", "error", "tray session activation failed", {
+        data: String(error),
+      });
+    });
+  }
+
   /**
    * One press of the merged window shortcut (D438): hide the window the user is
    * looking at, otherwise bring it back. Hiding is `Window.hide()` and never
@@ -170,12 +218,29 @@ export function createApplicationLifecycle({
     restoreMainWindow();
   }
 
-  function updateTrayMenu(locale = app.getLocale()) {
+  function updateTrayMenu(locale = appearanceState.updaterLocale || app.getLocale()) {
     if (!state.tray) return;
-  const labels = catalogs[resolveLocale(locale)].tray;
+    const catalog = catalogs[resolveLocale(locale)];
+    const labels = catalog.tray;
+    const template: MenuItemConstructorOptions[] = [
+      { label: labels.open, click: restoreMainWindow },
+    ];
+    for (const group of traySessions.getGroups()) {
+      template.push({ type: "separator" }, { label: labels[group.kind], enabled: false });
+      for (const session of group.sessions) {
+        const title = traySessionTitle(session.title, catalog.chat.untitledTask);
+        template.push({
+          label: process.platform === "darwin" ? title : title.replace(/&/g, "&&"),
+          click: () => dispatchTrayActivation(session.id),
+        });
+      }
+      if (group.hasMore) {
+        template.push({ label: labels.viewMore, click: () => dispatchTrayActivation(null) });
+      }
+    }
     state.tray.setContextMenu(
       Menu.buildFromTemplate([
-        { label: labels.open, click: restoreMainWindow },
+        ...template,
         { type: "separator" },
         { label: labels.quit, click: () => app.quit() },
       ]),
@@ -207,9 +272,20 @@ export function createApplicationLifecycle({
 
     state.tray = new Tray(icon);
     state.tray.setToolTip(APP_NAME);
-    state.tray.on("click", restoreMainWindow);
+    // macOS single-click opens its attached menu without focusing/reading a conversation.
+    // mouse-enter/move/leave replace the native NSStatusItem with a custom view,
+    // which hides the menu-bar extra. Keep hover retry on Windows/Linux only.
+    if (process.platform !== "darwin") {
+      state.tray.on("click", restoreMainWindow);
+      state.tray.on("mouse-enter", () => { void traySessions.refresh(); });
+      state.tray.on("right-click", () => { void traySessions.refresh(); });
+    }
     state.tray.on("double-click", restoreMainWindow);
     updateTrayMenu();
+    void traySessions.refresh();
+    void taskbarUnreadBadge.refresh();
+    // Window is live here; force-paint any count learned before the BrowserWindow existed.
+    taskbarUnreadBadge.replay();
   }
 
 
@@ -273,7 +349,6 @@ export function createApplicationLifecycle({
       createTray,
       browserPane,
       pluginViews,
-      pluginSettingsViews,
       plugins,
       logger,
     });
@@ -407,6 +482,35 @@ export function createApplicationLifecycle({
     }
   }
 
+  const powerError = (kind: string, operation: string, error: unknown) => {
+    logger.app("lifecycle", "warn", `power blocker ${kind} ${operation} failed`, {
+      data: String(error),
+    });
+  };
+  const displayBlocker = createPowerSaveBlockerController(
+    powerSaveBlocker,
+    "prevent-display-sleep",
+    (operation, error) => powerError("display", operation, error),
+  );
+  const systemBlocker = createPowerSaveBlockerController(
+    powerSaveBlocker,
+    "prevent-app-suspension",
+    (operation, error) => powerError("system", operation, error),
+  );
+
+  function applyPreventScreenSleep(settings?: { preventScreenSleep?: unknown } | null) {
+    displayBlocker.setEnabled(settings?.preventScreenSleep === true);
+  }
+
+  function applyKeepAwakeWhileRunning(settings?: { keepAwakeWhileRunning?: unknown } | null) {
+    systemBlocker.setEnabled(settings?.keepAwakeWhileRunning === true);
+  }
+
+  function disposePowerSaveBlockers() {
+    displayBlocker.dispose();
+    systemBlocker.dispose();
+  }
+
   /**
    * Drive Chromium and macOS native chrome (menus, vibrancy) from the same
    * theme preference the renderer paints. `system` keeps following the OS;
@@ -538,13 +642,18 @@ export function createApplicationLifecycle({
     return { theme: appearanceState.appThemePreference, base, locale: appearanceState.updaterLocale, pluginTheme };
   }
 
-  /** Push the current appearance to every open plugin panel, when it changed. */
+  /**
+   * Push the current appearance to every open plugin panel and every loaded
+   * plugin process, when it changed. Plugin-owned UI localizes from this
+   * payload (ADR 0280).
+   */
   function broadcastAppearance(): void {
     const appearance = resolveAppearance();
     const signature = JSON.stringify(appearance);
     if (signature === appearanceState.broadcastAppearanceSignature) return;
     appearanceState.broadcastAppearanceSignature = signature;
     broadcastPluginPanelEvent("appearance:changed", appearance);
+    plugins.broadcastEvent("appearance:changed", [appearance]);
   }
 
   function flushPendingApplicationMenuCommands() {
@@ -561,6 +670,8 @@ export function createApplicationLifecycle({
   }
 
   return {
+    traySessions,
+    taskbarUnreadBadge,
     applyDevelopmentBranding,
     hasVisibleWindow,
     restoreMainWindow,
@@ -577,6 +688,9 @@ export function createApplicationLifecycle({
     executeNativeMenuAction,
     dispatchNativeMenuAction,
     applyDeveloperMode,
+    applyPreventScreenSleep,
+    applyKeepAwakeWhileRunning,
+    disposePowerSaveBlockers,
     applyNativeThemeSource,
     applyAppThemePreference,
     applyApplicationMenuSettings,

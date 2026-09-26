@@ -1,7 +1,7 @@
 /**
  * Vendor-account (OAuth) login for model providers.
  *
- * pi-ai owns the seven login flows and the locked token refresh; persistence
+ * pi-ai owns all supported login flows and the locked token refresh; persistence
  * and the user-facing half of the conversation are the app's job (see
  * `auth/types.d.ts`: "Login/account-removal orchestration is app-owned"). This module is
  * that half:
@@ -44,6 +44,14 @@ import {
   type ModelConfig,
   type VendorModelBinding,
 } from "@pi-desktop/agent-runtime";
+import {
+  isConversationModelId,
+  parseVendorModelIds,
+  pinnedSiblingId,
+  readVendorModelList,
+  vendorModelListRequest,
+  wireForLiveModel,
+} from "./vendor-live-models.ts";
 import {
   OAUTH_AUTH_KIND,
   type AccountQuotaBucket,
@@ -157,6 +165,34 @@ const ANTIGRAVITY_MODELS: OAuthModelOption[] = [
   },
 ];
 
+const LIVE_MODELS_TTL_MS = 30_000;
+const LIVE_MODELS_NEGATIVE_TTL_MS = 15_000;
+const THINKING_LEVEL_ORDER = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const satisfies readonly ThinkingLevel[];
+
+/** xAI and the other account lists also publish generators. Those are not conversation models. */
+export function isXaiConversationModel(modelId: string): boolean {
+  return isConversationModelId(modelId);
+}
+
+function thinkingLevelsFromPiModel(model: Model<Api>): ThinkingLevel[] {
+  const map = model.thinkingLevelMap as Partial<Record<string, string | null>> | undefined;
+  if (!map) return model.reasoning ? ["low", "medium", "high"] : ["off"];
+  const levels = THINKING_LEVEL_ORDER.filter((level) => typeof map[level] === "string");
+  return levels.length > 0
+    ? [...levels]
+    : model.reasoning
+      ? ["low", "medium", "high"]
+      : ["off"];
+}
+
 export type HostCall = <T = unknown>(
   method: string,
   params?: unknown,
@@ -203,6 +239,8 @@ export type VendorOAuthDeps = {
     option: OAuthModelOption;
   }) => Promise<ModelConfig | undefined>;
   newId?: () => string;
+  /** Test seam. Defaults to the process fetch. */
+  fetch?: typeof fetch;
 };
 
 /**
@@ -266,6 +304,9 @@ export class VendorOAuth {
   private readonly logins = new Map<string, LoginSession>();
   /** One pi-ai collection and credential store per local OAuth account row. */
   private readonly accountModels = new Map<string, AccountModels>();
+  /** Successful and failed account model lists, so launch does not refetch per model. */
+  private readonly liveModelCache = new Map<string, { at: number; models: OAuthModelOption[] | null }>();
+  private readonly liveModelLoads = new Map<string, Promise<OAuthModelOption[] | undefined>>();
   /** Per-account write chain: `modify` must be a serialized read-modify-write. */
   private readonly chains = new Map<string, Promise<unknown>>();
   private catalogPromise?: Promise<MutableModels>;
@@ -305,41 +346,6 @@ export class VendorOAuth {
         };
       });
 
-    const antigravityAccounts = rows
-      .filter(
-        (candidate) =>
-          candidate.authKind === OAUTH_AUTH_KIND &&
-          candidate.vendorKey === "antigravity",
-      )
-      .map((row) => ({
-        providerId: row.id,
-        accountLabel: row.oauthAccountLabel || undefined,
-        connected: row.hasOauth === true,
-      }));
-
-    const ALLOWED_OAUTH_VENDORS = new Set([
-      "antigravity",
-      "github-copilot",
-      "github",
-      "anthropic",
-      "claude",
-      "openai-codex",
-      "codex",
-      "cursor",
-    ]);
-
-    const filteredList = list
-      .filter((item) => ALLOWED_OAUTH_VENDORS.has(item.vendorId))
-      .map((item) => {
-        if (item.vendorId === "anthropic") {
-          return { ...item, name: "Claude Code", loginLabel: "Sign in with Claude" };
-        }
-        if (item.vendorId === "openai-codex") {
-          return { ...item, name: "OpenAI Codex", loginLabel: "Sign in with ChatGPT" };
-        }
-        return item;
-      });
-
     const extraVendors: Array<{
       vendorId: string;
       name: string;
@@ -354,10 +360,16 @@ export class VendorOAuth {
         isSubscription: false,
         baseUrl: "https://daily-cloudcode-pa.googleapis.com",
       },
+      {
+        vendorId: "github-copilot",
+        name: "GitHub Copilot",
+        loginLabel: "Sign in with GitHub Copilot",
+        isSubscription: true,
+      },
     ];
 
     for (const extra of extraVendors) {
-      if (filteredList.some((item) => item.vendorId === extra.vendorId)) continue;
+      if (list.some((item) => item.vendorId === extra.vendorId)) continue;
       const matchingAccounts = rows
         .filter(
           (candidate) =>
@@ -369,7 +381,7 @@ export class VendorOAuth {
           accountLabel: row.oauthAccountLabel || undefined,
           connected: row.hasOauth === true,
         }));
-      filteredList.push({
+      list.push({
         vendorId: extra.vendorId,
         name: extra.name,
         loginLabel: extra.loginLabel,
@@ -378,7 +390,7 @@ export class VendorOAuth {
       });
     }
 
-    return filteredList;
+    return list;
   }
 
   /**
@@ -501,6 +513,8 @@ export class VendorOAuth {
       await running.finished?.catch(() => undefined);
     }
     this.accountModels.delete(providerId);
+    this.liveModelCache.delete(providerId);
+    this.liveModelLoads.delete(providerId);
     await this.deps.call("providers.delete", { id: providerId });
   }
 
@@ -916,8 +930,14 @@ export class VendorOAuth {
           for (const group of data.groups) {
             const groupDisplayName = (group.displayName || group.name || "").trim();
             const isGemini = groupDisplayName.toLowerCase().includes("gemini");
-            const groupFallback = isGemini ? "Gemini" : "Claude/GPT";
-            const effectiveGroup = groupDisplayName || groupFallback;
+            const isClaudeGpt =
+              groupDisplayName.toLowerCase().includes("claude") ||
+              groupDisplayName.toLowerCase().includes("gpt");
+            const effectiveGroup = isGemini
+              ? "Gemini"
+              : isClaudeGpt
+                ? "Claude/GPT"
+                : (groupDisplayName || "Standard");
             if (Array.isArray(group.buckets)) {
               for (const b of group.buckets) {
                 const isDisabled = !!b.disabled;
@@ -1114,9 +1134,11 @@ export class VendorOAuth {
   }
 
   /**
-   * Models the signed-in account may actually use. This replaces the `/models`
-   * probe: `getAvailable` applies the vendor's own `filterModels`, which is how
-   * Copilot narrows the list to the user's subscription.
+   * Models the signed-in account may actually use.
+   *
+   * The account's own model list is the authority. pi-ai (`getAvailable`,
+   * including a vendor `filterModels`) is used only when that request cannot
+   * be read. Radius keeps its gateway refresh and does not get a second probe.
    */
   async listModels(providerId: string): Promise<OAuthModelOption[]> {
     return this.withRowHeaders(providerId, async () => {
@@ -1132,9 +1154,10 @@ export class VendorOAuth {
           { modelId: "deepseek-chat", apiStyle: "chat_completions", baseUrl: "https://api.openai.com/v1" },
         ];
       }
-      // Dynamic catalogs (radius, Copilot) are empty until refreshed; static and
-      // unconfigured providers are skipped inside pi-ai.
+      // Dynamic catalogs (radius) are empty until refreshed.
       await account.models.refresh({ providers: [account.vendorId] });
+      const live = await this.liveAccountModels(account);
+      if (live) return live;
       const available = await account.models.getAvailable(account.vendorId);
       return available.map((model) => this.optionFor(model));
     });
@@ -1212,22 +1235,162 @@ export class VendorOAuth {
     }
     let model = account.models.getModel(account.vendorId, modelId);
     if (!model) {
-      // Dynamic catalogs are empty until the first refresh.
       await account.models.refresh({ providers: [account.vendorId] });
       model = account.models.getModel(account.vendorId, modelId);
     }
+    const live = await this.liveAccountModels(account);
+    if (live) {
+      const option = live.find((item) => item.modelId === modelId);
+      // A successful account list replaces the pinned catalog. An id it did
+      // not return is not offered, even when pi-ai still ships that id.
+      if (!option) return undefined;
+      return this.bindingFromOption(account, option);
+    }
     if (!model) return undefined;
-    const option = this.optionFor(model);
-    const modelConfig = await this.deps.modelConfigFor?.({
+    return this.bindingFromOption(account, this.optionFor(model));
+  }
+
+  /**
+   * Chat models the signed-in account can call right now.
+   * `undefined` means the live list could not be read; callers keep the
+   * pinned catalog.
+   */
+  private async liveAccountModels(
+    account: AccountModels,
+  ): Promise<OAuthModelOption[] | undefined> {
+    if (account.vendorId === "radius") return undefined;
+    const cached = this.liveModelCache.get(account.providerId);
+    if (cached) {
+      const ttl = cached.models ? LIVE_MODELS_TTL_MS : LIVE_MODELS_NEGATIVE_TTL_MS;
+      if (Date.now() - cached.at < ttl) return cached.models ?? undefined;
+    }
+    const pending = this.liveModelLoads.get(account.providerId);
+    if (pending) return pending;
+    const load = this.loadLiveAccountModels(account).finally(() => {
+      this.liveModelLoads.delete(account.providerId);
+    });
+    this.liveModelLoads.set(account.providerId, load);
+    return load;
+  }
+
+  private rememberLiveModels(
+    providerId: string,
+    models: OAuthModelOption[] | null,
+  ): OAuthModelOption[] | undefined {
+    this.liveModelCache.set(providerId, { at: Date.now(), models });
+    return models ?? undefined;
+  }
+
+  private async loadLiveAccountModels(
+    account: AccountModels,
+  ): Promise<OAuthModelOption[] | undefined> {
+    let apiKey: string | undefined;
+    let baseUrl: string | undefined;
+    try {
+      const resolved = await account.models.getAuth(account.vendorId);
+      apiKey = resolved?.auth.apiKey;
+      baseUrl = resolved?.auth.baseUrl;
+    } catch (error) {
+      this.log("warn", "vendor account auth unavailable for model list", {
+        vendorId: account.vendorId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+    const request = vendorModelListRequest({
+      vendorId: account.vendorId,
+      apiKey,
+      baseUrl,
+    });
+    if (!request) return undefined;
+    try {
+      const body = await readVendorModelList(request, this.deps.fetch ?? globalThis.fetch);
+      const ids = parseVendorModelIds(account.vendorId, body, request.allowPolicyFallback);
+      if (!ids || ids.length === 0) return this.rememberLiveModels(account.providerId, null);
+      const pinned = await account.models.getAvailable(account.vendorId);
+      const known = new Map(pinned.map((model) => [model.id, model]));
+      const wires = pinned.map((model) => ({
+        id: model.id,
+        api: model.api,
+        baseUrl: model.baseUrl,
+      }));
+      const models = ids.flatMap((modelId) => {
+        const pinnedModel = known.get(modelId);
+        if (pinnedModel) return [this.optionFor(pinnedModel)];
+        const wire = wireForLiveModel(account.vendorId, modelId, wires, request.accountBaseUrl);
+        if (!wire?.api || !wire.baseUrl) return [];
+        return [{
+          modelId,
+          apiStyle: apiStyleForWireApi(wire.api),
+          baseUrl: wire.baseUrl,
+        }];
+      });
+      if (models.length === 0) return this.rememberLiveModels(account.providerId, null);
+      return this.rememberLiveModels(account.providerId, models);
+    } catch (error) {
+      this.log("warn", "vendor account model list failed", {
+        vendorId: account.vendorId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return this.rememberLiveModels(account.providerId, null);
+    }
+  }
+
+  private async bindingFromOption(
+    account: AccountModels,
+    option: OAuthModelOption,
+  ): Promise<VendorModelBinding> {
+    const published = await this.deps.modelConfigFor?.({
       vendorKey: account.vendorId,
       option,
-    }).catch(() => undefined) ?? genericModelConfig(modelId, model.baseUrl);
+    }).catch(() => undefined);
+    const modelConfig = await this.withPinnedSiblingFallback(account, option, published);
     const capabilities = capabilitiesFromModelConfig(modelConfig);
     return {
       apiStyle: option.apiStyle,
       baseUrl: option.baseUrl,
       modelConfig,
       ...capabilities,
+    };
+  }
+
+  /**
+   * models.dev is the metadata source when it already knows the id. A model
+   * that exists only on the live list otherwise inherits limits and thinking
+   * levels from a pinned sibling of the same tier. xAI uses an explicit
+   * newest-first order so pin order cannot pick an older Grok.
+   */
+  private async withPinnedSiblingFallback(
+    account: AccountModels,
+    option: OAuthModelOption,
+    published: ModelConfig | undefined,
+  ): Promise<ModelConfig> {
+    const config = published ?? genericModelConfig(option.modelId, option.baseUrl);
+    if (config.source !== "generic") return config;
+    const pinned = await account.models.getAvailable(account.vendorId);
+    if (pinned.some((model) => model.id === option.modelId)) return config;
+    const siblingId = pinnedSiblingId(
+      account.vendorId,
+      option.modelId,
+      pinned.map((model) => model.id),
+    );
+    const sibling = siblingId ? pinned.find((model) => model.id === siblingId) : undefined;
+    if (!sibling) return config;
+    const input = (sibling.input ?? []).filter(
+      (modality): modality is "text" | "image" => modality === "text" || modality === "image",
+    );
+    return {
+      ...config,
+      reasoning: sibling.reasoning,
+      input: input.length > 0 ? input : config.input,
+      contextWindow: sibling.contextWindow,
+      maxTokens: sibling.maxTokens,
+      limit: {
+        context: sibling.contextWindow,
+        input: sibling.contextWindow,
+        output: sibling.maxTokens,
+      },
+      supportedThinkingLevels: thinkingLevelsFromPiModel(sibling),
     };
   }
 

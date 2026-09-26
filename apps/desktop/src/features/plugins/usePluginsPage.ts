@@ -43,7 +43,6 @@ export function usePluginsPage() {
   const settings = useAppStore((s) => s.settings);
   const refreshPlugins = useAppStore((s) => s.refreshPlugins);
   const showToast = useAppStore((s) => s.showToast);
-  const openUrlInWorkPanel = useAppStore((s) => s.openUrlInWorkPanel);
   const activateProject = useAppStore((s) => s.activateProject);
   /**
    * The folder open in this window. Scoping something to "this project" is only
@@ -172,6 +171,12 @@ export function usePluginsPage() {
   };
 
   const closeDetail = () => {
+    // Escape leaves the opener focused; match pointer dismissal without
+    // removing the focus indicator used by subsequent keyboard navigation.
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && focused.matches(".plugins-card-hit")) {
+      focused.blur();
+    }
     setSelectedId(null);
     setDetail(null);
     setSelectedVersion("");
@@ -662,7 +667,6 @@ export function usePluginsPage() {
     settings,
     refreshPlugins,
     showToast,
-    openUrlInWorkPanel,
     activateProject,
     currentProjectPath,
     tab,

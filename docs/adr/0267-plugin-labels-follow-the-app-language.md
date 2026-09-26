@@ -5,6 +5,7 @@
 - **Related**: [ADR 0009](0009-english-first-globalization.md) ·
   [ADR 0160](0160-shipped-locale-registry-and-language-picker.md) ·
   [ADR 0182](0182-traditional-chinese-shell-locale.md) ·
+  [ADR 0280](0280-plugin-owned-ui-localizes-from-host-locale.md) ·
   [07-plugins/02-plugin-manifest-schema](../spec/07-plugins/02-plugin-manifest-schema.md) ·
   [07-plugins/07-plugin-marketplace](../spec/07-plugins/07-plugin-marketplace.md)
 

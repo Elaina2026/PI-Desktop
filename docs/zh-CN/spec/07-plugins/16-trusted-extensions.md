@@ -63,9 +63,14 @@ agent 循环上注册工具、命令和事件处理器。`ExtensionAPI` 契约�
 
 插件页 →“导入 pi 扩展”打开原生选择器（main 拥有路径，D344），由用户明确选择本地
 文件或目录。main 把所选源码复制到 `<dataDir>/plugins/imported/<slug>/src/`，生成空操作
-`main.js` 和 id 为 `imported.<slug>` 的 manifest（重复导入时追加唯一后缀），再通过
+CommonJS `main.cjs` 和 id 为 `imported.<slug>` 的 manifest（重复导入时追加唯一后缀），再通过
 既有本地插件流程注册。选择器之前的确认仍是信任决定；生成的 manifest 只声明实际贡献
-所需的权限。
+所需的权限。无论源包的 `type` 为何，manifest 的 `main` 都指向 `main.cjs`；
+两份复制的包声明保留原有模块语义。加载时若导入插件的 `main` 仍是生成的 CommonJS
+`main.js` 空包装器，则就地改写为 `main.cjs` 并更新 manifest；复制的包文件、授权和
+激活范围保持不变。只匹配生成的空操作（含最初的注释文本）。自定义过的 `main.js`
+不会改动。不删除就重新导入仍会创建带唯一后缀的独立插件，不会从旧副本复制授权或
+激活范围。
 
 扩展文件及未声明 `pi.skills` 的包保持既有 `pi-coding-agent` 入口发现规则：先取
 `package.json` 的 `pi.extensions`，否则取 `index.ts` / `index.js`，再否则取一层深度内
@@ -107,7 +112,7 @@ Agent 扩展。
 包内依赖目录。绝对 `pi.skills` 路径与后代符号链接会被拒绝；复制保留资源时也拒绝
 符号链接，复制失败会清理部分生成的目录。生成目标以原子方式创建，不能位于所选源目录内。
 
-这是显式本地导入，不是 pi CLI 包管理器：不会自动扫描或导入 `~/.pi`，不会读取 CLI
+这是显式本地导入，不是 pi CLI 包管理器：不会自动导入 `~/.pi`，不会读取 CLI
 已安装包注册表，也不会执行 npm 生命周期脚本。声明依赖时，有界安装器只接受 registry
 版本说明和 registry 来源的 npm lockfile，拒绝不安全的包路径和嵌套依赖 spec，禁用 git
 解析，并隔离 npm 的配置/cache 与用户凭据和代理设置。导入包不代表其所有第三方扩展依赖都能执行。
@@ -175,9 +180,9 @@ main、渲染层或插件宿主进程中。
 | `session_info_changed` | 经 `setSessionName` 的会话改名 | 否 |
 | `project_trust` | v1 说明：不触发；按项目启用即信任决定 | 否 |
 | `resources_discover` | v1 说明：不触发；skills 与提示发现留在 Electron main | 不适用 |
-| `before_agent_start` | 回合内首个 provider 请求之前 | 是，系统提示与消息编辑 |
+| `before_agent_start` | 回合内首个 provider 请求之前 | 是，仅替换系统提示词 |
 | `context` | `prepareNextTurn` | 是，替换消息列表 |
-| `before_provider_request`、`before_provider_headers`、`after_provider_response` | provider 调用包装 | 请求与头部为是 |
+| `before_provider_request`、`before_provider_headers`、`after_provider_response` | provider 调用包装 | 请求采纳返回值；头部原地修改 payload |
 | `agent_start`、`agent_end`、`agent_settled` | Agent 循环边界 | 否 |
 | `turn_start`、`turn_end` | 回合边界 | 否 |
 | `message_start`、`message_update`、`message_end` | Agent 消息事件 | v1 说明：否，pi-agent-core 不提供事后替换 |
@@ -190,8 +195,37 @@ main、渲染层或插件宿主进程中。
 | `input` | v1 说明：不触发；Host 队列准入尚未接入 | 不适用 |
 | `user_bash`、`session_before_switch`、`session_before_tree`、`session_tree`、`ui_prompt_start`、`ui_prompt_end` | v1 不触发 | 不适用 |
 
-抛出异常的处理器记为诊断并视为返回 `undefined`。带返回结果的事件若处理器超过
-30 秒，则放弃并记诊断，回合以未修改的值继续。
+Desktop 事件能力由 `packages/agent-runtime/src/extensions/event-capabilities.ts`
+维护，分为返回值、原地修改、通知和未接通。未接通事件仍可注册，但会在现有插件诊断中
+显示 `unsupported_api`，不妨碍其他已支持的处理器加载。
+
+所有事件处理器（包括启动、关闭和通知）均有每个处理器 30 秒的等待上限。模块加载和
+工厂初始化分别有 30 秒上限，失败归入加载或工厂诊断。处理器异常或超时记诊断并视为
+返回 `undefined`，后续处理器按注册顺序继续。既有结果归并和失败继续策略保持不变，
+不能将其作为强制安全检查。多个挂起处理器可能分别耗尽各自的时间预算。
+
+中止会使等待中的事件派发失效。销毁先拒绝新派发并取消已有等待，再执行关闭处理器；
+并发销毁只关闭一次。旧派发不返回结果、不再执行剩余处理器，迟到的完成或异常不会覆盖
+结果或增加诊断。销毁后完成的工厂不能发布工具和命令。Runtime 在等待扩展关闭前先停止
+Agent 工作。在请求前 hook 等待期间停止，不会继续请求模型，并保留用户消息；之后可正常
+发送下一条消息。
+
+每次调用拥有独立的 `ctx.signal`，完成、超时、Stop 或销毁后失效。旧回调再调用 SDK
+会被拒绝，包括等待空闲、创建会话、fork 和发送消息的后续步骤。已提交给 Host 的事务
+不回滚，但迟到返回不再触发队列优先级更新或修改 Runtime 模型状态。命令与工具不套用
+事件的 30 秒上限，可运行至完成、传入信号取消、Stop 或销毁；迟到的工具进度和结果被丢弃。
+已采纳的工具进度和结果会先复制再发布，扩展之后的原地修改不能改写它们。`pi.exec`
+创建的进程树随作用域退出或显式超时终止，销毁等待已登记进程清理并报告失败。
+主动逃离进程组或通过 Node API 直接创建的进程不在此所有权范围。
+
+带返回值的 Hook 输入输出使用独立副本，头部修改仅在处理器及时成功后提交。
+迟到的原地修改不会影响宿主或下一处理器。UI 请求按请求 ID、会话和扩展身份取消，
+排队请求被丢弃，已显示的弹窗向渲染层发送精确退役通知；旧取消不会关闭新请求。
+
+这些是协作式生命周期约束，不是强制执行隔离：可信代码仍可同步阻塞 JS 或直接使用
+Node API 产生外部副作用。Native Pi 会话由上游 SDK 管理，不属于本次 Desktop 变更。
+事件处理器等待 UI 提示时也受 30 秒限制，
+UI broker 自身的提示超时不会延长该预算。
 
 ## 7. 工具
 

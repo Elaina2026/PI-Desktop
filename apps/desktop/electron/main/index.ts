@@ -7,17 +7,16 @@ import {
   Tray,
 } from "electron";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import {
   applyNetworkProxyFromAppSettings,
   currentNetworkProxy,
   testNetworkProxy,
 } from "./network-proxy";
+import { installInsecureEndpointNotice } from "./network-notice";
 import {
   APP_ID,
   APP_NAME,
   APP_VERSION,
-  ErrorCodes as SharedErrorCodes,
   IPC,
   IPC_WHITELIST,
   KEYBOARD_SHORTCUTS,
@@ -31,10 +30,7 @@ import {
   type KeybindingOverrides,
   type PlanExecutionFinishStatus,
 } from "@pi-desktop/shared";
-import {
-  genericModelConfig,
-  summarizeSessionTitle,
-} from "@pi-desktop/agent-runtime";
+import { summarizeSessionTitle } from "@pi-desktop/agent-runtime";
 import { AgentExtensionBridge } from "./agent-extensions";
 import { registerAgentExtensionIpc } from "./agent-extensions-ipc";
 import { isTemplateName, scaffold } from "@pi-desktop/plugin-devkit";
@@ -50,16 +46,15 @@ import {
   shouldShowNativeNotification,
 } from "./notification-policy";
 import { PersistenceOutbox } from "./persistence-outbox";
-import { InflightCheckpointer } from "./inflight-checkpoint";
 import { AgentSidecar } from "./agent-sidecar";
 import { Logger, ignoreBrokenStdio } from "./logger";
-import { installMainProcessErrorHandlers } from "./main-process-errors";
+import { describeError, installMainProcessErrorHandlers } from "./main-process-errors";
 import {
   isDbSchemaTooNewError,
 } from "./host-boot-diagnostics";
 import {
   ModelsDevCatalog,
-  modelConfigFromModelsDev,
+  catalogModelConfigFor,
 } from "./models-dev-catalog";
 import { VendorOAuth } from "./oauth";
 import { AppUpdaterController } from "./updater";
@@ -89,14 +84,14 @@ import {
   type PreparedPromptAttachment,
 } from "./prompt-attachments";
 import {
+  InflightCheckpointer,
   executionFromResponse,
   executionListFromResponse,
   planExecutionFromUnknown,
-} from "./plan-execution";
-import {
-  readWindowState,
-  writeWindowState,
-} from "./window-preferences";
+} from "@pi-desktop/host-runtime";
+import { readWindowState, writeWindowState } from "./window-preferences";
+import { withGitBranch } from "./workspace-git";
+import { applyDevelopmentUserData, desktopDataDir } from "./data-paths";
 import { createPlanUiProbe } from "./plan-ui-probe";
 import type { McpControlController, McpControlServer } from "./mcp-control";
 import type { AgentHostBridge } from "./agent-host-bridge";
@@ -114,9 +109,10 @@ import {
 } from "./ipc/composer-ipc";
 import { registerWindowIpc } from "./ipc/window-ipc";
 import { registerPullsIpc } from "./ipc/pulls-ipc";
-import { registerScheduledIpc } from "./ipc/scheduled-ipc";
 import { registerAgentIpc } from "./ipc/agent-ipc";
 import { registerIpcHandlers } from "./ipc/register";
+import { createVoiceService } from "./voice-service";
+import { MainProcessState } from "./bootstrap/main-state";
 import {
   type WindowLifecycleState,
 } from "./bootstrap/window";
@@ -161,16 +157,6 @@ import { registerPluginUiIpc } from "./ipc/plugin-ui-ipc";
 import { registerSkillsIpc } from "./ipc/skills-ipc";
 import { stripWinLongPrefix } from "./path-utils";
 
-// The shared error-code union is reconciled in the shared lane. Keep desktop
-// source type-safe while that lane is temporarily staged at main.
-const ErrorCodes = {
-  ...SharedErrorCodes,
-  COMMAND_SHELL_INVALID: "COMMAND_SHELL_INVALID",
-  SHELL_NOT_FOUND: "SHELL_NOT_FOUND",
-  PLAN_EXECUTION_INTERRUPTED: "PLAN_EXECUTION_INTERRUPTED",
-  PLAN_PERMISSION_MODE_REQUIRED: "PLAN_PERMISSION_MODE_REQUIRED",
-} as const;
-
 // A closed stdout/stderr (Linux AppImage, GUI launch without a TTY) must not
 // surface as Electron's "Uncaught Exception: write EPIPE" dialog. The same
 // default dialog must not appear for a stray uncaughtException (non-ASCII
@@ -178,23 +164,28 @@ const ErrorCodes = {
 ignoreBrokenStdio();
 installMainProcessErrorHandlers();
 
+const isDevelopmentBuild =
+  process.env.PI_DESKTOP_DEV === "1" || !app.isPackaged;
+
 app.setName(APP_NAME);
+applyDevelopmentUserData(app, isDevelopmentBuild);
 if (process.platform === "win32") {
   app.setAppUserModelId(APP_ID);
 }
 
-// One data directory admits exactly one desktop process. host-core owns
-// `pi.sqlite` exclusively (D002), Electron main owns the persistence outbox and
-// the log tree beside it, and the tray, the global launcher shortcut, and the
-// updater are singletons of the running app — a second process fights the first
-// for every one of them and leaves the user with two shells over one database.
-//
-// Electron keeps the lock in `userData`, which is derived from the app name set
-// just above, so it is taken after `setName` and before anything else in this
-// module touches the data directory. That scope is the installation, not
-// `PI_DESKTOP_DATA_DIR`: a run pointed at its own data directory (E2E
-// harnesses, the capture rig, a side-by-side profile) shares no state with the
-// default installation and stays launchable while one is running.
+// Chromium's accessibility tree serializer has a known CHECK failure in
+// AXBlockFlowData::ComputeNeighborOnLine (chromium #552018997) that kills
+// the renderer when an AT client reads the tree while the DOM is being
+// mutated — exactly what happens during streaming agent responses.
+// The switch prevents Chromium from building the in-renderer accessibility
+// tree unless the user explicitly opts in via --force-renderer-accessibility.
+// This is a workaround until the upstream fix lands.
+app.commandLine.appendSwitch("disable-renderer-accessibility");
+
+// One installation, one process. The lock lives in `userData` (set just
+// above), so it is taken after `setName` and before anything else here
+// touches the data directory. A development build is its own installation;
+// `PI_DESKTOP_DATA_DIR` still opts a run out of the lock (E2E, capture rig).
 const singleInstanceRequired = !process.env.PI_DESKTOP_DATA_DIR;
 const hasSingleInstanceLock = singleInstanceRequired
   ? app.requestSingleInstanceLock()
@@ -215,250 +206,22 @@ const WINDOW_BOUNDS_SETTLE_MS = 300;
 const WORK_PANEL_NATIVE_RESIZE_SETTLE_MS = 180;
 const WORK_PANEL_CHAT_RESIZE_SETTLE_MS = WINDOW_BOUNDS_SETTLE_MS + 120;
 
-let mainWindow: BrowserWindow | null = null;
-let tray: Tray | null = null;
-let pluginLauncherWindow: BrowserWindow | null = null;
-let pluginLauncherCreationPromise: Promise<BrowserWindow> | null = null;
-let pluginLauncherAccelerator: string | null = null;
-let pluginLauncherBinding: string | null = null;
-let toggleWindowAccelerator: string | null = null;
-const launcherState: LauncherState = {
-  get creationPromise() {
-    return pluginLauncherCreationPromise;
-  },
-  set creationPromise(value) {
-    pluginLauncherCreationPromise = value;
-  },
-  get pluginLauncherAccelerator() {
-    return pluginLauncherAccelerator;
-  },
-  set pluginLauncherAccelerator(value) {
-    pluginLauncherAccelerator = value;
-  },
-  get toggleWindowAccelerator() {
-    return toggleWindowAccelerator;
-  },
-  set toggleWindowAccelerator(value) {
-    toggleWindowAccelerator = value;
-  },
-};
-let windowCreationPromise: Promise<void> | null = null;
-let applicationBooted = false;
-const isDevelopmentBuild =
-  process.env.PI_DESKTOP_DEV === "1" || !app.isPackaged;
-const pendingApplicationMenuCommands: AppMenuCommand[] = [];
-type MenuRendererReadyGate = {
-  window: BrowserWindow;
-  ready: boolean;
-  promise: Promise<void>;
-  resolve: () => void;
-};
-let menuRendererReadyGate: MenuRendererReadyGate | null = null;
-let requestedWorkPanelReservation = 0;
-let workPanelReservation = emptyWorkPanelReservationState();
-let workPanelDisplayKey: string | null = null;
-// Base bounds are persistable; last-applied bounds isolate later native deltas.
-let workPanelBaseBounds: WindowBounds | null = null;
-let workPanelLastAppliedBounds: WindowBounds | null = null;
-// A reservation changes native bounds intentionally. The next matching move
-// event belongs to that mutation, not to a user dragging the window between
-// displays.
-let expectedWorkPanelBounds: WindowBounds | null = null;
-// Set while a native `move` stream is unaccounted for, which is what separates
-// a display change the user caused by dragging from one the OS imposed on
-// bounds we asked for (D263). A flag rather than a deadline: attribution must
-// not depend on how long the main process took to reach the classification.
-let workPanelUserMovePending = false;
-let workPanelNativeResizeActive = false;
-let workPanelChatResizeActive = false;
-let workPanelChatResizeTimer: NodeJS.Timeout | null = null;
-let setWorkPanelChatWidthForWindow: ((width: number) => number) | null = null;
-let host: HostProcess | null = null;
-let sidecar: AgentSidecar | null = null;
-let mcpControl: McpControlServer | null = null;
-let agentHostBridge: AgentHostBridge | null = null;
-let desktopControl: McpControlController | null = null;
-let quitting = false;
-let shutdownComplete = false;
-let shutdownPromise: Promise<void> | null = null;
-// User-chosen close behavior on Windows/Linux; "ask" prompts on first close.
-// The tray itself is owned by D216 (always present on every platform), so
-// close behavior only decides whether a close hides the window to it.
-let closeBehavior: CloseBehavior = "ask";
-let closePromptOpen = false;
-// Set when the user has explicitly confirmed a quit through the confirmation
-// dialog (Cmd+Q, tray quit, etc.). Prevents the dialog from showing again when
-// `app.quit()` is re-issued after the user confirmed.
-let quitConfirmed = false;
-// Windows whose close handler has already decided to let the close through.
-// Per-window rather than a module-level latch, so a real close never leaks
-// permission to close into the next window `ensureWindow()` creates.
-const windowsAllowedToClose = new WeakSet<BrowserWindow>();
+const mainState = new MainProcessState();
+const {
+  launcherState,
+  windowLifecycleState,
+  runtimeState,
+  applicationLifecycleState,
+  applicationAppearanceState,
+  planRuntimeState,
+  startupState,
+  shutdownState,
+  windowsAllowedToClose,
+} = mainState;
 
-// The window bootstrap owns this mutable boundary. Accessors keep the
-// existing lifecycle state available to the remaining main-process services
-// while preventing the bootstrap module from reaching into their globals.
-const windowLifecycleState: WindowLifecycleState = {
-  get mainWindow() {
-    return mainWindow;
-  },
-  set mainWindow(value) {
-    mainWindow = value;
-  },
-  get notificationViewingSessionId() {
-    return notificationViewingSessionId;
-  },
-  set notificationViewingSessionId(value) {
-    notificationViewingSessionId = value;
-  },
-  get requestedWorkPanelReservation() {
-    return requestedWorkPanelReservation;
-  },
-  set requestedWorkPanelReservation(value) {
-    requestedWorkPanelReservation = value;
-  },
-  get workPanelReservation() {
-    return workPanelReservation;
-  },
-  set workPanelReservation(value) {
-    workPanelReservation = value;
-  },
-  get workPanelDisplayKey() {
-    return workPanelDisplayKey;
-  },
-  set workPanelDisplayKey(value) {
-    workPanelDisplayKey = value;
-  },
-  get workPanelBaseBounds() {
-    return workPanelBaseBounds;
-  },
-  set workPanelBaseBounds(value) {
-    workPanelBaseBounds = value;
-  },
-  get workPanelLastAppliedBounds() {
-    return workPanelLastAppliedBounds;
-  },
-  set workPanelLastAppliedBounds(value) {
-    workPanelLastAppliedBounds = value;
-  },
-  get expectedWorkPanelBounds() {
-    return expectedWorkPanelBounds;
-  },
-  set expectedWorkPanelBounds(value) {
-    expectedWorkPanelBounds = value;
-  },
-  get workPanelUserMovePending() {
-    return workPanelUserMovePending;
-  },
-  set workPanelUserMovePending(value) {
-    workPanelUserMovePending = value;
-  },
-  get workPanelNativeResizeActive() {
-    return workPanelNativeResizeActive;
-  },
-  set workPanelNativeResizeActive(value) {
-    workPanelNativeResizeActive = value;
-  },
-  get workPanelChatResizeTimer() {
-    return workPanelChatResizeTimer;
-  },
-  set workPanelChatResizeTimer(value) {
-    workPanelChatResizeTimer = value;
-  },
-  get workPanelChatResizeActive() {
-    return workPanelChatResizeActive;
-  },
-  set workPanelChatResizeActive(value) {
-    workPanelChatResizeActive = value;
-  },
-  get setWorkPanelChatWidthForWindow() {
-    return setWorkPanelChatWidthForWindow;
-  },
-  set setWorkPanelChatWidthForWindow(value) {
-    setWorkPanelChatWidthForWindow = value;
-  },
-  get pluginLauncherBinding() {
-    return pluginLauncherBinding;
-  },
-  set pluginLauncherBinding(value) {
-    pluginLauncherBinding = value;
-  },
-  get closePromptOpen() {
-    return closePromptOpen;
-  },
-  set closePromptOpen(value) {
-    closePromptOpen = value;
-  },
-  get quitConfirmed() {
-    return quitConfirmed;
-  },
-  set quitConfirmed(value) {
-    quitConfirmed = value;
-  },
-  get menuRendererReadyGate() {
-    return menuRendererReadyGate;
-  },
-  set menuRendererReadyGate(value) {
-    menuRendererReadyGate = value;
-  },
-  get quitting() {
-    return quitting;
-  },
-  set quitting(value) {
-    quitting = value;
-  },
-  get tray() {
-    return tray;
-  },
-  set tray(value) {
-    tray = value;
-  },
-  get closeBehavior() {
-    return closeBehavior;
-  },
-  set closeBehavior(value) {
-    closeBehavior = value;
-  },
-  get developerMode() {
-    return developerMode;
-  },
-  set developerMode(value) {
-    developerMode = value;
-  },
-  get pluginLauncherWindow() {
-    return pluginLauncherWindow;
-  },
-  set pluginLauncherWindow(value) {
-    pluginLauncherWindow = value;
-  },
-  get host() {
-    return host;
-  },
-  set host(value) {
-    host = value;
-  },
-};
-
-const runtimeState: RuntimeState = {
-  get host() {
-    return host;
-  },
-  set host(value) {
-    host = value;
-  },
-  get sidecar() {
-    return sidecar;
-  },
-  set sidecar(value) {
-    sidecar = value;
-  },
-  get agentHostBridge() {
-    return agentHostBridge;
-  },
-  set agentHostBridge(value) {
-    agentHostBridge = value;
-  },
-};
+const getHost = () => mainState.host;
+const getMainWindow = () => mainState.mainWindow;
+const getSidecar = () => mainState.sidecar;
 
 let applicationLifecycle: ReturnType<typeof createApplicationLifecycle> | null = null;
 let launcherRuntime: ReturnType<typeof createLauncher> | null = null;
@@ -509,7 +272,7 @@ const {
 
 const desktopServices = createDesktopServices({
   getLogger: () => logger,
-  getMainWindow: () => mainWindow,
+  getMainWindow,
 });
 const {
   clipboardHistory,
@@ -520,15 +283,20 @@ const {
   safeOpenExternal,
 } = desktopServices;
 
-const dataDir =
-  process.env.PI_DESKTOP_DATA_DIR || join(homedir(), ".pi-desktop");
+const dataDir = desktopDataDir(isDevelopmentBuild);
+// The plugin runtime resolves this root from the environment rather than taking
+// it as a parameter, and a profile split across two directories is the
+// divergence D236 closes.
+process.env.PI_DESKTOP_DATA_DIR = dataDir;
 
 // Agent extensions (D387/D388, ADR 0214): plugins contribute the modules,
 // the sidecar loads them; this bridge carries commands, diagnostics, and
 // prompts between the two.
 const agentExtensions = new AgentExtensionBridge({
   hasRenderer: () =>
-    !!mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed(),
+    !!mainState.mainWindow &&
+    !mainState.mainWindow.isDestroyed() &&
+    !mainState.mainWindow.webContents.isDestroyed(),
   onChanged: () => sendToRenderer(IPC.event.pluginChanged, { reason: "agentExtensions" }),
   onPrompt: (prompt) => {
     logger.app("plugin", "info", "extension prompt", {
@@ -561,7 +329,7 @@ const persistenceOutbox = new PersistenceOutbox(dataDir, (level, message, data) 
 const steeringReplies = new Set<string>();
 const scheduledRuntime = createScheduledRuntime({
   dataDir,
-  getHost: () => host,
+  getHost,
   logger,
 });
 const { importLegacyScheduled } = scheduledRuntime;
@@ -571,8 +339,8 @@ const { importLegacyScheduled } = scheduledRuntime;
 // involved because a stale checkpoint must never be replayed after the final
 // row.
 const inflightCheckpointer = new InflightCheckpointer(async (checkpoint) => {
-  if (!host || !host.isAvailable()) return;
-  await host.call(
+  if (!mainState.host || !mainState.host.isAvailable()) return;
+  await mainState.host.call(
     "session.saveInflightMessage",
     {
       sessionId: checkpoint.sessionId,
@@ -583,23 +351,12 @@ const inflightCheckpointer = new InflightCheckpointer(async (checkpoint) => {
   );
 });
 
-/** Product UI locale for shipped-locale update notes (mirrored from settings). */
-let updaterLocale = "en";
-type PluginPanelTheme = "light" | "dark";
-let pluginPanelTheme: PluginPanelTheme = nativeTheme.shouldUseDarkColors
-  ? "dark"
-  : "light";
-/** Raw theme preference from AppSettings.theme, surfaced by `app.getAppearance`. */
-let appThemePreference: string = "system";
-/** Last appearance broadcast to plugin panels; avoids redundant pushes. */
-let broadcastAppearanceSignature = "";
-
 const updater = new AppUpdaterController({
   logger,
   send: sendToRenderer,
   currentVersion: APP_VERSION,
   isPackaged: !isDevelopmentBuild,
-  getLocale: () => updaterLocale,
+  getLocale: () => mainState.updaterLocale,
 });
 
 /**
@@ -615,8 +372,9 @@ const modelsDevCatalog = new ModelsDevCatalog({
 
 const vendorOAuth = new VendorOAuth({
   call: <T,>(method: string, params?: unknown): Promise<T> => {
-    if (!host) throw new Error("host unavailable");
-    return host.call<T>(method, params);
+    const currentHost = getHost();
+    if (!currentHost) throw new Error("host unavailable");
+    return currentHost.call<T>(method, params);
   },
   emit: (event) => sendToRenderer(IPC.event.providersOauth, event),
   openExternal: async (url) => {
@@ -625,14 +383,12 @@ const vendorOAuth = new VendorOAuth({
   log: (level, message, data) => logger.app("provider", level, message, { data }),
   modelConfigFor: async ({ vendorKey, option }) => {
     await modelsDevCatalog.ensureLoaded();
-    const model = modelsDevCatalog.findModel({
+    return catalogModelConfigFor(modelsDevCatalog, {
       vendorKey,
       baseUrl: option.baseUrl,
+      apiStyle: option.apiStyle,
       modelId: option.modelId,
     });
-    return model
-      ? modelConfigFromModelsDev(model, option.baseUrl)
-      : genericModelConfig(option.modelId, option.baseUrl);
   },
 });
 
@@ -640,8 +396,8 @@ let sessionLaunchRuntime: ReturnType<typeof createSessionLaunchRuntime> | null =
 const pluginServices = createPluginServices({
   dataDir,
   logger,
-  getMainWindow: () => mainWindow,
-  getHost: () => host,
+  getMainWindow,
+  getHost,
   sendToRenderer,
   safeOpenExternal,
   stripWinLongPrefix,
@@ -649,8 +405,8 @@ const pluginServices = createPluginServices({
   getPluginNotificationPermission,
   requestPluginNotificationPermission,
   showPluginNativeNotification,
-  getUpdaterLocale: () => updaterLocale,
-  getPluginPanelTheme: () => pluginPanelTheme,
+  getUpdaterLocale: () => mainState.updaterLocale,
+  getPluginPanelTheme: () => mainState.pluginPanelTheme,
   getAppearance: () => {
     if (!applicationLifecycle) {
       throw new Error("application lifecycle is not initialized");
@@ -658,7 +414,6 @@ const pluginServices = createPluginServices({
     return applicationLifecycle.resolveAppearance();
   },
   getWorkspacePath: currentWorkspacePath,
-  isHostUnavailable,
   resolveAgentRuntimeLaunch: (...args) => {
     if (!sessionLaunchRuntime) {
       throw new Error("session launch runtime is not initialized");
@@ -675,24 +430,24 @@ const pluginServices = createPluginServices({
 const {
   plugins,
   userMcp,
+  mcpOAuth,
   pluginScopes,
   sessionProjects,
   emitBrowserState,
   pluginPanels,
   pluginViews,
-  pluginSettingsViews,
   browserHost,
   browserPane,
   announceTurnEnded,
+  speech,
 } = pluginServices;
 
 const providerCatalogRuntime = createProviderCatalogRuntime({
-  getHost: () => host,
+  getHost,
   modelsDevCatalog,
 });
 const {
   bindingForModel,
-  modelsDevModelFor,
   effectiveSubagentModelConfig,
   enrichProvider,
   enrichProviderList,
@@ -716,7 +471,6 @@ const createdSessionLaunchRuntime = createSessionLaunchRuntime({
   getWorkspacePath: currentWorkspacePath,
   pluginActiveInProject,
   bindingForModel,
-  modelsDevModelFor,
   effectiveSubagentModelConfig,
   normalizeThinkingLevel,
 });
@@ -787,7 +541,7 @@ function setCurrentWorkspacePath(path: string | null): void {
   // was already open sees them without waiting for the next switch; every later
   // switch finds the snapshot warm and broadcasts exactly once (ADR 0263).
   if (knownProjectGroups() === null) {
-    void refreshProjectGroups(host).then((changed) => {
+    void refreshProjectGroups(mainState.host).then((changed) => {
       if (!changed) return;
       const enriched = pluginWorkspaceInfo(currentWorkspacePath());
       broadcastPluginPanelEvent("workspace:changed", enriched);
@@ -796,34 +550,17 @@ function setCurrentWorkspacePath(path: string | null): void {
   }
 }
 
-/** One-line message for an error of unknown shape, for user-facing lists. */
-function describeError(error: unknown): string {
-  if (error instanceof Error) return error.message.slice(0, 300);
-  return String(error).slice(0, 300);
-}
-
-/**
- * True when a rejection only says the host transport is gone (D080): the call
- * lost a race with shutdown, a crash, or a supervised restart. Every such
- * rejection carries `HOST_UNAVAILABLE`, whether it was refused before it was
- * sent or was in flight when the transport closed.
- */
-function isHostUnavailable(error: unknown): boolean {
-  return (
-    (error as { errorCode?: string } | null | undefined)?.errorCode ===
-    ErrorCodes.HOST_UNAVAILABLE
-  );
-}
-
 /** Pull the user's MCP server records from host-core into the local runtime. */
 function sendToRenderer(channel: string, payload: unknown) {
+  applicationLifecycle?.traySessions.observeEvent(channel, payload);
+  applicationLifecycle?.taskbarUnreadBadge.observeEvent(channel, payload);
   if (channel === IPC.event.pluginChanged) {
     applicationLifecycle?.applyNativeThemeSource({
       theme: applicationAppearanceState.appThemePreference,
     });
   }
   if (!IPC_WHITELIST.has(channel)) return;
-  const window = mainWindow;
+  const window = mainState.mainWindow;
   if (
     !window ||
     window.isDestroyed() ||
@@ -840,67 +577,13 @@ function sendToRenderer(channel: string, payload: unknown) {
     // it. Notifying a gone frame is routine teardown, never an error:
     // supervision must keep running with no window attached.
   }
+
 }
 
-let appliedMenuSettings: string | null = null;
-
-/**
- * Devtools stay locked until the user opts in via settings (D-dev mode);
- * mirrors `AppSettings.developerMode` so the IPC handler, the F12 shortcut
- * and the macOS View menu all read one flag.
- */
-let developerMode = false;
-
-const applicationLifecycleState: ApplicationLifecycleState = {
-  get windowCreationPromise() {
-    return windowCreationPromise;
-  },
-  set windowCreationPromise(value) {
-    windowCreationPromise = value;
-  },
-  get applicationBooted() {
-    return applicationBooted;
-  },
-  set applicationBooted(value) {
-    applicationBooted = value;
-  },
-  pendingApplicationMenuCommands,
-  get appliedMenuSettings() {
-    return appliedMenuSettings;
-  },
-  set appliedMenuSettings(value) {
-    appliedMenuSettings = value;
-  },
-};
-
-const applicationAppearanceState: ApplicationAppearanceState = {
-  get updaterLocale() {
-    return updaterLocale;
-  },
-  set updaterLocale(value) {
-    updaterLocale = value;
-  },
-  get pluginPanelTheme() {
-    return pluginPanelTheme;
-  },
-  set pluginPanelTheme(value) {
-    pluginPanelTheme = value;
-  },
-  get appThemePreference() {
-    return appThemePreference;
-  },
-  set appThemePreference(value) {
-    appThemePreference = value;
-  },
-  get broadcastAppearanceSignature() {
-    return broadcastAppearanceSignature;
-  },
-  set broadcastAppearanceSignature(value) {
-    broadcastAppearanceSignature = value;
-  },
-};
+installInsecureEndpointNotice(sendToRenderer);
 
 applicationLifecycle = createApplicationLifecycle({
+  getRunningSessionIds: () => activeTurns.keys(),
   state: windowLifecycleState,
   appState: applicationLifecycleState,
   appearanceState: applicationAppearanceState,
@@ -923,14 +606,13 @@ applicationLifecycle = createApplicationLifecycle({
   applyCloseBehavior: applyCloseBehaviorForLifecycle,
   browserPane,
   pluginViews,
-  pluginSettingsViews,
   plugins,
   logger,
   refreshReleaseNotes: () => updater.refreshReleaseNotes(),
   applyPluginLauncherShortcut: applyPluginLauncherShortcutForLifecycle,
   applyToggleWindowShortcut: applyToggleWindowShortcutForLifecycle,
   broadcastPluginPanelEvent,
-  getHost: () => host,
+  getHost,
 });
 const {
   applyDevelopmentBranding,
@@ -948,6 +630,9 @@ const {
   executeNativeMenuAction,
   dispatchNativeMenuAction,
   applyDeveloperMode,
+  applyPreventScreenSleep,
+  applyKeepAwakeWhileRunning,
+  disposePowerSaveBlockers,
   applyNativeThemeSource,
   applyApplicationMenuSettings,
   applyAppThemePreference,
@@ -958,7 +643,7 @@ const {
 
 wirePluginThemeRuntimeServices({
   plugins,
-  getHost: () => host,
+  getHost,
   sendToRenderer,
   applyAppThemePreference,
   broadcastAppearance,
@@ -967,7 +652,7 @@ wirePluginThemeRuntimeServices({
 closeBehaviorRuntime = createCloseBehaviorRuntime({
   state: windowLifecycleState,
   dataDir,
-  getLocale: () => updaterLocale,
+  getLocale: () => mainState.updaterLocale,
   createTray,
 });
 const {
@@ -980,7 +665,7 @@ const createdLauncher = createLauncher({
   state: windowLifecycleState,
   launcherState,
   appState: applicationLifecycleState,
-  getHost: () => host,
+  getHost,
   logger,
   safeOpenExternal,
   toggleMainWindow,
@@ -1016,19 +701,8 @@ const pendingExecutionFinishes = new Map<
   { status: PlanExecutionFinishStatus; errorCode?: string }
 >();
 const inFlightExecutionFinishes = new Set<string>();
-let approvedExecutionDrain: Promise<void> | null = null;
-const planRuntimeState: PlanRuntimeState = {
-  get approvedExecutionDrain() {
-    return approvedExecutionDrain;
-  },
-  set approvedExecutionDrain(value) {
-    approvedExecutionDrain = value;
-  },
-};
 /** sessionId → scheduled task_run id awaiting completion. */
 const scheduledRunsBySession = new Map<string, string>();
-/** Session currently rendered on the chat page; focus remains Main-owned. */
-let notificationViewingSessionId: string | null = null;
 /** Preserve tool metadata until the result is persisted at tool_end. Subagent
  * calls also carry their attribution, which is what lets a permission request
  * name the delegate that asked (ADR 0062). */
@@ -1046,8 +720,8 @@ const activeToolCalls = new Map<
 
 const sessionCoordination = createSessionCoordination({
   activeTurns,
-  getMainWindow: () => mainWindow,
-  getViewingSessionId: () => notificationViewingSessionId,
+  getMainWindow,
+  getViewingSessionId: () => mainState.notificationViewingSessionId,
 });
 const {
   turnSettlements,
@@ -1064,24 +738,6 @@ const {
   isStaleTerminalEvent,
 } = sessionCoordination;
 
-async function withGitBranch<T extends { path?: string; name?: string } | null | undefined>(
-  workspace: T,
-): Promise<T> {
-  if (!workspace || !workspace.path) return workspace;
-  try {
-    const { readFile } = await import("node:fs/promises");
-    const { join } = await import("node:path");
-    const head = await readFile(join(workspace.path, ".git/HEAD"), "utf8");
-    const match = head.match(/ref:\s*refs\/heads\/(.+)$/m);
-    return {
-      ...workspace,
-      branch: match?.[1]?.trim() || "detached",
-    };
-  } catch {
-    return { ...workspace, branch: undefined };
-  }
-}
-
 /**
  * Applies a close-behavior choice. The tray icon is owned by D216 and stays
  * resident on every platform, so switching to "quit" must not destroy it —
@@ -1096,24 +752,24 @@ const superviseRestart = (kind: "host" | "sidecar"): Promise<void> => {
 };
 
 const planUiProbe = createPlanUiProbe({
-  getHost: () => host,
-  getSidecar: () => sidecar,
+  getHost,
+  getSidecar,
   logger,
 });
 
 let emitAgentEvent: (envelope: AgentEventEnvelope) => void = () => undefined;
 
 const sessionCollaboration = createSessionCollaborationService({
-  getHost: () => host,
-  getSidecar: () => sidecar,
-  getBridge: () => agentHostBridge,
+  getHost,
+  getSidecar,
+  getBridge: () => mainState.agentHostBridge,
   getActiveTurn: (sessionId) => activeTurns.get(sessionId),
   flushTranscript: async () => {
-    await persistenceOutbox.flush(() => host);
+    await persistenceOutbox.flush(getHost);
     return persistenceOutbox.size() === 0;
   },
   isPluginLoaded: (pluginId) => plugins.listLoaded().some((plugin) => plugin.manifest.id === pluginId),
-  isQuitting: () => quitting,
+  isQuitting: () => mainState.quitting,
   onChanged: () => sendToRenderer(IPC.event.sessionsChanged, { reason: "session.collaboration" }),
   log: (message, data) => logger.app("runtime", "warn", message, { data }),
 });
@@ -1139,7 +795,7 @@ const planRuntime = createPlanRuntime({
   emitAgentEvent: (envelope) => emitAgentEvent(envelope),
   acquireSessionOperation,
   resolveAgentRuntimeLaunch,
-  isQuitting: () => quitting,
+  isQuitting: () => mainState.quitting,
   onTurnSettled: sessionCollaboration.settle,
 });
 const {
@@ -1186,7 +842,7 @@ const sidecarRuntime = createSidecarRuntime({
   isStaleTerminalEvent,
   finishApprovedExecution,
   superviseRestart,
-  isQuitting: () => quitting,
+  isQuitting: () => mainState.quitting,
   dataDir,
   agentExtensions,
   vendorOAuth,
@@ -1226,7 +882,7 @@ const { wireHost, startHost } = createHostRuntime({
   claimedExecutionSessions,
   importLegacyScheduled,
   superviseRestart,
-  isQuitting: () => quitting,
+  isQuitting: () => mainState.quitting,
 });
 
 runtimeLifecycle = createRuntimeLifecycle({
@@ -1242,23 +898,28 @@ runtimeLifecycle = createRuntimeLifecycle({
   setCurrentWorkspacePath,
   rememberPluginScopes,
   refreshUserMcp,
-  isQuitting: () => quitting,
+  isQuitting: () => mainState.quitting,
   getDisplayLocale: () => applicationAppearanceState.updaterLocale,
 });
 const { bootHostStatus, runtimeArch, bootBackends } = runtimeLifecycle;
 
+const voiceService = createVoiceService(dataDir + "/voice-models", getMainWindow);
+
 function registerIpc() {
   return registerIpcHandlers({
+    traySessions: applicationLifecycle!.traySessions,
+    taskbarUnreadBadge: applicationLifecycle!.taskbarUnreadBadge,
     ipcMain,
-    getMainWindow: () => mainWindow,
-    getHost: () => host,
-    getSidecar: () => sidecar,
-    getAgentHostBridge: () => agentHostBridge,
-    getNotificationViewingSessionId: () => notificationViewingSessionId,
+    getMainWindow,
+    getHost,
+    getSidecar,
+    getAgentHostBridge: () => mainState.agentHostBridge,
+    getBackendRouter: () => startupState.backendRouter,
+    getNotificationViewingSessionId: () => mainState.notificationViewingSessionId,
     setNotificationViewingSessionId: (sessionId: string | null) => {
-      notificationViewingSessionId = sessionId;
+      mainState.notificationViewingSessionId = sessionId;
     },
-    getPluginLauncherWindow: () => pluginLauncherWindow,
+    getPluginLauncherWindow: () => mainState.pluginLauncherWindow,
     togglePluginLauncher,
     safeOpenExternal,
     updater,
@@ -1269,6 +930,7 @@ function registerIpc() {
     persistenceOutbox,
     logger,
     plugins,
+    speech,
     sessionCapabilityContext,
     enrichSession,
     acquireSessionOperation,
@@ -1280,6 +942,8 @@ function registerIpc() {
     currentNetworkProxy,
     applyApplicationMenuSettings,
     applyDeveloperMode,
+    applyPreventScreenSleep,
+    applyKeepAwakeWhileRunning,
     resolveEffectiveCommandShell,
     modelsDevCatalog,
     vendorOAuth,
@@ -1290,19 +954,20 @@ function registerIpc() {
     agentExtensions,
     activeUserSkills,
     pluginActiveInProject,
-    getWorkPanelReservationWidth: () => requestedWorkPanelReservation,
+    getWorkPanelReservationWidth: () => mainState.requestedWorkPanelReservation,
     setWorkPanelReservationWidth: (width: number) => {
-      requestedWorkPanelReservation = width;
+      mainState.requestedWorkPanelReservation = width;
     },
     setWorkPanelReservation: (state: WorkPanelReservationState) => {
-      workPanelReservation = state;
+      mainState.workPanelReservation = state;
     },
-    getWorkPanelChatWidthSetter: () => setWorkPanelChatWidthForWindow,
+    getWorkPanelChatWidthSetter: () => mainState.setWorkPanelChatWidthForWindow,
     applyCloseBehavior,
-    getCloseBehavior: () => closeBehavior,
+    getCloseBehavior: () => mainState.closeBehavior,
     markMenuRendererReady,
     executeNativeMenuAction,
     scheduledRunsBySession,
+    isQuitting: () => mainState.quitting,
     isDevelopmentBuild,
     browserHost,
     clipboardHistory,
@@ -1321,19 +986,20 @@ function registerIpc() {
     dispatchExecutionForProposal,
     emitAgentEvent,
     userMcp,
+    mcpOAuth,
     refreshUserMcp,
     describeError,
     activeUserSubagentDocuments,
     disabledBuiltinSubagents,
     pluginViews,
-    pluginSettingsViews,
     pluginScopes,
     rememberPluginScopes,
     pluginPanels,
-    getUpdaterLocale: () => updaterLocale,
-    getPluginPanelTheme: () => pluginPanelTheme,
-    isDeveloperMode: () => developerMode,
+    getUpdaterLocale: () => mainState.updaterLocale,
+    getPluginPanelTheme: () => mainState.pluginPanelTheme,
+    isDeveloperMode: () => mainState.developerMode,
     sendToRenderer,
+    voiceService,
   });
 }
 
@@ -1348,39 +1014,6 @@ app.on("web-contents-created", (_event, contents) => {
   });
 });
 
-const startupState: StartupState = {
-  get applicationBooted() {
-    return applicationLifecycleState.applicationBooted;
-  },
-  set applicationBooted(value) {
-    applicationLifecycleState.applicationBooted = value;
-  },
-  get closeBehavior() {
-    return closeBehavior;
-  },
-  set closeBehavior(value) {
-    closeBehavior = value;
-  },
-  get agentHostBridge() {
-    return agentHostBridge;
-  },
-  set agentHostBridge(value) {
-    agentHostBridge = value;
-  },
-  get desktopControl() {
-    return desktopControl;
-  },
-  set desktopControl(value) {
-    desktopControl = value;
-  },
-  get mcpControl() {
-    return mcpControl;
-  },
-  set mcpControl(value) {
-    mcpControl = value;
-  },
-};
-
 registerApplicationStartup({
   hasSingleInstanceLock,
   state: startupState,
@@ -1391,8 +1024,8 @@ registerApplicationStartup({
   plugins,
   activeTurns,
   isSessionBusy,
-  getHost: () => host,
-  getMainWindow: () => mainWindow,
+  getHost,
+  getMainWindow,
   sendToRenderer,
   applyDevelopmentBranding,
   createTray,
@@ -1404,6 +1037,8 @@ registerApplicationStartup({
   planUiProbe,
   applyApplicationMenuSettings,
   applyDeveloperMode,
+  applyPreventScreenSleep,
+  applyKeepAwakeWhileRunning,
   applyPluginLauncherShortcut,
   applyToggleWindowShortcut,
   ensureWindow,
@@ -1417,80 +1052,30 @@ registerApplicationStartup({
   },
 });
 
-const shutdownState: ShutdownState = {
-  get shutdownComplete() {
-    return shutdownComplete;
-  },
-  set shutdownComplete(value) {
-    shutdownComplete = value;
-  },
-  get shutdownPromise() {
-    return shutdownPromise;
-  },
-  set shutdownPromise(value) {
-    shutdownPromise = value;
-  },
-  get quitting() {
-    return quitting;
-  },
-  set quitting(value) {
-    quitting = value;
-  },
-  get quitConfirmed() {
-    return quitConfirmed;
-  },
-  set quitConfirmed(value) {
-    quitConfirmed = value;
-  },
-  get closeBehavior() {
-    return closeBehavior;
-  },
-  set closeBehavior(value) {
-    closeBehavior = value;
-  },
-  get tray() {
-    return tray;
-  },
-  set tray(value) {
-    tray = value;
-  },
-  get pluginLauncherAccelerator() {
-    return pluginLauncherAccelerator;
-  },
-  set pluginLauncherAccelerator(value) {
-    pluginLauncherAccelerator = value;
-  },
-  get toggleWindowAccelerator() {
-    return toggleWindowAccelerator;
-  },
-  set toggleWindowAccelerator(value) {
-    toggleWindowAccelerator = value;
-  },
-};
-
 registerShutdownHandlers({
   hasSingleInstanceLock,
   state: shutdownState,
-  getHost: () => host,
-  getSidecar: () => sidecar,
-  getMcpControl: () => mcpControl,
+  getHost,
+  getSidecar,
+  getMcpControl: () => mainState.mcpControl,
   activeTurns,
   persistenceOutbox,
   inflightCheckpointer,
   pluginPanels,
   plugins,
   userMcp,
+  mcpOAuth,
   browserPane,
   pluginViews,
-  pluginSettingsViews,
   updater,
   logger,
   confirmQuitDialog,
+  disposePowerSaveBlockers,
 });
 
 registerApplicationActivation({
   restoreMainWindow,
-  isQuitting: () => quitting,
+  isQuitting: () => mainState.quitting,
   isApplicationBooted: () => applicationLifecycleState.applicationBooted,
   hasVisibleWindow,
 });

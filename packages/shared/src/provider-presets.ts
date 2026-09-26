@@ -232,6 +232,22 @@ export const NAMED_ENDPOINT_PRESETS: readonly NamedEndpointPreset[] = [
     aliases: ["ag", "cloudcode", "agy"],
   },
   {
+    id: "ant-ling",
+    vendorKey: "ant-ling",
+    name: "Ant Ling",
+    baseUrl: "https://api.ant-ling.com/v1",
+    apiStyle: "chat_completions",
+    labelKey: "settings.presetAntLing",
+  },
+  {
+    id: "baseten",
+    vendorKey: "baseten",
+    name: "Baseten",
+    baseUrl: "https://inference.baseten.co/v1",
+    apiStyle: "chat_completions",
+    labelKey: "settings.presetBaseten",
+  },
+  {
     id: "kiro",
     vendorKey: "kiro",
     name: "Kiro AI",
@@ -351,6 +367,39 @@ export const NAMED_ENDPOINT_PRESETS: readonly NamedEndpointPreset[] = [
     labelKey: "settings.presetCohere",
   },
   {
+    id: "huggingface",
+    vendorKey: "huggingface",
+    name: "Hugging Face",
+    baseUrl: "https://router.huggingface.co/v1",
+    apiStyle: "chat_completions",
+    labelKey: "settings.presetHuggingface",
+    aliases: ["hugging-face", "hf"],
+  },
+  {
+    id: "meta",
+    vendorKey: "meta",
+    name: "Meta",
+    baseUrl: "https://api.meta.ai/v1",
+    apiStyle: "responses",
+    labelKey: "settings.presetMeta",
+  },
+  {
+    id: "minimax",
+    vendorKey: "minimax",
+    name: "MiniMax (International)",
+    baseUrl: "https://api.minimax.io/anthropic/v1",
+    apiStyle: "anthropic_messages",
+    labelKey: "settings.presetMinimaxIntl",
+  },
+  {
+    id: "moonshotai",
+    vendorKey: "moonshotai",
+    name: "Moonshot AI (International)",
+    baseUrl: "https://api.moonshot.ai/v1",
+    apiStyle: "chat_completions",
+    labelKey: "settings.presetMoonshotIntl",
+  },
+  {
     id: "perplexity",
     vendorKey: "perplexity",
     name: "Perplexity",
@@ -365,7 +414,67 @@ export const NAMED_ENDPOINT_PRESETS: readonly NamedEndpointPreset[] = [
     baseUrl: "https://integrate.api.nvidia.com/v1",
     apiStyle: "chat_completions",
     labelKey: "settings.presetNvidia",
-    aliases: ["nvidia-nim"],
+    aliases: ["nvidia-nim", "nim"],
+  },
+  {
+    id: "opencode",
+    vendorKey: "opencode",
+    name: "OpenCode Zen",
+    baseUrl: "https://opencode.ai/zen/v1",
+    apiStyle: "chat_completions",
+    labelKey: "settings.presetOpenCodeZen",
+    aliases: ["opencode-zen"],
+  },
+  {
+    id: "vercel",
+    vendorKey: "vercel",
+    name: "Vercel AI Gateway",
+    baseUrl: "https://ai-gateway.vercel.sh/v1",
+    apiStyle: "chat_completions",
+    labelKey: "settings.presetVercelGateway",
+    aliases: ["vercel-ai-gateway"],
+  },
+  {
+    id: "alibaba-token-plan",
+    vendorKey: "alibaba-token-plan",
+    name: "Qwen Token Plan",
+    baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+    apiStyle: "chat_completions",
+    labelKey: "settings.presetAlibabaTokenPlan",
+    aliases: ["qwen-token-plan", "qwen-token-plan-individual"],
+  },
+  {
+    id: "alibaba-token-plan-cn",
+    vendorKey: "alibaba-token-plan-cn",
+    name: "Qwen Token Plan (China)",
+    baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    apiStyle: "chat_completions",
+    labelKey: "settings.presetAlibabaTokenPlanCn",
+    aliases: ["qwen-token-plan-cn"],
+  },
+  {
+    id: "xiaomi-token-plan-cn",
+    vendorKey: "xiaomi-token-plan-cn",
+    name: "Xiaomi Token Plan (China)",
+    baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+    apiStyle: "chat_completions",
+    labelKey: "settings.presetXiaomiTokenPlanCn",
+  },
+  {
+    id: "xiaomi-token-plan-ams",
+    vendorKey: "xiaomi-token-plan-ams",
+    name: "Xiaomi Token Plan (Europe)",
+    baseUrl: "https://token-plan-ams.xiaomimimo.com/v1",
+    apiStyle: "chat_completions",
+    labelKey: "settings.presetXiaomiTokenPlanAms",
+  },
+  {
+    id: "xiaomi-token-plan-sgp",
+    vendorKey: "xiaomi-token-plan-sgp",
+    name: "Xiaomi Token Plan (Singapore)",
+    baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+    apiStyle: "chat_completions",
+    labelKey: "settings.presetXiaomiTokenPlanSgp",
   },
   {
     id: "hyperbolic",
@@ -571,7 +680,7 @@ export function isOfficialDeepSeekEndpoint(input: { baseUrl?: string }): boolean
  * Documented non-empty stand-in when a strict DeepSeek-compatible relay requires
  * reasoning replay but the turn's real thinking was never retained (compaction
  * summary, synthetic bridge assistants, or thinking-less turns). Must match the
- * literal embedded in patches/@earendil-works__pi-ai@0.85.1.patch.
+ * literal embedded in patches/@earendil-works__pi-ai@0.87.1.patch.
  */
 export const DEEPSEEK_REASONING_REPLAY_PLACEHOLDER =
   "[reasoning not retained for this turn]";

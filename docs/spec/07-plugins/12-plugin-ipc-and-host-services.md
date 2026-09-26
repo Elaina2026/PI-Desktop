@@ -185,6 +185,14 @@ audit-operation names for the device service: `audio.input.open` /
   `webContents` identity copies that id before the window is destroyed; the
   `closed` handler must not read `webContents` on a destroyed window, or the
   host surfaces an uncaught `TypeError: Object has been destroyed`.
+- Bridge identity belongs to the page, not to the host's list of open surfaces: a
+  panel window or a docked view registers its plugin before the document loads and
+  releases it only when that page is gone, so a call that arrives while the host is
+  closing the surface still reaches its own plugin. A call from a page that is
+  already destroyed is settled instead of rejected: its answer can never be read and
+  the plugin runtime may already be stopping, so rejecting it would only add an
+  `invalid panel invoker` failure to the main log. Shutdown closes the panel and
+  view pages, bounded, before `plugins.disposeAll()` and `host.dispose()`.
 - The preload exposes `pluginBridge.getDroppedFilePath(file)` without exposing
   Node to the page. A panel may call `fs.registerDropped` with that path; the
   host consumes a sender-bound recent drop record once and issues a one-file
@@ -207,7 +215,7 @@ Panel bridge file channels are permission-gated as follows:
 **Implemented (2026-07-29, ADR 0008):** the broker lives in
 `electron/main/plugin-runtime.ts` and every plugin call is a request to the
 plugin's own `utilityProcess`. Budgets: load 15s, lifecycle hook 5s, command 30s,
-tool 110s (under host-core's 120s tool budget). On process exit the broker
+tool 110s (under host-core's 150s dispatch budget). On process exit the broker
 rejects pending calls with `PLUGIN_CRASHED`, deregisters that plugin's commands
 and tools, closes its panel, writes a `plugin.crash` audit entry, and emits a
 toast plus `pluginChanged` to the renderer.
@@ -237,8 +245,14 @@ permission gate and result envelope stay in host-core:
    Electron main executing the registered plugin tool JS and answering via RPC
    `plugins.resolveExecution` `{ executionId, ok, content, errorCode? }`.
 4. host-core resolves the pending execution and returns a standard
-   `ToolsExecuteResult` to the sidecar. Dispatch timeout maps to
-   `TOOL_TIMEOUT`; an unknown/unloaded tool maps to `TOOL_NOT_FOUND`.
+   `ToolsExecuteResult` to the sidecar. Dispatch waits up to 150s
+   (`DESKTOP_TOOL_DISPATCH_TIMEOUT_MS`, above both the 110s plugin tool budget
+   and the widest MCP leg — a 10s lazy handshake, a 30s `tools/list` traversal,
+   then the 100s call) and then maps to `TOOL_TIMEOUT`; an unknown/unloaded tool
+   maps to `TOOL_NOT_FOUND`. The transport deadline for these calls covers the
+   120s permission wait, the 30s admission queue wait, that dispatch, and 10s of
+   slack (`rpcTimeoutMs`), so no outer layer gives up before host-core reports
+   the outcome.
 
 The model-facing registry gains plugin tools per prompt: main passes registered
 defs (`fullName`, description, JSON-schema parameters) to `agent.prompt`, and

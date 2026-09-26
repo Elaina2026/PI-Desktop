@@ -286,6 +286,7 @@ Host Main (PI-Desktop)
 - `pi.session.list()` / `get()` / `listMessages()` // `session.read.own`
 - `pi.session.rename()` // `session.update.own`
 - `pi.session.delete()` // `session.delete.own`
+- `pi.usage.listTurns()` // `usage.read`；只读已完成回合事实，不含消息正文
 - `pi.agent.complete(input)` // `agent.complete`；宿主代发一次性补全
 
 技能以声明方式贡献（`contributes.skills` + `agent.prompt.inject`），
@@ -497,6 +498,16 @@ MCP、技能和子代理由设置 > 智能体下的三个独立页面管理，�
 - 恢复失败报告 `UNAVAILABLE`，并沿用现有失败策略（编辑或测试连接后再试），
   而不是每次调用都反复连接。已移除的工具返回 `TOOL_NOT_FOUND`。恢复从不
   重放失败的 `tools/call`，因为那次调用可能已经产生过副作用。
+
+- Streamable HTTP `202 Accepted` acknowledgements for notifications and client
+  responses are not JSON-RPC replies. Any acknowledgement body is discarded,
+  including plain-text `Accepted`; ordinary request replies still follow the
+  JSON/SSE parsing and response-size limits.
+- The MCP row shows “Authorization required” only when runtime status explicitly
+  reports `authRequired`. Missing credentials, an untested connection, and
+  non-authentication failures do not imply OAuth is required. A stored OAuth
+  credential does not hide a subsequent authentication failure. Manual OAuth
+  authorization remains available from the HTTP server menu.
 
 ### 12. 3 设置 > 智能体中的技能管理
 

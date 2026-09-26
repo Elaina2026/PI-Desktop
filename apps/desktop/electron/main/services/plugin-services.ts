@@ -1,11 +1,12 @@
 import { dialog, globalShortcut, shell, type BrowserWindow } from "electron";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   IPC,
+  ErrorCodes,
   type ActivationScope,
   type AppSettings,
   type BrowserState,
+  type McpServerStatus,
   type ModelBinding,
   type ShortcutPlatform,
   type ThinkingLevel,
@@ -32,6 +33,7 @@ import { createFsConsentService } from "../plugin-fs-consent";
 import { pluginWorkspaceInfo } from "../workspace-roots";
 import { createDesktopConsentService } from "../plugin-desktop-consent";
 import { PluginRuntime } from "../plugin-runtime";
+import { createSpeechService } from "./speech-service";
 import { PluginShortcutRegistry } from "../plugin-shortcut-registry";
 import { PluginWebSocketRegistry } from "../plugin-websocket";
 import { hostGlobalShortcutBindings } from "../bootstrap/launcher";
@@ -39,8 +41,10 @@ import { UserMcpRuntime } from "../user-mcp";
 import {
   MCP_CALL_TIMEOUT_MS,
   MCP_CONNECT_TIMEOUT_MS,
+  MCP_TOOL_DISCOVERY_TIMEOUT_MS,
   McpServerClient,
 } from "../plugin-mcp";
+import { McpOAuthManager } from "../mcp-oauth";
 import { PluginPanelHost } from "../plugin-panel-host";
 import { PluginViewHost } from "../plugin-view-host";
 import { BrowserPane } from "../browser-view";
@@ -71,7 +75,6 @@ export type PluginServicesDependencies = {
   getPluginPanelTheme: () => "light" | "dark";
   getAppearance: () => PluginAppearance;
   getWorkspacePath: () => string | null;
-  isHostUnavailable: (error: unknown) => boolean;
   resolveAgentRuntimeLaunch: (...args: any[]) => Promise<any>;
   vendorOAuth: VendorOAuth;
   agentExtensions: AgentExtensionBridge;
@@ -93,11 +96,14 @@ export function createPluginServices({
   getPluginPanelTheme,
   getAppearance,
   getWorkspacePath,
-  isHostUnavailable,
   resolveAgentRuntimeLaunch,
   vendorOAuth,
   agentExtensions,
 }: PluginServicesDependencies) {
+  // A plugin request can lose its race with host shutdown or restart.
+  const isHostUnavailable = (error: unknown): boolean =>
+    (error as { errorCode?: string } | null | undefined)?.errorCode ===
+    ErrorCodes.HOST_UNAVAILABLE;
   const pluginPanels = new PluginPanelHost(
     async (pluginId, channel, payload, context) =>
       plugins.invokePanelBridge(pluginId, channel, payload, context),
@@ -180,7 +186,6 @@ export function createPluginServices({
     unregister: (accelerator) => {
       globalShortcut.unregister(accelerator);
     },
-    // Late-bound: the runtime is constructed just below, and a trigger can
     // Late-bound: the runtime is constructed just below, and a trigger can
     // only arrive once the app is running and a plugin holds a shortcut.
     onTrigger: (entry) => {
@@ -337,6 +342,13 @@ export function createPluginServices({
     project: {
       create: (pluginId, input) => callPluginProjectHost(pluginId, input),
     },
+    // Read-only usage facts: the same host-owned session transport, no
+    // mutation, so no `sessionsChanged` fan-out (callPluginSessionHost only
+    // announces the mutating methods).
+    usage: {
+      listTurns: (pluginId, input) =>
+        callPluginSessionHost("plugin.usage.listTurns", pluginId, input),
+    },
     complete: async (input): Promise<PluginCompleteResult> => {
       if (!getHost()) {
         throw Object.assign(new Error("host unavailable"), { code: "UNSUPPORTED" });
@@ -402,11 +414,14 @@ export function createPluginServices({
     },
     // A plugin host process dying is contained: contributions are already
     // deregistered by the runtime, we only have to tell the user and the UI.
-    onPluginCrash: ({ pluginId, exitCode }) => {
+    onPluginCrash: ({ pluginId, exitCode, exitCodeHex }) => {
       logger.app("plugin", "error", "plugin host process crashed", {
         pluginId,
         code: "PLUGIN_CRASHED",
-        data: { exitCode },
+        data: {
+          exitCode,
+          ...(exitCodeHex ? { exitCodeHex } : {}),
+        },
       });
       // No toast here: the runtime already raised one through `showToast` on the
       // same code path, and a second identical message reads as two failures.
@@ -414,7 +429,6 @@ export function createPluginServices({
       // surface. Drop it; the renderer re-opens it on the pluginChanged event if
       // the tab is still active and the plugin came back.
       pluginViews.closePlugin(pluginId);
-      pluginSettingsViews.closePlugin(pluginId);
       if (pluginId === BROWSER_PLUGIN_ID) browserHost.disposeGuest();
       sendToRenderer(IPC.event.pluginChanged,{ reason: "crash", pluginId });
     },
@@ -442,15 +456,41 @@ export function createPluginServices({
       });
       // Views were loaded from the previous revision of the plugin's files.
       pluginViews.closePlugin(pluginId);
-      pluginSettingsViews.closePlugin(pluginId);
       if (pluginId === BROWSER_PLUGIN_ID) browserHost.disposeGuest();
       sendToRenderer(IPC.event.pluginChanged,{ reason: "reload", pluginId });
     },
   });
-  const userMcp = new UserMcpRuntime({
+  let userMcp: UserMcpRuntime;
+  const mcpOAuth: McpOAuthManager = new McpOAuthManager({
+    call: async (method, params) => {
+      const h = getHost();
+      if (!h) throw new Error("host unavailable");
+      return h.call(method, params);
+    },
+    emit: (event) => sendToRenderer(IPC.event.mcpOauth, event),
+    openExternal: (url) => safeOpenExternal(url),
+    log: (level, message, data) => logger.app("plugin", level, message, { data }),
+    onAuthorized: async (serverId, record): Promise<McpServerStatus> => {
+      const existed = userMcp.listRecords().some((item) => item.id === serverId);
+      if (record && !existed) {
+        userMcp.setRecords([...userMcp.listRecords(), record]);
+      }
+      userMcp.invalidate(serverId);
+      const status: McpServerStatus = await userMcp.test(serverId);
+      if (!existed) {
+        userMcp.invalidate(serverId);
+        userMcp.setRecords(userMcp.listRecords().filter((item) => item.id !== serverId));
+      }
+      sendToRenderer(IPC.event.pluginChanged, { reason: "mcp", pluginId: serverId });
+      return status;
+    },
+  });
+  userMcp = new UserMcpRuntime({
     createClient: (config) => new McpServerClient(config),
+    oauth: mcpOAuth,
     connectTimeoutMs: MCP_CONNECT_TIMEOUT_MS,
     callTimeoutMs: MCP_CALL_TIMEOUT_MS,
+    discoveryTimeoutMs: MCP_TOOL_DISCOVERY_TIMEOUT_MS,
     audit: (entry) => logger.app("plugin", "info", "mcp.api", entry),
     log: (level, message, data) => logger.app("plugin", level, message, { data }),
   });
@@ -517,17 +557,7 @@ export function createPluginServices({
       data: { api: "view.egress", ok: false, url, ts: Date.now() },
     });
   });
-  // Settings extensions use the same sandboxed preload and egress policy as
-  // work-panel views, but have their own visible surface and lifecycle.
-  const pluginSettingsViews = new PluginViewHost(({ pluginId, url }) => {
-    logger.app("plugin", "warn", "plugin.api", {
-      pluginId,
-      code: "PERMISSION_DENIED",
-      data: { api: "settings.egress", ok: false, url, ts: Date.now() },
-    });
-  });
   pluginPanels.addSenderResolver((senderId) => pluginViews.pluginIdForSender(senderId));
-  pluginPanels.addSenderResolver((senderId) => pluginSettingsViews.pluginIdForSender(senderId));
   const browserHost = new BrowserHost({
     pane: browserPane,
     isPluginLoaded: (pluginId) => Boolean(plugins.getLoaded(pluginId)),
@@ -547,10 +577,7 @@ export function createPluginServices({
     },
     getScratchDir: (sessionId) => {
       if (!sessionId) return null;
-      const root =
-        process.env.PI_DESKTOP_DATA_DIR?.trim() ||
-        join(homedir(), ".pi-desktop");
-      return join(root, "scratch", sessionId);
+      return join(dataDir, "scratch", sessionId);
     },
     onState: emitBrowserState,
   });
@@ -592,17 +619,24 @@ export function createPluginServices({
       if (pluginId === BROWSER_PLUGIN_ID) browserHost.disposeGuest();
     },
   });
+  const speech = createSpeechService({
+    dataDir,
+    getHost,
+    plugins,
+    logger,
+  });
   return {
     plugins,
     userMcp,
+    mcpOAuth,
     pluginScopes,
     sessionProjects,
     emitBrowserState,
     announceTurnEnded,
     pluginPanels,
     pluginViews,
-    pluginSettingsViews,
     browserHost,
     browserPane,
+    speech,
   };
 }

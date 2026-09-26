@@ -1,15 +1,18 @@
 import { join } from "node:path";
-import type { BrowserWindow, IpcMain, IpcMainInvokeEvent } from "electron";
+import { dialog, type BrowserWindow, type IpcMain, type IpcMainInvokeEvent } from "electron";
 import { err, ErrorCodes, IPC, ok, type Result } from "@pi-desktop/shared";
 import type { AgentHostBridge } from "../agent-host-bridge";
 import type { AgentSidecar } from "../agent-sidecar";
 import type { HostProcess } from "../host-process";
+import { ROUTE_LOCAL, type BackendRouter } from "../remote/backend-router";
 import { registerAgentExtensionIpc } from "../agent-extensions-ipc";
+import { readNpmPath, writeNpmPath } from "../npm-preferences";
 import { registerAgentIpc } from "./agent-ipc";
 import { registerAppIpc } from "./app-ipc";
 import { registerDiagnosticsIpc } from "./diagnostics-ipc";
 import { registerMarketIpc } from "./market-ipc";
 import { registerMcpIpc } from "./mcp-ipc";
+import type { McpOAuthManager } from "../mcp-oauth";
 import { searchMcpMarket } from "../mcp-registry-catalog";
 import { registerNotificationIpc } from "./notification-ipc";
 import { registerPluginIpc } from "./plugin-ipc";
@@ -19,25 +22,43 @@ import { registerPullsIpc } from "./pulls-ipc";
 import { registerScheduledIpc } from "./scheduled-ipc";
 import { registerSessionIpc } from "./session-ipc";
 import { registerSettingsIpc } from "./settings-ipc";
+import { registerConfigSyncIpc } from "./config-sync-ipc";
 import { registerSkillsIpc } from "./skills-ipc";
+import { registerAgentImportIpc } from "./agent-import-ipc";
+import { registerRemoteHostIpc } from "./remote-host-ipc";
 import { fetchSkillMarketDocument, searchSkillMarket } from "../skill-market-catalog";
 import { registerWindowIpc } from "./window-ipc";
 import { createComposerTemplateLoader, registerWorkspaceIpc } from "./workspace-ipc";
 import { registerComposerIpc } from "./composer-ipc";
 import { registerTodoPlanIpc } from "./todo-plan-ipc";
 import { registerUsagesIpc } from "./usages-ipc";
+import { registerSpeechIpc } from "./speech-ipc";
+import { registerVoiceIpc } from "./voice-ipc";
 import type { IpcRegistrar } from "./types";
+import type { createTraySessions } from "../tray-sessions";
+import type { createTaskbarUnreadBadge } from "../taskbar-unread-badge";
 
 export type RegisterIpcDependencies = {
+  isQuitting: () => boolean;
   ipcMain: IpcMain;
   getMainWindow: () => BrowserWindow | null;
   getHost: () => HostProcess | null;
+  traySessions: ReturnType<typeof createTraySessions>;
+  taskbarUnreadBadge: ReturnType<typeof createTaskbarUnreadBadge>;
   getSidecar: () => AgentSidecar | null;
   getAgentHostBridge: () => AgentHostBridge | null;
+  /**
+   * Resolves the remote backend router once it exists. Renderer IPC calls whose
+   * session is owned by a paired remote host are forwarded through it; every
+   * other call — including all internal invokes — runs the local handler
+   * unchanged. Null until the router is wired (and in tests).
+   */
+  getBackendRouter?: () => BackendRouter | null;
   getNotificationViewingSessionId: () => string | null;
   setNotificationViewingSessionId: (sessionId: string | null) => void;
   activeUserSubagentDocuments: (...args: any[]) => Promise<any>;
   disabledBuiltinSubagents: () => Promise<string[]>;
+  mcpOAuth?: McpOAuthManager;
   [name: string]: any;
 };
 
@@ -60,6 +81,7 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     getHost,
     getSidecar,
     getAgentHostBridge,
+    getBackendRouter,
     getNotificationViewingSessionId,
     setNotificationViewingSessionId,
     getPluginLauncherWindow,
@@ -73,6 +95,7 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     persistenceOutbox,
     logger,
     plugins,
+    speech,
     sessionCapabilityContext,
     enrichSession,
     acquireSessionOperation,
@@ -84,6 +107,8 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     currentNetworkProxy,
     applyApplicationMenuSettings,
     applyDeveloperMode,
+    applyPreventScreenSleep,
+    applyKeepAwakeWhileRunning,
     resolveEffectiveCommandShell,
     modelsDevCatalog,
     vendorOAuth,
@@ -103,6 +128,8 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     applyCloseBehavior,
     getCloseBehavior,
     markMenuRendererReady,
+    traySessions,
+    taskbarUnreadBadge,
     executeNativeMenuAction,
     scheduledRunsBySession,
     isDevelopmentBuild,
@@ -123,10 +150,10 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     dispatchExecutionForProposal,
     emitAgentEvent,
     userMcp,
+    mcpOAuth,
     refreshUserMcp,
     describeError,
     pluginViews,
-    pluginSettingsViews,
     pluginScopes,
     rememberPluginScopes,
     pluginPanels,
@@ -134,13 +161,33 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     getPluginPanelTheme,
     isDeveloperMode,
     sendToRenderer,
+    voiceService,
   } = dependencies;
 
 
   const ipcHandlers = new Map<string, (...args: any[]) => Promise<any>>();
   const handle = (channel: string, fn: (...args: any[]) => Promise<any>) => {
-    ipcHandlers.set(channel, fn);
-    ipcMain.handle(channel, async (_event, ...args) => wrap(() => fn(...args)));
+    const handler = async (...args: any[]) => {
+      const result = await fn(...args);
+      traySessions.observeInvoke(channel);
+      taskbarUnreadBadge.observeInvoke(channel);
+      return result;
+    };
+    ipcHandlers.set(channel, handler);
+    // The interception seam for remote-host routing: a renderer call whose
+    // session is owned by a paired remote host is served over RACP-WS; every
+    // other call (and every internal invoke, which never reaches this wrapper)
+    // runs the existing local handler byte-for-byte unchanged.
+    ipcMain.handle(channel, async (_event, ...args) =>
+      wrap(async () => {
+        const router = getBackendRouter?.();
+        if (router) {
+          const outcome = await router.route(channel, args);
+          if (outcome !== ROUTE_LOCAL) return outcome.value;
+        }
+        return handler(...args);
+      }),
+    );
   };
   const handleWithEvent = (
     channel: string,
@@ -221,7 +268,14 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     currentNetworkProxy,
     applyApplicationMenuSettings,
     applyDeveloperMode,
+    applyPreventScreenSleep,
+    applyKeepAwakeWhileRunning,
     resolveEffectiveCommandShell,
+  });
+  registerConfigSyncIpc({
+    registrar,
+    getHost,
+    sendToRenderer,
   });
   registerProviderIpc({
     registrar,
@@ -245,6 +299,7 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     loadComposerTemplatesCached,
   });
   registerWindowIpc({
+    setTraySessionPreferences: traySessions.setPreferences,
     registrar,
     getMainWindow,
     getWorkPanelReservationWidth,
@@ -261,9 +316,16 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     registrar,
     getHost,
     scheduledRunsBySession,
+    isQuitting: dependencies.isQuitting,
+    invoke: async (channel, args) => {
+      const handler = ipcHandlers.get(channel);
+      if (!handler) throw new Error("scheduled prompt handler unavailable");
+      return handler(...args);
+    },
   });
   registerWorkspaceIpc({
     registrar,
+    getMainWindow,
     getHost,
     getSidecar,
     dataDir,
@@ -285,6 +347,10 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     handle,
     bridge: agentExtensions,
     window: getMainWindow,
+    dialogs: dialog,
+    getLocale: getUpdaterLocale,
+    getNpmPath: () => readNpmPath(dataDir),
+    setNpmPath: (path) => writeNpmPath(dataDir, path),
     importRoot: join(dataDir, "plugins", "imported"),
     loadDevPlugin: async (path) => {
       const currentHost = getHost();
@@ -306,7 +372,10 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     getHost,
     getSidecar,
     getAgentHostBridge,
-    cancelSessionTools: (sessionId: string, reason?: string) => plugins.cancelSessionTools(sessionId, reason),
+    cancelSessionTools: (sessionId: string, reason?: string) => {
+      plugins.cancelSessionTools(sessionId, reason);
+      userMcp.cancelSessionCalls(sessionId);
+    },
     logger,
     vendorOAuth,
     agentExtensions,
@@ -338,7 +407,6 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     agentExtensions,
     browserHost,
     pluginViews,
-    pluginSettingsViews,
     pluginScopes,
     rememberPluginScopes,
     sendToRenderer,
@@ -350,6 +418,7 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     registrar,
     getHost,
     userMcp,
+    oauth: mcpOAuth,
     currentWorkspacePath,
     refreshUserMcp,
     describeError,
@@ -372,12 +441,20 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
   });
 
 
+  registerAgentImportIpc({
+    registrar,
+    getHost,
+    sendToRenderer,
+    refreshUserMcp,
+    currentWorkspacePath,
+  });
+
+
   registerPluginUiIpc({
     registrar,
     plugins,
     browserHost,
     pluginViews,
-    pluginSettingsViews,
     pluginPanels,
     pluginActiveInProject,
     currentWorkspacePath,
@@ -385,6 +462,13 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     getPluginPanelTheme,
   });
 
+  registerSpeechIpc({ registrar, speech });
+
+  if (voiceService) {
+    registerVoiceIpc({ registrar, voiceService });
+  }
+
+  registerRemoteHostIpc({ registrar });
 
   registerMarketIpc({
     registrar,

@@ -8,14 +8,14 @@ import { readMainSource } from "./helpers/main-source.mjs";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
-const [composer, api, main, attachments, saver, protocol, sidecar, picker] = await Promise.all([
+const [composer, api, main, attachments, saver, protocol, history, picker] = await Promise.all([
   readComposerSource(),
   read("../src/lib/api.ts"),
   readMainSource(),
   read("../electron/main/prompt-attachments.ts"),
   read("../electron/main/composer-paste.ts"),
   read("../../../packages/shared/src/protocol.ts"),
-  read("../../../packages/agent-runtime/src/sidecar.ts"),
+  read("../../../packages/agent-runtime/src/attachment-history.ts"),
   read("../electron/main/composer-picker.ts"),
 ]);
 
@@ -148,6 +148,26 @@ test("composer opens one unified file picker directly from the plus button", () 
   assert.doesNotMatch(composer, /plusOpen|plusRef|composer-plus-menu|pickAndAttach\("photos"\)/);
 });
 
+test("composer ignores repeated picker clicks while selection is in flight", () => {
+  assert.match(composer, /const pickerInFlight = useRef\(false\)/);
+  assert.match(composer, /if \(pickerInFlight\.current \|\| isInputBlocked\) return;/);
+  assert.match(
+    composer,
+    /pickerInFlight\.current = true;\s*setPasting\(true\);[\s\S]*?await api\.pickFiles\(\)/,
+  );
+  assert.match(
+    composer,
+    /pickerInFlight\.current = false;\s*setPasting\(false\);/,
+  );
+  assert.match(main, /let composerPickerActive = false/);
+  assert.match(
+    main,
+    /if \(composerPickerActive\) return \{ token: null, canceled: true \};/,
+  );
+  assert.match(main, /BrowserWindow\.fromWebContents\(event\.sender\)/);
+  assert.match(main, /dialog\.showOpenDialog\(owner, options\)/);
+});
+
 test("pasted bytes stay in the session scratch directory", () => {
   assert.match(saver, /join\(dataDir, "scratch", sessionId, "pasted"\)/);
   assert.match(saver, /basename\(normalized\)/);
@@ -248,9 +268,9 @@ test("large image attachments avoid whole-file startup reads", () => {
   assert.match(attachments, /const inline = supportsVision && size <= MAX_INLINE_IMAGE_BYTES/);
   assert.match(attachments, /await copyFile\(source, target, fsConstants\.COPYFILE_EXCL\)/);
   assert.doesNotMatch(attachments, /const bytes = readFileSync\(source\.absolute\)/);
-  assert.match(sidecar, /const size = \(await stat\(canonical\)\)\.size/);
-  assert.match(sidecar, /shouldInline && size <= MAX_INLINE_IMAGE_BYTES/);
-  assert.match(sidecar, /await copyFile\(source, target, fsConstants\.COPYFILE_EXCL\)/);
+  assert.match(history, /const size = \(await stat\(canonical\)\)\.size/);
+  assert.match(history, /shouldInline && size <= MAX_INLINE_IMAGE_BYTES/);
+  assert.match(history, /await copyFile\(source, target, fsConstants\.COPYFILE_EXCL\)/);
 });
 
 test("paste results separate display names from unique storage paths", async () => {

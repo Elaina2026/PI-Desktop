@@ -7,10 +7,10 @@ import type {
 import {
   contextCompactionMark,
   initialThinkingLevelForBinding,
-  modelIdsMatch,
   normalizeMode,
 } from "@pi-desktop/shared";
 import { api } from "../../lib/api";
+import { sameComposerModelId } from "../../lib/composer-models";
 import { scheduleHomeDraftAdopt } from "../../lib/composer-draft-cache";
 import {
   commitForkedSessionState,
@@ -18,6 +18,7 @@ import {
   FORKED_SESSION_WINDOW,
 } from "../../lib/session-fork";
 import { EMPTY_SESSION_WINDOW } from "../../lib/session-create";
+import { inheritedSessionModelBinding } from "../../lib/session-model";
 import {
   clearSessionPanes,
   retainSessionPane,
@@ -153,7 +154,7 @@ export function createSessionCoordination({
     const records =
       session?.compactions ??
       (session?.compaction ? [session.compaction] : []);
-    const marks = records.map(contextCompactionMark);
+    const marks = records.map((record) => ({ ...contextCompactionMark(record), summary: record.summary }));
     set((state) => ({
       sessionCompactions:
         marks.length > 0
@@ -279,16 +280,16 @@ export function createSessionCoordination({
       options && "draftConfiguration" in options
         ? options.draftConfiguration
         : state.draftConfiguration;
+    const inherited = inheritedSessionModelBinding({
+      draft: draftConfig,
+      settings,
+      providers: state.providers,
+    });
     const defaultProvider = state.providers.find(
-      (provider) =>
-        provider.id === (draftConfig?.providerId ?? settings?.defaultProviderId),
+      (provider) => provider.id === inherited.providerId,
     );
-    const inheritedModelId =
-      draftConfig?.modelId ??
-      settings?.defaultModelId ??
-      defaultProvider?.defaultModelId;
     const inheritedBinding = defaultProvider?.models.find((candidate) =>
-      modelIdsMatch(candidate.id, inheritedModelId ?? ""),
+      sameComposerModelId(candidate.id, inherited.modelId ?? ""),
     );
     const defaultThinkingLevel = initialThinkingLevelForBinding(
       inheritedBinding,
@@ -303,8 +304,8 @@ export function createSessionCoordination({
         mode: draftConfig?.mode ?? normalizeMode(settings?.defaultMode),
         thinkingLevel: draftConfig?.thinkingLevel ?? defaultThinkingLevel,
         permissionMode: draftConfig?.permissionMode,
-        providerId: draftConfig?.providerId,
-        modelId: draftConfig?.modelId,
+        providerId: inherited.providerId,
+        modelId: inherited.modelId,
         projectPath: projectPath ?? undefined,
       });
     } catch (error) {

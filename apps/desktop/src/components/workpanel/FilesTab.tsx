@@ -387,6 +387,4 @@ export function FilesTab() {
   }
 
   return <div className="file-tree">{renderDir("", 0)}</div>;
-
-  return <div className="file-tree">{renderDir("", 0)}</div>;
 }

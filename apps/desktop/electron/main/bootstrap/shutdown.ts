@@ -3,7 +3,7 @@ import type { CloseBehavior } from "@pi-desktop/shared";
 import type { AgentSidecar } from "../agent-sidecar";
 import type { BrowserPane } from "../browser-view";
 import type { HostProcess } from "../host-process";
-import type { InflightCheckpointer } from "../inflight-checkpoint";
+import type { InflightCheckpointer } from "@pi-desktop/host-runtime";
 import type { Logger } from "../logger";
 import type { PersistenceOutbox } from "../persistence-outbox";
 import type { PluginPanelHost } from "../plugin-panel-host";
@@ -12,6 +12,8 @@ import type { PluginViewHost } from "../plugin-view-host";
 import type { AppUpdaterController } from "../updater";
 import type { UserMcpRuntime } from "../user-mcp";
 import type { McpControlServer } from "../mcp-control";
+import type { McpOAuthManager } from "../mcp-oauth";
+import { getActiveRemoteHostsBoot, setActiveRemoteHostsBoot } from "./remote-hosts";
 
 const QUIT_TURN_SETTLE_BUDGET_MS = 2_000;
 
@@ -38,12 +40,13 @@ export type ShutdownDependencies = {
   pluginPanels: Pick<PluginPanelHost, "closeAll">;
   plugins: Pick<PluginRuntime, "disposeAll">;
   userMcp: Pick<UserMcpRuntime, "disposeAll">;
+  mcpOAuth?: Pick<McpOAuthManager, "disposeAll">;
   browserPane: Pick<BrowserPane, "dispose">;
   pluginViews: Pick<PluginViewHost, "dispose">;
-  pluginSettingsViews: Pick<PluginViewHost, "dispose">;
   updater: Pick<AppUpdaterController, "dispose" | "isInstallingUpdate">;
   logger: Pick<Logger, "app">;
   confirmQuitDialog: () => Promise<boolean>;
+  disposePowerSaveBlockers: () => void;
 };
 
 /** Register the last-window and before-quit resource lifecycle handlers. */
@@ -59,12 +62,13 @@ export function registerShutdownHandlers({
   pluginPanels,
   plugins,
   userMcp,
+  mcpOAuth,
   browserPane,
   pluginViews,
-  pluginSettingsViews,
   updater,
   logger,
   confirmQuitDialog,
+  disposePowerSaveBlockers,
 }: ShutdownDependencies): void {
   app.on("window-all-closed", () => {
     // The D216 tray is resident on every platform, so its presence says nothing
@@ -114,6 +118,7 @@ export function registerShutdownHandlers({
     }
 
     state.quitting = true;
+    disposePowerSaveBlockers();
     state.tray?.destroy();
     state.tray = null;
     if (state.pluginLauncherAccelerator) {
@@ -125,6 +130,11 @@ export function registerShutdownHandlers({
       state.toggleWindowAccelerator = null;
     }
     state.shutdownPromise = (async () => {
+      // Close every paired remote host before the local host-core so any
+      // in-flight remote turn's abort still goes over a live socket. Bounded
+      // parallelism inside `closeAll`; safe to run before local disposals.
+      const remoteHostsShutdown = getActiveRemoteHostsBoot()?.closeAll();
+      setActiveRemoteHostsBoot(null);
       // Replies still streaming are stopped through the sidecar first so their
       // aborted final rows can reach the transcript while host-core is alive;
       // whatever does not make it in time is covered by the last checkpoint
@@ -137,19 +147,29 @@ export function registerShutdownHandlers({
         persistenceOutbox,
         logger,
       });
+      // Panel windows and docked views are the only pages that call the plugin
+      // runtime over the panel bridge. They are torn down, and their pages are
+      // waited for, before the runtime and the host stop: a call such a page
+      // already sent while its surface was closing is otherwise answered by a
+      // runtime that is already shutting down, and surfaces as a bridge failure
+      // nobody can act on. The wait is bounded inside the hosts, so a page that
+      // refuses to close cannot hold up the quit.
+      const pluginSurfacesShutdown = Promise.allSettled([
+        pluginPanels.closeAll(),
+        pluginViews.dispose(),
+      ]);
+      logger.app("lifecycle", "info", "app shutdown");
+      await pluginSurfacesShutdown;
       const hostShutdown = getHost()?.dispose();
       const mcpShutdown = getMcpControl()?.stop();
-      const pluginPanelShutdown = pluginPanels.closeAll();
       updater.dispose();
-      logger.app("lifecycle", "info", "app shutdown");
       // Plugin hosts are stopped as a shutdown, not left for the process teardown
       // to kill: an unannounced exit is indistinguishable from a crash, and would
       // end every quit in error logs, toasts, and restarts into a closing app.
       const pluginShutdown = plugins.disposeAll();
       userMcp.disposeAll();
+      mcpOAuth?.disposeAll();
       browserPane.dispose();
-      pluginViews.dispose();
-      pluginSettingsViews.dispose();
       inflightCheckpointer.dispose();
       const sidecarShutdown = getSidecar()?.dispose();
 
@@ -159,10 +179,10 @@ export function registerShutdownHandlers({
         logger.app("lifecycle", "warn", "host shutdown failed", { data: String(error) });
       }
       await Promise.allSettled([
-        pluginPanelShutdown,
         pluginShutdown,
         sidecarShutdown,
         mcpShutdown,
+        remoteHostsShutdown,
       ]);
     })();
 

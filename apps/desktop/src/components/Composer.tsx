@@ -12,7 +12,8 @@ import type {
 } from "@pi-desktop/shared";
 import {
   initialThinkingLevelForBinding,
-  modelIdsMatch,
+  imageGenerationBindings,
+  isImageGenerationModel,
   normalizeLargePasteThreshold,
   stripInlineComposerFileReferenceTokens,
 } from "@pi-desktop/shared";
@@ -21,10 +22,7 @@ import { latestTurnContextInspector } from "../lib/latest-turn-context";
 import { isActivePlanExecution } from "../lib/plan-mode-state";
 import { headAsk, queuedAskCount } from "../lib/pending-asks";
 import type { QueuedPrompt } from "../lib/queued-prompts";
-import {
-  composerModelDisplayName,
-  composerModelsForProvider,
-} from "../lib/composer-models";
+import { composerModelDisplayName, sameComposerModelId } from "../lib/composer-models";
 import {
   providerThinkingLevels,
   resolveComposerThinkingProvider,
@@ -56,9 +54,13 @@ import {
 import { useComposerAttachments } from "../features/chat/composer/hooks/useComposerAttachments";
 import { useComposerDraft } from "../features/chat/composer/hooks/useComposerDraft";
 import { useComposerSubmit } from "../features/chat/composer/hooks/useComposerSubmit";
+import { ComposerImageAttachments } from "../features/chat/composer/ComposerImageAttachments";
 import { ComposerInput } from "../features/chat/composer/ComposerInput";
 import { useComposerModelMenu } from "../features/chat/composer/hooks/useComposerModelMenu";
 import { ComposerToolbar } from "../features/chat/composer/ComposerToolbar";
+import { useVoiceInput } from "../features/voice/useVoiceInput";
+import { VoiceOverlay } from "../features/voice/VoiceOverlay";
+import "../styles/voice.css";
 import { ComposerStatus } from "../features/chat/composer/ComposerStatus";
 
 const EMPTY_QUEUED_PROMPTS: QueuedPrompt[] = [];
@@ -90,6 +92,10 @@ export function Composer({
     s.activeSessionId ? s.planningStates[s.activeSessionId] : undefined,
   );
   const settings = useAppStore((s) => s.settings);
+  const imageGenerationCandidates = useMemo(
+    () => imageGenerationBindings(settings?.imageGenerationModels, settings?.imageGeneration),
+    [settings?.imageGenerationModels, settings?.imageGeneration],
+  );
   const sessions = useAppStore((s) => s.sessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const activeSessionSummary = sessions.find(
@@ -177,6 +183,7 @@ export function Composer({
     applyEditorDraft,
     snapshotReferences,
     draftSnapshot,
+    draftRevision,
     clearDraftForKey,
     restoreDraftForKey,
     persistDraft,
@@ -332,8 +339,7 @@ export function Composer({
   const modelId =
     activeSession?.modelId ??
     (!activeSession ? draftConfiguration?.modelId : undefined) ??
-    settings?.defaultModelId ??
-    provider?.defaultModelId;
+    (settings?.defaultModelId?.trim() || provider?.models?.[0]?.id || provider?.defaultModelId);
   const selectedModelCatalog = provider ? providerModels[provider.id] : undefined;
   const catalogThinkingProvider = thinkingProviderForModel(
     provider,
@@ -347,7 +353,7 @@ export function Composer({
     catalogThinkingProvider,
   });
   const selectedBinding = provider?.models.find((candidate) =>
-    modelIdsMatch(candidate.id, modelId ?? ""),
+    sameComposerModelId(candidate.id, modelId ?? ""),
   );
   // A draft without a session starts at the selected model's stored default
   // thinking level, clamped onto that binding's enabled ladder.
@@ -368,15 +374,14 @@ export function Composer({
     configuredThinkingLevel,
   );
   const thinkingLabel = thinkingLevel;
-  const selectedModel = provider?.id
-    ? composerModelsForProvider(provider, providerModels[provider.id]).find(
-        (model) => modelIdsMatch(model.modelId, modelId ?? ""),
-      )
-    : undefined;
-  const modelLabel = provider && modelId
-    ? composerModelDisplayName(provider, modelId, selectedModel?.displayName)
-    : selectedModel?.displayName || modelId || t("chat.model");
+  const selectedModelInfo = selectedModelCatalog?.find((candidate) =>
+    sameComposerModelId(candidate.modelId, modelId ?? ""),
+  );
+  const modelLabel = modelId
+    ? composerModelDisplayName(provider, modelId, selectedModelInfo?.displayName)
+    : t("chat.model");
   const modelMenu = useComposerModelMenu({
+    configureActiveSession,
     mode,
     activeSessionId,
     provider,
@@ -390,6 +395,7 @@ export function Composer({
     : !!provider &&
       provider.enabled &&
       !!modelId &&
+      !isImageGenerationModel(imageGenerationCandidates, provider.id, modelId) &&
       (provider.hasSecret || provider.authKind === "none");
   const currentModelBinding = provider?.models?.find((m) => m.id === modelId);
   const supportsVision = Boolean(
@@ -398,9 +404,7 @@ export function Composer({
       (modelId && /gemini|claude-3|gpt-4|o1|o3|vision|sonnet|opus/i.test(modelId)),
   );
   const enterToSend = settings?.enterToSend ?? true;
-  // Chips occupy sentinel characters, which `trim()` preserves — text and
-  // attachments share one content check.
-  const hasDraftContent = Boolean(value.trim());
+  const hasDraftContent = Boolean(value.trim() || activeFileReferences.length);
 
   useEffect(() => {
     if (!controlsBlocked) return;
@@ -425,6 +429,7 @@ export function Composer({
     draft: {
       ref,
       draftSnapshot,
+      draftRevision,
       clearDraftForKey,
       restoreDraftForKey,
       setValue,
@@ -442,6 +447,20 @@ export function Composer({
     submit,
   } = submitController;
 
+  const voiceEnabled = !!settings?.voice?.enabled;
+  const voice = useVoiceInput({
+    enabled: voiceEnabled,
+    onTranscriptionComplete: (text) => {
+      // Insert transcribed text into Composer
+      const current = readLiveDraft();
+      if (!current.trim()) {
+        applyEditorDraft(text, fileReferencesRef.current, text.length);
+      } else {
+        const next = current + " " + text;
+        applyEditorDraft(next, fileReferencesRef.current, next.length);
+      }
+    },
+  });
 
   // ponytail: in-memory + sessionStorage history; upgrade to SQLite when cross-device sync needed.
   const promptHistoryRef = useRef<string[]>([]);
@@ -567,7 +586,7 @@ export function Composer({
           <PlanApprovalBar proposal={planCheckpoint} />
         ) : null}
         {pendingAsk ? (
-          <AskToolCard request={pendingAsk} queued={queuedAsks} />
+          <AskToolCard key={pendingAsk.requestId} request={pendingAsk} queued={queuedAsks} />
         ) : null}
         {nativeReadOnly ? (
           <div className="composer-status" role="status">
@@ -589,6 +608,7 @@ export function Composer({
           insertDroppedDirectoryPaths={insertDroppedDirectoryPaths}
           dismissDroppedDirectories={dismissDroppedDirectories}
         />
+        <ComposerImageAttachments controller={draft.imagePreview} onRemove={draft.removeImage} disabled={inputBlocked} />
         <div
           ref={composerShellRef}
           className={`composer-shell${inputBlocked ? " is-gated" : ""}${
@@ -607,6 +627,7 @@ export function Composer({
             />
           ) : null}
           <ComposerInput
+            imagePreview={draft.imagePreview}
             inputRef={ref}
             value={value}
             placeholderText={placeholderText}
@@ -637,6 +658,7 @@ export function Composer({
               persistDraft();
             }}
           />
+          <VoiceOverlay t={t} state={voice.state} onCancel={voice.cancel} />
           <ComposerToolbar
             t={t}
             mode={mode}
@@ -671,6 +693,10 @@ export function Composer({
             hasDraftContent={hasDraftContent}
             abort={abort}
             submit={submit}
+            voicePhase={voice.state.phase}
+            voiceEnabled={voiceEnabled}
+            onVoiceToggle={voice.toggle}
+            onVoiceCancel={voice.cancel}
           />
         </div>
       </div>

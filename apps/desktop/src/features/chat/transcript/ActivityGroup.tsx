@@ -1,3 +1,6 @@
+import { visibleActivityItems } from "../../../lib/activity-summary";
+import { DisclosureScope, disclosureKey } from "./disclosure";
+import { ProcessActivityGroup } from "./ProcessActivityGroup";
 import {
   Fragment,
   memo,
@@ -53,12 +56,16 @@ import {
 import { SubagentTopology } from "./SubagentDetail";
 import { ToolRow } from "./ToolRow";
 import { TranscriptSearchContext } from "../../../lib/transcript-search-context";
+import { useAppStore } from "../../../stores/app-store";
+import { resolveThinkingDisplayMode } from "../../../lib/turn-process";
+import { HostedSearchRow } from "./HostedSearchRow";
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
 type ActivityItem = AssistantActivityItem;
 
 export function activityItemDetail(item: ActivityItem): string {
+  if (item.kind === "hostedSearch") return item.round.query ?? "";
   if (item.kind === "thinking") {
     // Latest thought line, so a collapsed header reads like a live ticker.
     const lines = thinkingText(item.message)
@@ -136,7 +143,7 @@ export function runActivityLabel(
       return t("chat.retryingModel", {
         delaySeconds: retryDelaySeconds(activity, now),
         attempt: activity.attempt,
-        maxAttempts: PROVIDER_RETRY_MAX_RETRIES,
+        maxAttempts: activity.infinite ? "∞" : PROVIDER_RETRY_MAX_RETRIES,
       });
     case "waiting-subagents":
       return waitingSubagentsLabel(activity, t);
@@ -145,8 +152,11 @@ export function runActivityLabel(
 
 type ActivityGroupProps = {
   items: ActivityItem[];
+  embedded?: boolean;
   isActive: boolean;
   endedAt?: string;
+  /** Last activity chunk of this assistant turn. */
+  isLast?: boolean;
   /** Current runtime wait phase, when the group owns the live turn tail. */
   runtimeActivity?: AgentActivity;
   /** Delegation statuses from the entire assistant turn (cross-activity-part). */
@@ -166,6 +176,9 @@ export function activityItemsEqual(
   if (previous.kind === "tool" && next.kind === "tool") {
     return subagentRunsEqual(previous.delegate, next.delegate);
   }
+  if (previous.kind === "hostedSearch" && next.kind === "hostedSearch") {
+    return previous.round === next.round;
+  }
   return true;
 }
 
@@ -174,8 +187,10 @@ function activityGroupPropsEqual(
   next: ActivityGroupProps,
 ) {
   if (
+    previous.embedded !== next.embedded ||
     previous.isActive !== next.isActive ||
     previous.endedAt !== next.endedAt ||
+    previous.isLast !== next.isLast ||
     previous.runtimeActivity !== next.runtimeActivity ||
     previous.items.length !== next.items.length
   ) {
@@ -199,12 +214,17 @@ function activityGroupPropsEqual(
 
 export const ActivityGroup = memo(function ActivityGroup({
   items,
+  embedded: _embedded = false,
   isActive,
   endedAt,
+  isLast = false,
   runtimeActivity,
   turnDelegationStatuses,
   turnDelegationTimings,
 }: ActivityGroupProps) {
+  const compact = useAppStore(
+    (state) => resolveThinkingDisplayMode(state.settings?.thinkingDisplayMode) === "compact",
+  );
   const { t } = useTranslation();
   const detailsId = useId();
   const delegateItems = items.filter(isDelegationActivityItem);
@@ -232,13 +252,14 @@ export const ActivityGroup = memo(function ActivityGroup({
   const searchTarget = useContext(TranscriptSearchContext);
   const revealRequest = searchTarget && items.some((item) => item.message.id === searchTarget.messageId)
     ? searchTarget.requestId : undefined;
-  const {
-    open,
-    toggle: toggleDisclosure,
-    collapse: collapseDisclosure,
-    claim: claimDisclosure,
-    titleRef,
-  } = useAutomaticDisclosure(live, revealRequest);
+  const visibleItems = visibleActivityItems(items, compact, isActive);
+  const first = items[0];
+  const disclosure = useAutomaticDisclosure(
+    hasSubagentTopology ? live : visibleItems.length <= 1 || (!compact && live),
+    revealRequest,
+    disclosureKey("activity", first?.message.id ?? "", first?.kind ?? "", first?.kind === "hostedSearch" ? first.round.id : ""),
+  );
+  const { open, toggle: toggleDisclosure, collapse: collapseDisclosure, claim: claimDisclosure, titleRef } = disclosure;
   const [now, setNow] = useState(Date.now);
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
   const wasActiveRef = useRef(live);
@@ -302,7 +323,9 @@ export const ActivityGroup = memo(function ActivityGroup({
     ? runActivityLabel(runtimeActivity, t as Translate)
     : "";
   const currentDetail =
-    live && !runtimeStatus && lastItem ? activityItemDetail(lastItem) : "";
+    live && !runtimeStatus && lastItem && !(compact && lastItem.kind === "thinking")
+      ? activityItemDetail(lastItem)
+      : "";
   const tail = live && !open ? currentDetail : "";
 
   useEffect(() => {
@@ -333,16 +356,35 @@ export const ActivityGroup = memo(function ActivityGroup({
           />
         );
       }
-      return item.kind === "tool" ? (
-        <Fragment key={item.message.id}>
-          <ToolRow
-            message={item.message}
+      const autoOpenLatest =
+        !compact && isLast && itemIndex === items.length - 1;
+      if (item.kind === "tool") {
+        return (
+          <Fragment key={item.message.id}>
+            <ToolRow
+              imagesInTurn
+              message={item.message}
+              autoOpen={autoOpenLatest}
+              onUserInteraction={claimDisclosure}
+              {...(item.delegate ? { delegate: item.delegate } : {})}
+            />
+            <ReviewChangeCard message={item.message} />
+          </Fragment>
+        );
+      }
+      if (item.kind === "hostedSearch") {
+        return (
+          <HostedSearchRow
+            key={`hosted-search-${item.message.id}-${item.round.id}`}
+            messageId={item.message.id}
+            round={item.round}
+            streaming={isActive && item.message.status === "streaming"}
+            autoOpen={autoOpenLatest}
             onUserInteraction={claimDisclosure}
-            {...(item.delegate ? { delegate: item.delegate } : {})}
           />
-          <ReviewChangeCard message={item.message} />
-        </Fragment>
-      ) : (
+        );
+      }
+      return (
         <ThinkingRow
           key={`thinking-${item.message.id}`}
           message={item.message}
@@ -357,6 +399,30 @@ export const ActivityGroup = memo(function ActivityGroup({
   const hasTodo = items.some(isTodoItem);
   const nonTodoItems = items.filter((item) => !isTodoItem(item));
   const todoItems = items.filter(isTodoItem);
+
+  if (!hasSubagentTopology) {
+    const processContent = (
+      <ProcessActivityGroup items={nonTodoItems} active={isActive} disclosure={disclosure}>
+        {renderActivityItems(nonTodoItems)}
+      </ProcessActivityGroup>
+    );
+    if (hasTodo) {
+      return (
+        <>
+          {nonTodoItems.length > 0 ? processContent : null}
+          {todoItems.map((item) => (
+            <ToolRow
+              key={`todo-standalone-${item.message.id}`}
+              message={item.message}
+              onUserInteraction={claimDisclosure}
+              {...(item.kind === "tool" && item.delegate ? { delegate: item.delegate } : {})}
+            />
+          ))}
+        </>
+      );
+    }
+    return processContent;
+  }
 
   const groupContent = nonTodoItems.length > 0 ? (
     <div
@@ -409,6 +475,8 @@ export const ActivityGroup = memo(function ActivityGroup({
         </div>
       ) : null}
       <div
+        ref={disclosure.bodyRef}
+        {...disclosure.bodyEvents}
         className="tool-activity-collapse"
         aria-hidden={!open}
         inert={!open}
@@ -416,10 +484,10 @@ export const ActivityGroup = memo(function ActivityGroup({
         <div className="tool-activity-collapse-inner">
           <div className="tool-activity-body" id={detailsId}>
             <DisclosureCollapseRail
-              label={t("chat.collapseDetails")}
+              label={t("chat.collapseActivityGroup")}
               onCollapse={collapseDisclosure}
             />
-            {renderActivityItems(nonTodoItems)}
+            <DisclosureScope disclosure={disclosure}>{renderActivityItems(nonTodoItems)}</DisclosureScope>
           </div>
         </div>
       </div>
@@ -445,7 +513,7 @@ export const ActivityGroup = memo(function ActivityGroup({
   return groupContent;
 }, activityGroupPropsEqual);
 
-/** Keep the transcript responsive while the model waits for its first event. */
+/** Keep the running turn visible when no more specific runtime phase is known. */
 export function WorkingIndicator({ startedAt }: { startedAt?: number } = {}) {
   const { t } = useTranslation();
   const [elapsed, setElapsed] = useState(0);
@@ -487,6 +555,8 @@ export function RunActivityIndicator({ activity }: { activity: AgentActivity }) 
   const { t } = useTranslation();
   const [now, setNow] = useState(Date.now);
   const retryErrorDetailsId = useId();
+  const retryReasonRef = useRef<HTMLSpanElement | null>(null);
+  const retryPlateRef = useRef<HTMLSpanElement | null>(null);
 
   useEffect(() => {
     setNow(Date.now());
@@ -499,6 +569,66 @@ export function RunActivityIndicator({ activity }: { activity: AgentActivity }) 
   );
   const label = runActivityLabel(activity, t as Translate, now);
   const retryError = activity.phase === "retrying" ? activity.error : undefined;
+
+  // The plate hangs off the tail row inside `.thread-scroll`, whose
+  // `overflow: auto` clips it, and the conversation bar paints over the same
+  // band from a higher stacking level. The room depends on where the row sits
+  // in the viewport, which no window-based rule can know: a short transcript
+  // leaves the row mid-window, and a long provider message still lost its first
+  // lines (ADR 0196). Measure the room the row actually leaves - the plate is
+  // anchored 8px above the trigger, so its own bottom edge starts that room -
+  // and let the remainder scroll.
+  useEffect(() => {
+    if (!retryError) return;
+    const reason = retryReasonRef.current;
+    const plate = retryPlateRef.current;
+    if (!reason || !plate) return;
+    const measure = () => {
+      const toolbarHeight =
+        Number.parseFloat(
+          getComputedStyle(reason).getPropertyValue("--ds-toolbar-height"),
+        ) || 0;
+      // The plate is anchored 8px above the trigger, so its own bottom edge
+      // starts the room - but the resting state carries a 4px downward
+      // translate the revealed state drops. Measure the settled edge, or the
+      // cap comes out 4px too generous and the top slides under the bar.
+      const resting = getComputedStyle(plate).transform;
+      const offset = resting === "none" ? 0 : new DOMMatrixReadOnly(resting).m42;
+      const settledBottom = plate.getBoundingClientRect().bottom - offset;
+      const room = Math.floor(settledBottom - toolbarHeight);
+      // The heading stays readable: only the message body scrolls inside the
+      // plate, which keeps the plate's own rounded corner away from a
+      // scrollbar (Chromium does not clip one to the radius).
+      const bodyText = plate.querySelector<HTMLElement>(
+        ".run-activity-error-message",
+      );
+      const chrome = bodyText
+        ? bodyText.getBoundingClientRect().top -
+          plate.getBoundingClientRect().top +
+          (Number.parseFloat(getComputedStyle(plate).paddingBottom) || 0)
+        : 0;
+      plate.style.setProperty(
+        "--run-activity-error-max-height",
+        `${Math.max(0, room)}px`,
+      );
+      plate.style.setProperty(
+        "--run-activity-error-body-max-height",
+        `${Math.max(0, Math.floor(room - chrome))}px`,
+      );
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    const scroller = reason.closest(".thread-scroll");
+    scroller?.addEventListener("scroll", measure, { passive: true });
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(document.documentElement);
+    return () => {
+      window.removeEventListener("resize", measure);
+      scroller?.removeEventListener("scroll", measure);
+      observer?.disconnect();
+    };
+  }, [retryError]);
   const retryErrorSummary = retryError
     ? (() => {
         const key = `errors.${retryError.code}`;
@@ -511,6 +641,7 @@ export function RunActivityIndicator({ activity }: { activity: AgentActivity }) 
     : label;
   const labelContent = retryError ? (
     <span
+      ref={retryReasonRef}
       className="run-activity-retry-reason"
       tabIndex={0}
       aria-describedby={retryErrorDetailsId}
@@ -519,6 +650,7 @@ export function RunActivityIndicator({ activity }: { activity: AgentActivity }) 
       <span className="working-indicator-label">{label}</span>
       <span
         id={retryErrorDetailsId}
+        ref={retryPlateRef}
         className="run-activity-error-popover message-error"
         role="tooltip"
       >

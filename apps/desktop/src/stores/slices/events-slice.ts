@@ -26,10 +26,6 @@ import {
   mergePlanCheckpoint,
 } from "../../lib/plan-mode-state";
 import { formatToolValue } from "../../lib/tool-display";
-import {
-  shouldOpenReviewArtifact,
-  toolWorkPanelTab,
-} from "../../lib/work-panel-tabs";
 import type { AppState } from "../app-state";
 import type { SessionRuntime } from "../runtime/session-runtime";
 import type { StoreAccess } from "./types";
@@ -44,6 +40,7 @@ export type EventsSliceDependencies = StoreAccess & {
   openPlanArtifact: (
     proposal: NonNullable<AppState["pendingPlans"][string]>,
     openWorkPanelTabForSession: AppState["openWorkPanelTabForSession"],
+    pluginViews: AppState["pluginViews"],
   ) => void;
   notifyInteractivePrompt: (
     sessionId: string,
@@ -137,7 +134,11 @@ export function createEventsSlice({
       });
       const checkpoint = get().planCheckpoints[event.sessionId];
       if (event.state === "awaiting_approval" && isPendingPlan(checkpoint)) {
-        openPlanArtifact(checkpoint, get().openWorkPanelTabForSession);
+        openPlanArtifact(
+          checkpoint,
+          get().openWorkPanelTabForSession,
+          get().pluginViews,
+        );
       }
       if (event.state === "awaiting_approval" && !event.proposal) {
         void get().restorePendingPlan(event.sessionId);
@@ -331,7 +332,11 @@ export function createEventsSlice({
         if (event.state === "awaiting_approval") {
           const checkpoint = get().planCheckpoints[envelope.sessionId];
           if (isPendingPlan(checkpoint)) {
-            openPlanArtifact(checkpoint, get().openWorkPanelTabForSession);
+            openPlanArtifact(
+              checkpoint,
+              get().openWorkPanelTabForSession,
+              get().pluginViews,
+            );
           }
           void get().restorePendingPlan(envelope.sessionId);
           notifyInteractivePrompt(envelope.sessionId, "plan");
@@ -352,7 +357,9 @@ export function createEventsSlice({
           ...(envelope.agentName ? { agentName: envelope.agentName } : {}),
         });
       } else if (event.type === "tool_end") {
-        const toolName = runtime.getToolStart(event.toolCallId)?.toolName;
+        // A tool result never opens or activates a work-panel tab: Review is a
+        // user-opened surface (panel toggle or New launcher), so an agent edit
+        // cannot reveal the panel even in its own session.
         set((state) => {
           const pendingPermissions = removePermissionForToolCall(
             state.pendingPermissions,
@@ -369,18 +376,6 @@ export function createEventsSlice({
             ? {}
             : { pendingPermissions, pendingAsks };
         });
-        if (
-          shouldOpenReviewArtifact({
-            toolName,
-            isError: event.isError,
-            result: event.result,
-          })
-        ) {
-          get().openWorkPanelTabForSession(
-            envelope.sessionId,
-            toolWorkPanelTab("review"),
-          );
-        }
       }
 
       if (event.type === "compaction_end" && event.ok && event.mark) {

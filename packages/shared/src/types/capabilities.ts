@@ -96,12 +96,26 @@ export type McpServerStatus = {
   toolNames?: string[];
   message?: string;
   updatedAt: number;
+  hasOauth?: boolean;
+  authRequired?: boolean;
 };
 
 /** A user MCP server plus whatever the runtime knows about its connection. */
 export type McpServerView = McpServerRecord & {
   status?: McpServerStatus;
 };
+
+/** Progress of one MCP OAuth login attempt, pushed to the renderer. */
+export type McpOAuthLoginEvent = {
+  loginId: string;
+  serverId: string;
+} & (
+  | { kind: "authUrl"; url: string; instructions?: string; opened: boolean }
+  | { kind: "progress"; message: string }
+  | { kind: "done"; status: McpServerStatus }
+  | { kind: "error"; message: string }
+  | { kind: "cancelled" }
+);
 
 /**
  * A skill document the user owns, stored under `~/.agents/skills` or a

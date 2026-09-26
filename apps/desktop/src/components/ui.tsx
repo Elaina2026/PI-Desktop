@@ -11,6 +11,12 @@ import {
   type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
 } from "react";
+import {
+  portalToBody,
+  visiblePortalContent,
+} from "../lib/portal-visibility";
+
+import { IconEye, IconEyeOff, IconHelp } from "./icons";
 
 export function cx(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
@@ -29,7 +35,9 @@ function overlayRoot(): HTMLElement {
 
 /** Mount a modal overlay on a viewport-fixed host so a transformed ancestor cannot trap `position: fixed`. */
 export function portalOverlay(node: ReactNode) {
-  return typeof document === "undefined" ? node : createPortal(node, overlayRoot());
+  return typeof document === "undefined"
+    ? node
+    : createPortal(visiblePortalContent(node), overlayRoot());
 }
 
 function setRef<T>(ref: Ref<T> | undefined, value: T | null) {
@@ -336,7 +344,7 @@ function PortalTooltip({
     });
   }, [className, label, position.left, position.top]);
 
-  return createPortal(
+  return portalToBody(
     <span
       ref={tooltipRef}
       className={cx("ui-tooltip", className)}
@@ -349,7 +357,6 @@ function PortalTooltip({
     >
       {label}
     </span>,
-    document.body,
   );
 }
 
@@ -490,6 +497,33 @@ export function TooltipButton({
   );
 }
 
+/**
+ * The one affordance for "there is an explanation here": the sentence itself
+ * lives in the tooltip, and this icon is the only trace of it left in the
+ * layout (D601). It is a real button, so a keyboard reaches the same text a
+ * pointer hovers, and its accessible name is that sentence.
+ */
+export function HelpIcon({
+  label,
+  className,
+}: {
+  /** The explanation, revealed on hover/focus and used as the name. */
+  label: string;
+  className?: string;
+}) {
+  return (
+    <TooltipButton
+      type="button"
+      className={cx("ui-help-icon", className)}
+      tooltip={label}
+      tooltipClassName="ui-tooltip-help"
+      ariaLabel={label}
+    >
+      <IconHelp size={13} />
+    </TooltipButton>
+  );
+}
+
 export function Button({
   variant = "secondary",
   size = "md",
@@ -538,6 +572,40 @@ export function Input({
   );
 }
 
+export function PasswordInput({
+  showLabel,
+  hideLabel,
+  className,
+  disabled,
+  ...props
+}: InputHTMLAttributes<HTMLInputElement> & {
+  /** Localized `aria-label` for the reveal control; the caller passes `t(...)`. */
+  showLabel: string;
+  hideLabel: string;
+}) {
+  const [revealed, setRevealed] = useState(false);
+  return (
+    <span className="password-input">
+      <Input
+        {...props}
+        className={className}
+        disabled={disabled}
+        type={revealed ? "text" : "password"}
+      />
+      <button
+        type="button"
+        className="password-input-toggle"
+        aria-label={revealed ? hideLabel : showLabel}
+        aria-pressed={revealed}
+        disabled={disabled}
+        onClick={() => setRevealed((current) => !current)}
+      >
+        {revealed ? <IconEyeOff /> : <IconEye />}
+      </button>
+    </span>
+  );
+}
+
 export function Textarea({ className, spellCheck = false, autoCorrect = "off", autoCapitalize = "off", ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
@@ -565,9 +633,11 @@ export function Field({
 }) {
   return (
     <label className="block space-y-1.5">
-      <div className="text-sm text-text-secondary">{label}</div>
+      <div className="text-sm text-text-secondary">
+        {label}
+        {hint ? <HelpIcon label={hint} /> : null}
+      </div>
       {children}
-      {hint ? <div className="text-xs text-text-muted">{hint}</div> : null}
     </label>
   );
 }
@@ -582,14 +652,180 @@ export function Panel({
   return <div className={cx("panel-card", className)}>{children}</div>;
 }
 
+export function SettingsToggle({
+  checked,
+  label,
+  busy,
+  disabled,
+  className,
+  onChange,
+}: {
+  checked: boolean;
+  label: string;
+  busy?: boolean;
+  disabled?: boolean;
+  className?: string;
+  onChange: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={cx("settings-toggle", checked && "on", busy && "is-busy", className)}
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      aria-busy={busy || undefined}
+      disabled={disabled || busy}
+      onClick={onChange}
+    >
+      <span className="settings-toggle-thumb" />
+    </button>
+  );
+}
+
+export function SegmentedControl<T extends string>({
+  value,
+  onChange,
+  options,
+  label,
+  role = "radiogroup",
+  className,
+  itemClassName,
+  disabled,
+}: {
+  value: T;
+  onChange: (value: T) => void;
+  options: readonly {
+    readonly value: T;
+    readonly label: ReactNode;
+    readonly id?: string;
+    readonly controls?: string;
+  }[];
+  label: string;
+  role?: "group" | "radiogroup" | "tablist";
+  className?: string;
+  itemClassName?: string;
+  disabled?: boolean;
+}) {
+  const itemRole = role === "tablist" ? "tab" : role === "radiogroup" ? "radio" : undefined;
+  return (
+    <div
+      className={cx("settings-segment", className)}
+      role={role}
+      aria-label={label}
+    >
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          {...(itemRole === "tab"
+            ? { role: "tab", id: option.id ?? `${label}-tab-${option.value}`, "aria-controls": option.controls, "aria-selected": value === option.value }
+            : itemRole === "radio"
+              ? { role: "radio", "aria-checked": value === option.value }
+              : { "aria-pressed": value === option.value })}
+          className={cx(
+            "settings-segment-item",
+            value === option.value && "active",
+            itemClassName,
+          )}
+          disabled={disabled}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+
+export function Checkbox({
+  label,
+  className,
+  ...props
+}: Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & {
+  label: ReactNode;
+}) {
+  return (
+    <label className={cx("ui-checkbox", className)}>
+      <input type="checkbox" {...props} />
+      <span>{label}</span>
+    </label>
+  );
+}
+
+
+export function CheckboxGroup<T extends string>({
+  values,
+  onChange,
+  options,
+  label,
+  disabled,
+  className,
+  itemClassName,
+  minSelected = 0,
+}: {
+  /** Currently selected values. */
+  values: readonly T[];
+  /** Called with the full updated selection. */
+  onChange: (values: T[]) => void;
+  options: readonly { readonly value: T; readonly label: ReactNode }[];
+  /** Accessible group label. */
+  label: string;
+  disabled?: boolean;
+  className?: string;
+  itemClassName?: string;
+  /** Prevent unchecking below this count (default 0 = no minimum). */
+  minSelected?: number;
+}) {
+  const toggle = (value: T) => {
+    const on = !values.includes(value);
+    const next = on
+      ? [...values, value]
+      : values.filter((v) => v !== value);
+    if (next.length < minSelected) return;
+    onChange(next);
+  };
+
+  return (
+    <div
+      className={cx("settings-segment", className)}
+      role="group"
+      aria-label={label}
+    >
+      {options.map((option) => {
+        const selected = values.includes(option.value);
+        return (
+          <button
+            key={option.value}
+            type="button"
+            aria-pressed={selected}
+            className={cx(
+              "settings-segment-item",
+              selected && "active",
+              itemClassName,
+            )}
+            disabled={disabled}
+            onClick={() => toggle(option.value)}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function Badge({
   children,
   tone = "neutral",
   className,
+  style,
 }: {
   children: ReactNode;
   tone?: "neutral" | "success" | "error" | "warning";
   className?: string;
+  style?: React.CSSProperties;
 }) {
   return (
     <span
@@ -601,6 +837,7 @@ export function Badge({
         tone === "warning" && "badge-warning",
         className,
       )}
+      style={style}
     >
       {children}
     </span>

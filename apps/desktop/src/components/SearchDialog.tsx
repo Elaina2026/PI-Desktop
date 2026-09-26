@@ -84,6 +84,9 @@ export function SearchDialog({ open, onClose }: { open: boolean; onClose: () => 
   const setSettingsAnchor = useAppStore((s) => s.setSettingsAnchor);
   const setPage = useAppStore((s) => s.setPage);
   const showToast = useAppStore((s) => s.showToast);
+  // Settings search mirrors the rail: developer-only destinations stay out of
+  // the result list while developer mode is off.
+  const developerMode = useAppStore((s) => s.settings?.developerMode === true);
 
   const query = useSessionSearchState((state) => state.query);
   const setQuery = useSessionSearchState((state) => state.setQuery);
@@ -204,8 +207,8 @@ export function SearchDialog({ open, onClose }: { open: boolean; onClose: () => 
   }, [query, t]);
 
   const settingsHits = useMemo<SettingsSearchHit[]>(
-    () => searchSettings(query, t),
-    [query, t],
+    () => searchSettings(query, t, { developerMode }),
+    [query, t, developerMode],
   );
 
   const sessionOptionCount = rows.reduce(
@@ -318,6 +321,7 @@ export function SearchDialog({ open, onClose }: { open: boolean; onClose: () => 
         aria-label={t("nav.search")}
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing || event.keyCode === 229) return;
           // Escape must close even when focus left the input (e.g. tabbing).
           if (event.key === "Escape") {
             event.preventDefault();

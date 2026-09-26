@@ -1,5 +1,6 @@
 import {
   useState,
+  useRef,
   type ClipboardEvent,
   type DragEvent as ReactDragEvent,
 } from "react";
@@ -80,6 +81,7 @@ export function useComposerAttachments({
   draft,
 }: UseComposerAttachmentsOptions): ComposerAttachmentsController {
   const [pasting, setPasting] = useState(false);
+  const pickerInFlight = useRef(false);
   const [dropTargetActive, setDropTargetActive] = useState(false);
   const [droppedDirectories, setDroppedDirectories] = useState<ComposerDropItem[]>([]);
   const isInputBlocked = inputBlocked || pasting;
@@ -147,6 +149,10 @@ export function useComposerAttachments({
   };
 
   const pickAndAttach = async () => {
+    // The ref closes the gap before React re-renders the disabled button.
+    if (pickerInFlight.current || isInputBlocked) return;
+    pickerInFlight.current = true;
+    setPasting(true);
     try {
       // The picker accepts regular files; the importer classifies images from
       // MIME/extension metadata after selection.
@@ -154,15 +160,24 @@ export function useComposerAttachments({
       await attachPickedResult(result);
     } catch (error) {
       showErrorToast(t, error);
+    } finally {
+      pickerInFlight.current = false;
+      setPasting(false);
     }
   };
 
   const pickAndAttachPhotos = async () => {
+    if (pickerInFlight.current || isInputBlocked) return;
+    pickerInFlight.current = true;
+    setPasting(true);
     try {
       const result = await api.pickPhotos();
       await attachPickedResult(result);
     } catch (error) {
       showErrorToast(t, error);
+    } finally {
+      pickerInFlight.current = false;
+      setPasting(false);
     }
   };
 
@@ -182,6 +197,7 @@ export function useComposerAttachments({
       const sourceValue = readEditorValue(editor);
       const sourceSessionId = activeSessionId;
       const sourceDraftKey = draftKey;
+      const previousReferences = snapshotReferences(sourceSessionId ?? "");
       setPasting(true);
       try {
         const payload = files.length
@@ -227,7 +243,6 @@ export function useComposerAttachments({
           sourceValue.slice(0, selectionStart) +
           inserted +
           sourceValue.slice(selectionEnd);
-        const previousReferences = snapshotReferences(sourceSessionId ?? "");
         const nextReferences = [
           ...previousReferences.map((reference) =>
             createFileReference(reference.path, reference.name, sessionId!, reference),

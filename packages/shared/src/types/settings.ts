@@ -2,10 +2,13 @@
 import type { CommandShellId } from "../command-shells.js";
 import type { KeybindingOverrides } from "../keyboard-shortcuts.js";
 import type { NetworkProxySettings } from "../network-proxy.js";
+import type { NetworkPolicySettings } from "../network-policy.js";
 import type { ContextCompactionSettings } from "./sessions.js";
 import type { Mode } from "./common.js";
 import type { GlobalPermissionMode } from "./permissions.js";
 import type { PluginMarketSource } from "./plugins.js";
+import type { SpeechSettings } from "./speech.js";
+import type { ThinkingLevel } from "./models.js";
 
 export type ThemePreference = "system" | "light" | "dark" | `plugin:${string}`;
 
@@ -20,16 +23,58 @@ export type ThemePreference = "system" | "light" | "dark" | `plugin:${string}`;
 export type CloseBehavior = "ask" | "tray" | "quit";
 
 export type AppSettings = {
+  imageGeneration?: import("../image-generation.js").ImageGenerationBinding | null;
+  /** All models marked for image generation; absent falls back to imageGeneration. */
+  imageGenerationModels?: import("../image-generation.js").ImageGenerationBinding[] | null;
   defaultProviderId?: string;
   defaultModelId?: string;
+  /** Host speech bindings. Absent means voice actions stay disabled. */
+  speech?: SpeechSettings;
   defaultMode: Mode;
+  /**
+   * Keep retryable provider/network failures retrying until the request succeeds.
+   * Absent and false use the bounded ten-retry policy.
+   */
+  infiniteProviderRetry?: boolean;
+  /** Prevent idle system sleep while this desktop app runs; off when absent. */
+  keepAwakeWhileRunning?: boolean;
   /** Configured command shell for the agent Bash protocol tool. */
   defaultCommandShell?: CommandShellId;
-  /** Global permission mode default; sessions with `inherit` follow this. */
+  /**
+   * Whether the stored user template replaces the built-in one (ADR 0121).
+   * Absent means off. Turning it off keeps `promptEnhancementUserTemplate` so
+   * toggling back on restores the user's text instead of discarding it.
+   */
+  promptEnhancementCustomTemplate?: boolean;
+  /**
+   * Composer prompt-enhancement user-template override (ADR 0121). Applied only
+   * while `promptEnhancementCustomTemplate` is on. Host-core rejects a non-blank
+   * value without `{{draft}}` and any value beyond
+   * `PROMPT_ENHANCEMENT_TEMPLATE_MAX_LENGTH`.
+   *
+   * The system prompt is intentionally not overridable: it carries the rewrite
+   * contract the feature is specified against.
+   */
+  promptEnhancementUserTemplate?: string;
+  /**
+   * Model the one-shot enhancement runs on. Absent means "follow the Composer's
+   * current model". When the pinned pair is unusable, main falls back to the
+   * Composer model and logs a warning (ADR 0121).
+   */
+  promptEnhancementProviderId?: string;
+  promptEnhancementModelId?: string;
+  /**
+   * Reasoning effort for the one-shot enhancement. Absent means `off`: the
+   * enhancement never inherits the session's level, because a rewrite rarely
+   * benefits from reasoning and reasoning is the slow path. The value is clamped
+   * onto the resolved model's ladder, and switching model re-clamps it, so a
+   * stored level is always one the model can run.
+   */
+  promptEnhancementThinkingLevel?: ThinkingLevel;
   defaultPermissionMode?: GlobalPermissionMode;
   theme: ThemePreference;
   /** UI language; `auto` (and absent) follows the OS locale. */
-  language?: "auto" | "en" | "zh-CN" | "zh-TW" | "tr" | "de" | "es" | "fr" | "ko" | "vi";
+  language?: "auto" | "en" | "zh-CN" | "zh-TW" | "tr" | "de" | "es" | "fr" | "ko" | "vi" | "pt-BR";
   /**
    * Global UI font stack (CSS `font-family` value). Absent means the built-in
    * token stack; bundled open-source families and installed system families
@@ -41,6 +86,8 @@ export type AppSettings = {
    * Absent means 1. Range 0.8–1.5 in 0.025 steps. Window zoom is independent.
    */
   fontScale?: number;
+  /** Transcript presentation only; absent means detailed. Reasoning is retained. */
+  thinkingDisplayMode?: "detailed" | "compact";
   /**
    * @deprecated Unreleased D343 px field. Reads migrate into `fontScale`
    * as `px / 14`; new writes persist `fontScale` instead.
@@ -74,6 +121,12 @@ export type AppSettings = {
    */
   networkProxy?: NetworkProxySettings;
   /**
+   * Trust policy for the network endpoints the user enters themselves: how a
+   * user-supplied model base URL, MCP server, or market source is judged.
+   * Absent means the defaults in `network-policy.ts`.
+   */
+  networkPolicy?: NetworkPolicySettings;
+  /**
    * Preferred destination when clicking HTTP/HTTPS links in chat messages.
    * `workpanel`: Preview in the Work Panel browser tab (default).
    * `external`: Open directly in the system's default web browser.
@@ -93,6 +146,22 @@ export type AppSettings = {
    * or work panel compresses without rewriting the preference.
    */
   chatContentMaxWidth?: number;
+  /**
+   * Opt-in smooth streaming display (D152 amendment). When enabled, incoming
+   * stream chunks are released character-by-character through a
+   * requestAnimationFrame loop instead of appearing as whole blocks.
+   * Absent and true enable smooth rendering; false disables it. Automatically
+   * disabled when the system prefers reduced motion.
+   */
+  smoothStreaming?: boolean;
+  /**
+   * Prevent the display from sleeping while the app is running. Uses
+   * Electron's `powerSaveBlocker` with `prevent-display-sleep` on all
+   * platforms. Absent and false mean the system manages sleep normally.
+   */
+  preventScreenSleep?: boolean;
+  /** Voice input settings (D-voice-runtime). */
+  voice?: VoiceInputSettings;
   onboardingDismissed: boolean;
 };
 
@@ -111,6 +180,20 @@ export type TokenSaverSettings = {
   caveman?: CavemanLevel;
   ponytail?: PonytailLevel;
   rtkCompressor?: boolean;
+};
+
+export type ChineseVariant = "simplified" | "traditional-taiwan" | "traditional-hong-kong";
+
+export type VoiceInputSettings = {
+  enabled: boolean;
+  /** Microphone device ID; null means system default. */
+  deviceId: string | null;
+  /** Language codes for recognition, e.g. ["zh", "en"]. */
+  languages: string[];
+  /** Chinese output variant. */
+  chineseVariant: ChineseVariant;
+  /** Catalog model ID. Empty string means no model selected yet. */
+  modelId: string;
 };
 
 export type LinkOpenTarget = "workpanel" | "external";

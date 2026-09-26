@@ -3,22 +3,24 @@ import {
   ErrorCodes as SharedErrorCodes,
   isActiveInProject,
   isCommandShellCatalog,
+  imageGenerationBindings,
+  isImageGenerationModel,
   normalizeMode,
-  resolveBindingContextWindow,
+  resolveBindingLimits,
   trustedExtensionAgentKeyFromProviderId,
   type CommandShellCatalog,
   type McpServerRecord,
   type ModelBinding,
   type Mode,
   type Risk,
-  type ThinkingLevel,
+  type SessionThinkingLevel,
   type UserSkillRecord,
   type UserSubagentRecord,
 } from "@pi-desktop/shared";
 import {
   capabilitiesFromModelConfig,
   clampThinkingLevel,
-  genericModelConfig,
+  loadCustomSystemPrompt,
   loadInstructionChain,
   loadSubagentDefinitions,
   modelConfigWithBinding,
@@ -31,7 +33,7 @@ import { builtinSkills } from "../builtin-skills";
 import { scanExternalSkills } from "../external-skills";
 import { OAUTH_AUTH_KIND, type VendorOAuth } from "../oauth";
 import {
-  modelConfigFromModelsDev,
+  catalogModelConfigFor,
   type ModelsDevCatalog,
 } from "../models-dev-catalog";
 import type { HostProcess } from "../host-process";
@@ -67,10 +69,6 @@ export type SessionLaunchRuntimeDependencies = {
     provider: Pick<RuntimeProvider, "models">,
     modelId: string,
   ) => ModelBinding | undefined;
-  modelsDevModelFor: (
-    provider: RuntimeProvider,
-    modelId: string,
-  ) => ReturnType<ModelsDevCatalog["findModel"]>;
   effectiveSubagentModelConfig: (
     provider: Pick<RuntimeProvider, "models">,
     modelId: string,
@@ -79,7 +77,7 @@ export type SessionLaunchRuntimeDependencies = {
     modelConfig: ReturnType<typeof modelConfigWithBinding>;
     capabilities: ReturnType<typeof capabilitiesFromModelConfig>;
   };
-  normalizeThinkingLevel: (value: unknown) => ThinkingLevel;
+  normalizeThinkingLevel: (value: unknown) => SessionThinkingLevel;
 };
 
 export function createSessionLaunchRuntime({
@@ -94,7 +92,6 @@ export function createSessionLaunchRuntime({
   getWorkspacePath,
   pluginActiveInProject,
   bindingForModel,
-  modelsDevModelFor,
   effectiveSubagentModelConfig,
   normalizeThinkingLevel,
 }: SessionLaunchRuntimeDependencies) {
@@ -264,7 +261,7 @@ export function createSessionLaunchRuntime({
       turnId?: string;
       providerId?: string;
       modelId?: string;
-      thinkingLevel?: ThinkingLevel;
+      thinkingLevel?: SessionThinkingLevel;
     } = {},
   ) {
     if (!runtimeState.host) throw new Error("host unavailable");
@@ -326,6 +323,15 @@ export function createSessionLaunchRuntime({
         errorCode: ErrorCodes.MODEL_NOT_CONFIGURED,
       });
     }
+    if (isImageGenerationModel(
+      imageGenerationBindings(settings.imageGenerationModels, settings.imageGeneration),
+      provider.id,
+      modelId,
+    )) {
+      throw Object.assign(new Error("The image model cannot be used for conversation; select a chat model"), {
+        errorCode: ErrorCodes.MODEL_NOT_CONFIGURED,
+      });
+    }
     // The authenticated collection owns a vendor account's available model IDs
     // and wire endpoint. models.dev owns metadata; one account can span multiple
     // wire APIs and gateway catalogs.
@@ -343,12 +349,14 @@ export function createSessionLaunchRuntime({
     const storedModel = bindingForModel(provider, modelId);
     const apiStyle = vendorBinding?.apiStyle ?? provider.apiStyle;
     const baseUrl = vendorBinding?.baseUrl ?? provider.baseUrl;
-    const modelsDevModel = modelsDevModelFor(provider, modelId);
     const catalogModelConfig = vendorBinding?.modelConfig ??
-      (modelsDevModel
-        ? modelConfigFromModelsDev(modelsDevModel, baseUrl)
-        : genericModelConfig(modelId, baseUrl ?? ""));
-    const resolvedLimits = resolveBindingContextWindow(catalogModelConfig, storedModel);
+      catalogModelConfigFor(modelsDevCatalog, {
+        vendorKey: provider.vendorKey,
+        baseUrl,
+        apiStyle,
+        modelId,
+      });
+    const resolvedLimits = resolveBindingLimits(catalogModelConfig, storedModel);
     const modelConfig = modelConfigWithBinding(
       resolvedLimits.catalogConfig,
       resolvedLimits.binding,
@@ -392,6 +400,9 @@ export function createSessionLaunchRuntime({
       undefined;
     const projectPath = effectiveProjectPath;
     let projectInstructions = await loadInstructionChain(projectPath);
+    // pi-compatible SYSTEM.md / APPEND_SYSTEM.md (issue #542): resolved once
+    // per launch; a change retires the runtime through the reuse match.
+    const customSystemPrompt = await loadCustomSystemPrompt(projectPath);
     let projectMemory: string | undefined;
     if (projectPath) {
       try {
@@ -501,14 +512,12 @@ export function createSessionLaunchRuntime({
       resolveVendorBinding: (pinned, pinnedModelId) =>
         vendorOAuth.bindingFor(pinned.id, pinnedModelId),
       resolveModel: async (pinned, pinnedModelId) => {
-        const model = modelsDevCatalog.findModel({
+        const catalogModelConfig = catalogModelConfigFor(modelsDevCatalog, {
           vendorKey: pinned.vendorKey,
           baseUrl: pinned.baseUrl,
+          apiStyle: pinned.apiStyle,
           modelId: pinnedModelId,
         });
-        const catalogModelConfig = model
-          ? modelConfigFromModelsDev(model, pinned.baseUrl)
-          : genericModelConfig(pinnedModelId, pinned.baseUrl ?? "");
         const configuredProvider = providers.providers.find(
           (candidate) => candidate.id === pinned.id,
         );
@@ -564,16 +573,19 @@ export function createSessionLaunchRuntime({
           const vb = await vendorOAuth.bindingFor(row.id, binding.id);
           if (!vb) continue;
           catalogModelConfig =
-            vb.modelConfig ?? genericModelConfig(binding.id, vb.baseUrl ?? row.baseUrl ?? "");
+            vb.modelConfig ?? catalogModelConfigFor(modelsDevCatalog, {
+              vendorKey: row.vendorKey,
+              baseUrl: vb.baseUrl ?? row.baseUrl,
+              apiStyle: vb.apiStyle ?? row.apiStyle,
+              modelId: binding.id,
+            });
         } else {
-          const model = modelsDevCatalog.findModel({
+          catalogModelConfig = catalogModelConfigFor(modelsDevCatalog, {
             vendorKey: row.vendorKey,
             baseUrl: row.baseUrl,
+            apiStyle: row.apiStyle,
             modelId: binding.id,
           });
-          catalogModelConfig = model
-            ? modelConfigFromModelsDev(model, row.baseUrl)
-            : genericModelConfig(binding.id, row.baseUrl ?? "");
         }
         const effective = effectiveSubagentModelConfig(
           row,
@@ -638,10 +650,12 @@ export function createSessionLaunchRuntime({
         ),
         ...(overrides.turnId ? { turnId: overrides.turnId } : {}),
         thinkingLevel,
+        infiniteProviderRetry: settings.infiniteProviderRetry === true,
         commandShell,
         scratchDir: join(dataDir, "scratch", sessionId),
         attachmentsDir: join(dataDir, "attachments"),
         projectPath,
+        customSystemPrompt,
         projectInstructions,
         projectMemory,
         provider: {

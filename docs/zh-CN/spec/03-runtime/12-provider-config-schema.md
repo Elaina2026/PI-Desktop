@@ -82,13 +82,13 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "contextWindow", "maxTokens", "thinkingLevels", "defaultThinkingLevel"],
+        "required": ["id"],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
           "alias": { "type": "string", "maxLength": 60 },
-          "contextWindow": { "type": "integer", "minimum": 1 },
+          "contextWindow": { "type": "integer", "minimum": 0 },
           "contextWindowSource": { "enum": ["catalog", "user"] },
-          "maxTokens": { "type": "integer", "minimum": 1 },
+          "maxTokens": { "type": "integer", "minimum": 0 },
           "thinkingLevels": {
             "type": "array",
             "items": { "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
@@ -96,7 +96,7 @@
           },
           "defaultThinkingLevel": {
             "type": ["string", "null"],
-            "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max", null]
+            "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max", "omit", null]
           },
           "supportsImages": { "type": ["boolean", "null"] },
           "supportsDocuments": { "type": ["boolean", "null"] },
@@ -124,8 +124,20 @@
 身份，别名从不用于提供商或模型解析。host-core 会修剪别名、丢弃空白值，
 并在超过 60 个 Unicode 字符时以 `MODEL_ALIAS_TOO_LONG` 拒绝。
 
+`models[].contextWindow` 与 `models[].maxTokens` 在线为可选。缺失的键、或显式的 `0`，
+都不是按模型的选择：host 把它读作 0 并补上通用默认值（128,000 / 8,192）——这与上面
+legacy 绑定被物化时用的是同一个值，也与未声明限额的插件 manifest 已经产生的值相同。
+存储数组与 manifest 由此对“没有限额的模型”取得一致（D610）。
+
+存储的 `models` 数组逐条解码。不再符合 schema 的条目会被跳过，并在宿主日志里带上
+提供商 id、条目下标与原因上报，而不是丢弃整个数组。读取仍可用，但会标记为降级：非法
+JSON、根节点非对象、`models` 非数组，或任一条目不可读，都会被上报。缺失的 `models`
+键和空数组仍是合法的 legacy 状态；所有条目都不可读的数组仍回退到 legacy 绑定并上报。
+为防止设置页的部分视图覆盖并丢失存储数据，当存储值降级时，`providers.update` 会以
+`MODEL_BINDINGS_DEGRADED` 拒绝显式替换模型数组；不涉及模型数组的提供商字段仍可更新。
+
 `models[].contextWindowSource` 记录存储的 `contextWindow` 来自哪里：`catalog` 表示
-models.dev 快照，之后的目录修正可以替换它；`user` 表示用户在设置中手改的值，永不被
+models.dev 快照，之后的目录修正可以替换它（查询未命中而回退到通用形状不算修正）；`user` 表示用户在设置中手改的值，永不被
 替换。该字段可选，因此早于该标记写出的配置仍可读，旧客户端会忽略它。host-core 只
 保留这两个取值、丢弃其它值，避免出现第三种无人识别的状态。解析规则见
 [13-model-catalog-and-selection](13-model-catalog-and-selection.md) §9.1。
@@ -137,6 +149,9 @@ models.dev 快照，之后的目录修正可以替换它；`user` 表示用户�
 代替模型记录。未知的自由形式模型暴露了 `supportsReasoning=false`
 和 `supportedThinkingLevels=["off"]`。原始秘密和内部兼容性
 JSON 保持隐藏状态。
+手输的自定义模型 id 会在写入绑定前先与该快照匹配（`providers.lookupModel`，§9）：
+即使该 id 不在任何已发现的列表中，已发布的记录也会提供绑定的上下文窗口、最大输出
+token 与思考等级；未发布的 id 仍沿用通用种子值。
 
 `authKind: "oauth"` 标记厂商账户行（ADR 0095、D237）：其凭据是保存在
 `secret:provider:<id>:oauth` 下的 OAuth 授权，而不是粘贴的密钥，因此该行
@@ -214,7 +229,11 @@ OpenCode Go（以及任何 `opencode.ai` 主机）的 LLM 请求必须带稳定�
 上发送该头，并附带 `x-opencode-client: pi-desktop` 与
 `User-Agent: pi-desktop/<APP_VERSION>`。行上可选的 `headers` 会覆盖这些默认值；留空则保持适配器默认。
 
-每行（AI 服务或 OAuth 账户）可在高级选项中用键值行编辑自定义请求头。空映射保持 pi-ai / `claude-cli` / OpenCode 默认。fetch 包装器是最后写入者，因此 Codex 与 Anthropic SDK 无法覆盖。禁止 `Authorization` / `Host` / `Content-Type` 等保留头。遗留的 `userAgent` 读取时迁入 `headers["User-Agent"]`。首次 OAuth 登录不收集请求头，登录后再编辑。覆盖 Anthropic OAuth 的 `claude-cli/…` 可能导致 Claude Pro/Max 拒绝请求。
+每行（AI 服务或 OAuth 账户）可在高级选项中用键值行编辑自定义请求头。空映射保持 pi-ai / `claude-cli` / OpenCode 默认。fetch 包装器是最后写入者，因此 Codex 与 Anthropic SDK 无法覆盖。pi-ai 的 Google 适配器改为通过流选项标头接收同样的值，因为它们会拒绝任何其他 `fetch`（issue #1072）。禁止 `Authorization` / `Host` / `Content-Type` 等保留头。遗留的 `userAgent` 读取时迁入 `headers["User-Agent"]`。首次 OAuth 登录不收集请求头，登录后再编辑。覆盖 Anthropic OAuth 的 `claude-cli/…` 可能导致 Claude Pro/Max 拒绝请求。
+
+键不区分大小写且唯一，最多 32 条，名称 ≤ 256 字节，值 ≤ 4096 字节，名称只允许字母数字与连字符，且不得含 CR/LF。值先做半角化——全角块（U+FF01–U+FF5E）与表意空格（U+3000）换成对应 ASCII——再修剪，再校验：HTAB、可打印 ASCII 与 Latin-1 补充区可以随请求发出，汉字、emoji、弯引号、NUL 及其它控制字符则以 `HEADERS_INVALID` 拒绝，并指出具体字符与字符下标。半角化覆盖的正是用户真正会撞上的情况：全角字符来自输入法或全角排版的网页，若不处理，`Headers.set` 会在回合中途抛 `Cannot convert argument to a ByteString`。这里刻意不做完整 NFKC：它会把半角片假名改写成 U+00FF 以上的码位并产生组合字符。高级编辑器也会在行旁提示哪些值会被半角化、哪些会被拒绝。
+
+同一条规则在三个边界上以三种**有意不同**的失败方式生效：**编辑器保存**时对无法发送的行报 `HEADERS_INVALID` 并指出字符与下标，因为此时有用户在场可以改；**读取已存映射**时做半角化并丢弃无法发送的行，规则生效前写入的数据不会让回合失败；**收到同步 bundle** 时在反序列化成写入输入之前先做半角化与丢弃，因此旧版本对端（或规则前的备份）仍带着的某一行不会让整个 revision 失败。也就是说读取路径与同步路径一致，只有交互式写入会报错。
 
 ### 命名端点预设
 
@@ -280,12 +299,14 @@ Copilot 的上下文相关请求标头；已保存的同名自定义 header 会�
 ## 5. IPC / 主机方法（提供商域）
 
 - `providers.list`
+- `providers.reorder`
 - `providers.get`
 - `providers.create`
 - `providers.update`
 - `providers.delete`
 - `providers.testConnection`
 - `providers.listModels`
+- `providers.lookupModel`
 - `providers.cacheModels`（内部 Electron-main 到主机持久桥）
 - `providers.refreshModels`
 - `providers.upsertUserModel`
@@ -329,6 +350,22 @@ Copilot 的上下文相关请求标头；已保存的同名自定义 header 会�
   存在即为真）、`hasOauth: boolean`、非敏感的 `oauthAccountLabel?: string`
   与可选的 `headers?: Record<string, string>`
 
+### `providers.reorder`
+- in: `{ id: string, targetId: string, placement: "before" | "after" }`
+- out: `{ ok: true }`
+- Atomically move the source relative to the target in the current host list.
+  A missing source/target or invalid placement returns `INVALID_PARAMS` without
+  writing. Moving to the current position is a successful no-op.
+- Persist ordered provider IDs in `kv` at `providers.order`. `providers.list`
+  applies that order before returning rows; absent metadata preserves creation
+  order. New providers follow saved rows in creation order, deleted IDs are
+  ignored, and disabled rows keep their relative position when filtered out.
+- This is a display preference, including for plugin-owned rows. Provider
+  configuration, credentials, enabled state, timestamps and the default model
+  remain unchanged. Plugin configuration write restrictions still apply.
+- Uses the existing `kv` extension boundary; no database migration or protocol
+  version bump. Older applications ignore this metadata.
+
 ### `providers.create` / `providers.update`
 - 在：提供商字段 + 可选的 `secretValue` + 可选的 `oauthAccountLabel`
   （合并进 `config_json.oauth`，传空字符串即清除）+ 可选的 `headers`
@@ -357,14 +394,29 @@ Copilot 的上下文相关请求标头；已保存的同名自定义 header 会�
   在 Electron main 中运行发现
 - 将 RPC 托管在：`{ providerId?: string }` 中；只读取 Rust 拥有的 `models`
   表
-- 对 `authKind: "oauth"` 行，Electron 主进程读取已认证的目录
-  （`models.getAvailable`，它已应用厂商自己的 `filterModels`，因此 Copilot
-  账户列出的是其订阅包含的模型），而不是调用 `/models`；返回的每个模型都
-  带着其线路 API 所隐含的 apiStyle。`openai-codex` 这类静态厂商使用已固定
-  的 pi-ai 目录（0.85.1 包含 `gpt-6-astra`）；models.dev 不会发明这些 ID。
+- 对 `authKind: "oauth"` 行，Electron 主进程读取已登录账户自己的模型列表
+  （见 `03-runtime/11-provider-model-system.md`），请求失败才回退到 pi-ai
+  的 `models.getAvailable`。返回的每个模型都带着其线路 API 所隐含的
+  apiStyle。`openai-codex` 调用 `GET {base}/codex/models`，因此 `gpt-6-luna`
+  这类账户 id 不需要等 pin 更新；models.dev 不会发明这些 ID。Copilot 仍只列出
+  账户已启用的模型。
 - 输出：`{ models: ModelCatalogItem[] }`；每个模型都带有 pi-resolved
   `reasoning` 功能和 `supportedThinkingLevels`。缓存的功能标签
   旧提供程序字段无法覆盖 pi 模型记录。
+
+### `providers.lookupModel`
+- 渲染器 IPC 入参：`{ modelId, baseUrl?, providerId?, vendorKey? }`
+- 输出：`{ info: ModelInfo | null }`
+- 只读取本地 models.dev 快照：先 `ensureLoaded` 再 `findModel`，不访问提供商网络，
+  也不调用主机 RPC。`vendorKey` 与 `baseUrl` 仅用于在重复 id 之间消歧归属的发布提供
+  商；`providerId` 会回显在返回记录上供设置界面使用。
+- 需要它是因为 `providers.listModels` 只描述已保存或已探测提供商的目录：手输的自定义
+  id 在提供商保存前没有别的通道取得其已发布限额。
+- 命中时按拾取模型的口径（`bindingFromModelInfo`）为这条绑定播种：已发布的上下文窗口、
+  最大输出 token 与思考等级，并标记 `contextWindowSource: "catalog"`；存储的 id 仍是
+  用户输入的那个（`bindingForCustomModelInfo`）。未命中（`null`）保持今天的行为：按
+  通用 128,000 / 8,192 与空思考等级播种（`bindingForCustomModel`）。行先落下再原地升级，
+  因此查询慢、失败或未发布时仍然只留一行可用记录，且不会覆盖期间发生的编辑或删除。
 
 ### `providers.cacheModels`（内部主机 RPC）
 - 在：`{ providerId, models: DiscoveredModelInput[] }`
@@ -387,8 +439,13 @@ Copilot 的上下文相关请求标头；已保存的同名自定义 header 会�
 2. `openai_compatible` / 本地网关需要绝对 `baseUrl`，除非预设表示可选
 3. `authKind=none` 禁止用于需要密钥的云预设
 4. headers key 不区分大小写，唯一
-5. headers key 不区分大小写且唯一，最多 32 条；禁止保留头与 CR/LF
-6. 强制实施 SecretValue 最大长度（例如 8KB）
+5. headers key 不区分大小写且唯一，最多 32 条；名称只允许字母数字与连字符；
+   值先由全角折成半角再修剪，最多 4096 字节，不得含 CR/LF，只能是可打印
+   Latin-1——U+00FF 以上的字符或控制字符会被拒绝，并指出该字符与字符下标
+6. 强制实施 SecretValue 最大长度（例如 8KB）；全角的值在写入与读取时都折成
+   半角，因为密钥最终会签进 HTTP 头。仍然不是 Latin-1 的密钥**不会**被拒绝：
+   有些认证方式并不把密钥放进请求头（查询参数、SigV4 签名），写入侧无从判断，
+   这类密钥仍在发请求时报错
 6. modelId 必须是非空的修剪字符串；允许 `/`、`.`、`:`、`-`
 7.旧客户端上的未知协议 => 提供程序显示为禁用并带有警告，而不是崩溃
 8. 旧版 `supportsReasoning`（如果存在）仍必须验证为布尔值，但
@@ -406,3 +463,70 @@ secret:provider:<providerId>:oauth
 两个引用相互独立，因此一行可以只有密钥、只有厂商账户，或两者兼有；参见
 [14-secrets-storage](14-secrets-storage.md) §10。未来的多重秘密提供商可能会
 继续添加后缀（`:client_secret` 等）。
+
+### 接口格式引导与原生搜索
+
+每个提供商保留一个服务入口。开启模型的 `nativeWebSearch` 不改写服务地址、
+接口格式、名称、凭据引用或其他模型。界面与运行时共用 `nativeWebSearchTransport`：
+仅匹配已确认的官方 HTTPS 来源和路径，且用户开启搜索时，才在请求阶段选择已有适配器。
+DeepSeek 官方根地址或 `/v1` 通过 `/anthropic/v1/messages` 搜索；xAI 和旧 OpenAI
+Chat Completions 配置使用同源 Responses。关闭搜索后恢复原配置的请求方式。
+原有 Responses、Codex、Anthropic 及其他明确选择的协议不变。
+不依据厂商名或模型名跳转；中转站、自定义端口、其他路径、含凭据或查询片段的地址不匹配。
+
+不增加 DeepSeek 搜索预设、第二个服务、切换接口操作、迁移或 IPC 字段。
+其他尚未集成的搜索格式会说明应用未适配，不代表厂商官网或其他 API 不支持。
+部分官方搜索需要独立的协议适配，详见搜索服务核查记录。
+
+#### 端点解析
+
+用户填写的 Base URL 会先被解析，再进行任何探测。解析是 `@pi-desktop/shared/provider-endpoint`
+中的一层纯逻辑，设置对话框与 Electron main 共用，因此「显示的地址」「探测的地址」「保存的
+地址」不会互相矛盾：
+
+- 裸主机名会补上 `https://`，仍限定在用户填写的来源内；含凭据、查询或片段的地址一律拒绝。
+- 粘贴的接口后缀（`/chat/completions`、`/responses`、`/messages`）既指明格式，也会从基础地址中
+  移除；`/models` 只表示粘贴的是发现地址。与所选格式冲突的后缀会原样保留，由用户决定，而不是
+  悄悄改写这一行。
+- 格式按以下顺序确定：用户显式选择、粘贴的接口后缀、精确匹配的已发布端点、已知主机、发布方的
+  `npm` 适配器，最后回落到 Chat Completions。模型 ID 不参与判断：同一网关用一条 Chat Completions
+  路由提供 `gpt-*`、`claude-*`、`gemini-*` 时，仍保持该路由。
+- 当格式来自端点推断时，自定义表单会在选择器旁显示「自动识别：…」。用户手动选择的格式（以及
+  命名预设自身的格式）此后始终优先。
+
+随后发现流程会按置信度顺序探测解析出的候选地址：最多四个、去重、且都限定在用户填写的来源内。
+第一个返回模型列表的候选胜出，其应答地址即表单显示并保存的 Base URL。整轮各候选共享 12 秒预算
+（而不是每个候选各自计时），并且串行执行，因为每次请求都携带用户的 API Key。该 Key 不会发送到
+其他来源，跨来源重定向会被拒绝而不是跟随。`/v1beta`、`/compatible-mode/v1` 等厂商专属路径来自
+端点注册表，不做无差别猜测，且只在用户只填了主机名时提供：填了具体路径就是该部署自己的答案，因此
+返回空的 `/api/v1` 会照实报告，而不会被换成注册表里的 `/api/paas/v4` 兄弟路径。唯一的通用附加路径
+是未知 OpenAI 兼容端点的 `/v1`。三种已发布的模型列表结构都会被读取——`data[].id`、Google 的
+`models[].name`，以及智谱 OpenAI Responses 端点返回的 `models[].slug`——因此有应答的端点不会被
+当成空列表。连接测试复用同一
+套请求构造，因此「模型列表加载成功」与「连接测试通过」描述的始终是同一个地址、认证头与格式。
+
+### 按哪个发布方读取元数据
+
+行自身没有指明发布方时，按端点能识别的发布方来读，顺序是：已发布基础地址完全匹配的目录记录、
+端点注册表中的已知主机、以及该主机在目录里恰好只有一个发布方时的这条记录。这样自定义行指向厂商
+的另一个接口路径时（例如智谱 OpenAI Responses 端点 `https://open.bigmodel.cn/api/v1`），不会对
+目录里已有完整描述的模型显示成通用的 128k / 8k / 纯文本默认值。
+
+完全识别不出发布方时（中转站、或目录不认识的主机），先由 app 自带 provider 的发布方回答：它们是一等
+presets 背后的厂商与网关，其记录描述的就是这个模型；中转商自己的标记描述的是它自己的部署。只有当这些
+发布方都没声明该 ID 时，候选才扩大到所有声明它的发布方 —— 否则只有中转站收录的 ID 会退化成通用的
+128k 纯文本行。在该候选池内按各家的共识取值：上下文与输出取下中位数；除工具能力外的各项能力，只在
+所有发布方都声明时才保留，因此只可能低估。工具能力按声明该能力的发布方的多数决：中转站列出的一个 ID
+可能被上百个发布方声明，某个并不描述该部署的中转商既不应替它下结论，也不应让整条记录作废；票数持平
+则不声明。仅仅是名字末段相同（`provider-a/foo` 与 `gateway/foo`）的两条不同路由不算同一模型，因此
+身份确实未知的 ID 仍然不做匹配。以这种方式借用的记录不声明推理的线上字段形状（那是部署的属性），而
+Anthropic Messages 行仍使用 Anthropic 自己的形状。模型 ID 不参与判断该读哪个发布方。
+
+查找针对的是行已经列出的 ID：服务返回的 ID 若自身记录是音频模型（TTS/ASR 同类），也会命中该记录。
+只有目录列表本身限定为文本 / Agent 模型，因为它决定一行「提供」哪些模型。
+
+元数据匹配可以跟随发布日期后缀：`mify/mimo-v2.5-pro-0731` 会借用 `mimo-v2.5-pro` 的发布记录，
+但目录中与该 ID 完全一致的记录仍然优先于这类别名。别名只影响元数据：已保存绑定的线上 ID 保持
+服务实际返回的原值。
+
+无效或带凭据的地址仍然不给建议，取消仍然不写入草稿。

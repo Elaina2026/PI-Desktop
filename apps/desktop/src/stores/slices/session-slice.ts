@@ -1,5 +1,4 @@
 import i18n from "i18next";
-import { prepareTranscriptAction } from "../runtime/transcript-action";
 import type {
   Mode,
   PlanProposal,
@@ -18,6 +17,10 @@ import {
   EMPTY_SESSION_WINDOW,
   sessionIsReusableEmpty,
 } from "../../lib/session-create";
+import {
+  pinnedSessionModelBinding,
+  sessionNeedsModelPin,
+} from "../../lib/session-model";
 import {
   retainSessionPane,
 } from "../../lib/session-panes";
@@ -40,6 +43,7 @@ import {
   durableCoversLiveSessionMessages,
   mergeLiveSessionMessages,
 } from "../../lib/session-transcript";
+import { sessionReadLooksEmpty } from "../../lib/session-transcript-read";
 import type {
   AppState,
   DraftSessionConfiguration,
@@ -68,6 +72,7 @@ export type SessionSliceDependencies = StoreAccess & {
   openPlanArtifact: (
     proposal: PlanProposal,
     openWorkPanelTabForSession: AppState["openWorkPanelTabForSession"],
+    pluginViews: AppState["pluginViews"],
   ) => void;
   rememberSessionCompactions: (
     sessionId: string,
@@ -196,7 +201,11 @@ export function createSessionSlice({
           ),
         }));
         if (checkpoint && activeProposal) {
-          openPlanArtifact(checkpoint, get().openWorkPanelTabForSession);
+          openPlanArtifact(
+            checkpoint,
+            get().openWorkPanelTabForSession,
+            get().pluginViews,
+          );
         }
         return activeProposal ? "pending" : "terminal";
       } catch {
@@ -233,6 +242,7 @@ export function createSessionSlice({
         );
       }
       set({ selectingSessionId: id, page: "chat" });
+      const outcomeAcknowledgement = get().acknowledgeSessionOutcome(id);
 
       const commitSelection = (
         messages: UiMessage[],
@@ -352,6 +362,32 @@ export function createSessionSlice({
 
         detail ??= await detailPromise;
         if (!runtime.navigationIntentIsCurrent(intent)) return;
+        if (detail.session && sessionReadLooksEmpty(detail.session)) {
+          // A window read that comes back empty for a session the sidebar
+          // counts as having history is not an empty conversation (#795). Ask
+          // once more, and if the transcript still reads empty keep whatever
+          // the user already has and say so, instead of committing nothing and
+          // leaving a blank pane behind.
+          const reread = await runtime.loadSessionDetail(id, {
+            messageLimit: 100,
+            contentLimit: 64 * 1024,
+          });
+          if (!runtime.navigationIntentIsCurrent(intent)) return;
+          if (reread.session && sessionReadLooksEmpty(reread.session)) {
+            const retained =
+              runtime.sessionTranscriptCache.get(id) ??
+              get().retainedTranscripts[id];
+            if (retained && retained.length > 0) {
+              commitSelection(retained, true);
+            } else {
+              get().showToast(i18n.t("chat.sessionTranscriptEmpty"), {
+                variant: "error",
+              });
+            }
+            return;
+          }
+          detail = reread;
+        }
         const historyWindow = detail.session
           ? {
               messageStart: detail.session.messageStart ?? 0,
@@ -386,8 +422,44 @@ export function createSessionSlice({
         }
         rememberSessionCompactions(id, detail.session);
         void get().restorePendingPlan(id);
-        void get().acknowledgeSessionOutcome(id);
+        const selected = get().sessions.find((session) => session.id === id);
+        if (
+          selected &&
+          sessionNeedsModelPin(selected) &&
+          get().pendingPlans[id]?.status !== "pending"
+        ) {
+          const pin = pinnedSessionModelBinding({
+            session: selected,
+            messages: selectedMessages,
+            settings: get().settings,
+            providers: get().providers,
+          });
+          if (pin.providerId && pin.modelId) {
+            set((state) => ({
+              sessions: state.sessions.map((session) =>
+                session.id === id
+                  ? applyOptimisticSessionConfiguration(session, pin)
+                  : session,
+              ),
+            }));
+            if (get().activeSessionId === id) {
+              void get().configureActiveSession({
+                mode: selected.mode,
+                providerId: pin.providerId,
+                modelId: pin.modelId,
+                thinkingLevel: selected.thinkingLevel,
+              });
+            } else {
+              void api.configureSession(id, {
+                mode: selected.mode,
+                providerId: pin.providerId,
+                modelId: pin.modelId,
+              });
+            }
+          }
+        }
       } finally {
+        await outcomeAcknowledgement;
         if (runtime.isCurrentSessionSelection(selection)) {
           runtime.clearSessionSelection(selection);
           set((state) =>
@@ -502,10 +574,11 @@ export function createSessionSlice({
 
     forkAssistantMessage: async (messageId) => {
       const intent = runtime.beginNavigationIntent();
-      const state = await prepareTranscriptAction({ get, set }, runtime, messageId);
-      if (!state || !runtime.navigationIntentIsCurrent(intent)) return;
+      // Fork needs only the anchor id: the host reads the canonical prefix.
+      // Hydrating the source here would overwrite its concurrently streaming tail.
+      const state = get();
       const sessionId = state.activeSessionId;
-      if (!sessionId || state.runningSessions[sessionId]) return;
+      if (!sessionId || state.selectingSessionId) return;
       const message = state.messages.find((candidate) => candidate.id === messageId);
       const source = state.sessions.find((session) => session.id === sessionId);
       if (!message || !source) return;

@@ -10,6 +10,10 @@
 
 /* ------------------------------------------------- catalog status footer */
 
+.model-config-page .model-default-panel {
+  gap: 12px;
+}
+
 /* models.dev is the enrichment source, so the page only reports its snapshot. */
 .model-catalog-status {
   display: flex;
@@ -156,16 +160,124 @@
   overflow-wrap: anywhere;
 }
 
-.provider-setup-host {
-  grid-column: 1 / -1;
+/*
+  The chosen service is a settled fact, not an open menu: its letter tile,
+  name and host on the field tone, with Change leading back to the chooser.
+*/
+.provider-service-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: var(--ds-field-height);
+  padding: 4px 6px 4px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--ds-tile);
+}
+
+.provider-service-chip .service-monogram {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-xs);
+  font-size: var(--text-xs);
+}
+
+.provider-service-chip-copy {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.provider-service-chip-name {
+  flex: none;
+  color: var(--ds-text-primary);
+  font-size: var(--text-md);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--leading-tight);
+}
+
+.provider-service-chip-host {
   min-width: 0;
   overflow: hidden;
   color: var(--ds-text-muted);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  line-height: var(--leading-relaxed);
+  line-height: var(--leading-tight);
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.provider-service-chip-change,
+.service-chooser-empty-action {
+  flex: none;
+  margin: 0;
+  padding: 0 8px;
+  min-height: 24px;
+  border: 0;
+  border-radius: var(--radius-2xs);
+  background: var(--ds-bg-chip);
+  color: var(--ds-text-secondary);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-normal);
+  cursor: pointer;
+}
+
+.provider-service-chip-change:hover:not(:disabled),
+.service-chooser-empty-action:hover:not(:disabled) {
+  background: var(--ds-bg-hover);
+  color: var(--ds-text-primary);
+}
+
+.provider-service-chip-change:focus-visible,
+.service-chooser-empty-action:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--ds-accent) 24%, transparent);
+}
+
+.provider-service-chip-change:disabled {
+  cursor: default;
+  color: var(--ds-text-faint);
+}
+
+.provider-setup-key {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* One quiet line under the key: connecting, connected, or why not. */
+.provider-connection-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--ds-text-muted);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-relaxed);
+  overflow-wrap: anywhere;
+}
+
+.provider-connection-status.is-ok {
+  color: var(--ds-text-secondary);
+}
+
+.provider-connection-status.is-ok svg {
+  flex: none;
+  color: var(--ds-success);
+}
+
+.provider-connection-status.is-error {
+  flex-wrap: wrap;
+  column-gap: 6px;
+  color: var(--ds-warning);
+}
+
+.provider-connection-status.is-error .provider-models-error-detail {
+  max-width: none;
 }
 
 .provider-service-anchor {
@@ -249,8 +361,12 @@
   color: var(--ds-text-faint);
 }
 
+/* A menu search row keeps its compact box. The input inherits the field
+   vocabulary's shared height as a minimum, so the row's own metric has to be
+   declared as a minimum too or the search would swallow the row. */
 .provider-service-search input {
   min-width: 0;
+  min-height: 26px;
   height: 26px;
   padding: 3px 0;
   border: 0;
@@ -476,6 +592,14 @@
 .provider-setup-header-error {
   margin: 0;
   color: var(--ds-warning);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-relaxed);
+}
+
+/* Quieter than the import error: folding is informational, not a refusal. */
+.provider-setup-header-note {
+  margin: 0;
+  color: var(--ds-text-muted);
   font-size: var(--text-2xs);
   line-height: var(--leading-relaxed);
 }
@@ -851,8 +975,61 @@
 }
 
 .provider-chosen-row {
+  position: relative;
   border-radius: var(--radius-3xs);
   background: var(--ds-tile);
+}
+
+.provider-chosen-row.is-dragging {
+  opacity: 0.5;
+}
+
+.provider-chosen-row[data-drop-placement]::after {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: var(--ds-accent);
+  pointer-events: none;
+  content: "";
+}
+
+.provider-chosen-row[data-drop-placement="before"]::after {
+  top: -2px;
+}
+
+.provider-chosen-row[data-drop-placement="after"]::after {
+  bottom: -2px;
+}
+
+.provider-chosen-reorder {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-2xs);
+  background: transparent;
+  color: var(--ds-text-muted);
+  cursor: grab;
+  user-select: none;
+}
+
+.provider-chosen-reorder:active {
+  cursor: grabbing;
+}
+
+.provider-chosen-reorder:hover:not(:disabled) {
+  background: var(--ds-bg-hover);
+  color: var(--ds-text-primary);
+}
+
+.provider-chosen-reorder:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .provider-chosen-row-head {
@@ -914,6 +1091,8 @@
 }
 
 .provider-chosen-advanced-toggle:focus-visible,
+.provider-chosen-reorder:focus-visible,
+.model-provider-row:focus-visible,
 .provider-chosen-remove:focus-visible {
   outline: 2px solid var(--ds-accent-soft);
   outline-offset: 1px;
@@ -1050,8 +1229,11 @@
   margin-left: auto;
 }
 
+/* The row body keeps its own compact field metric (28px inputs and selects), so
+   the default-thinking dropdown takes that height instead of a chip-sized box
+   that would read as a different control than the fields around it. */
 .provider-chosen-thinking-select .settings-menu-select-trigger {
-  height: 24px;
+  height: 28px;
   padding: 0 8px;
   border-radius: var(--radius-sm);
   font-size: var(--text-2xs);
@@ -1350,6 +1532,9 @@
 
 .model-default-search input {
   min-width: 0;
+  /* Same compact metric as the service search above: the default-model menu's
+     search row must not inherit the field vocabulary's shared height. */
+  min-height: 26px;
   height: 26px;
   padding: 3px 0;
   border: 0;
@@ -1517,6 +1702,7 @@
 }
 
 .model-provider-row {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1529,12 +1715,37 @@
   background: var(--ds-tile);
 }
 
-.model-provider-row.is-disabled {
+.model-provider-row:hover,
+.model-provider-row.menu-open {
+  background: var(--ds-tile-hover);
+}
+
+/* Dim the identity of a disabled row but keep its switch fully legible. */
+.model-provider-row.is-disabled > .service-monogram,
+.model-provider-row.is-disabled > .model-provider-row-copy {
   opacity: 0.55;
+}
+
+/* A quiet letter tile stands in for a logo; services carry no brand colour. */
+.service-monogram {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--ds-raised);
+  box-shadow: var(--ds-raised-shadow);
+  color: var(--ds-text-secondary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--leading-tight);
 }
 
 .model-provider-row-copy {
   display: flex;
+  flex: 1 1 0;
   flex-direction: column;
   gap: 3px;
   min-width: 0;
@@ -1552,6 +1763,22 @@
   font-size: var(--text-md);
   font-weight: var(--font-weight-medium);
   line-height: var(--leading-tight);
+}
+
+.model-provider-row-account {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ds-text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-provider-row-testing {
+  color: var(--ds-text-muted);
+  font-size: var(--text-3xs);
+  line-height: var(--leading-normal);
 }
 
 .model-provider-row-meta {
@@ -1574,14 +1801,35 @@
   flex: none;
 }
 
-/* Delegate auth to the plugin, so the user supplies only the key. */
+/* The overflow menu stays quiet until the row is engaged, as on capability
+   rows; the switch stays visible because enablement is read at a glance. */
+.model-provider-row-actions .agent-capability-menu-wrap {
+  opacity: 0;
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-out);
+}
+
+.model-provider-row:hover .model-provider-row-actions .agent-capability-menu-wrap,
+.model-provider-row:focus-within .model-provider-row-actions .agent-capability-menu-wrap,
+.model-provider-row.menu-open .model-provider-row-actions .agent-capability-menu-wrap {
+  opacity: 1;
+}
+
+/* Without hover there is nothing to reveal it with. */
+@media (hover: none) {
+  .model-provider-row-actions .agent-capability-menu-wrap {
+    opacity: 1;
+  }
+}
+
+/* A plugin-declared row lets the plugin provide its fields; a key entry belongs
+   to the plugin, so the user supplies only the key. It lines up under the name,
+   past the monogram, with spacing rather than a rule setting it apart (D297). */
 .model-provider-key-entry {
   display: flex;
   align-items: flex-end;
   gap: 8px;
   flex-basis: 100%;
-  padding-top: 10px;
-  border-top: 1px solid var(--ds-border-subtle);
+  padding-left: 40px;
 }
 
 .model-provider-key-entry > label {
@@ -1594,30 +1842,6 @@
   align-items: center;
   gap: 6px;
   flex: none;
-}
-
-.model-provider-icon-btn.is-testing {
-  color: var(--ds-text-primary);
-}
-
-.model-provider-icon-btn.is-danger:hover {
-  color: var(--ds-warning);
-}
-
-.model-provider-delete-confirm {
-  padding: 3px 9px;
-  border-radius: var(--radius-full);
-  background: color-mix(in oklab, var(--ds-warning) 14%, transparent);
-  color: var(--ds-warning);
-  font-size: var(--text-3xs);
-  font-weight: var(--font-weight-medium);
-  line-height: var(--leading-normal);
-  cursor: pointer;
-}
-
-.model-provider-delete-confirm:focus-visible {
-  outline: 2px solid var(--ds-accent-soft);
-  outline-offset: 1px;
 }
 
 /* ------------------------------------------------------------ responsive */
@@ -1680,15 +1904,6 @@
     max-width: none;
   }
 
-  .model-provider-row {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .model-provider-row-actions {
-    align-self: flex-end;
-  }
-
   .provider-chosen-thinking-chips {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -1696,7 +1911,30 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .model-default-option {
+  .model-default-option,
+  .model-provider-row-actions .agent-capability-menu-wrap {
     transition: none;
   }
+}
+
+/* Provider cards move with the pointer; surrounding cards preview the open slot.
+   A card that opens an editor points instead: a press opens it, a drag moves it. */
+.model-provider-row {
+  cursor: grab;
+  touch-action: none;
+  transition:
+    transform 160ms ease,
+    background var(--motion-duration-fast) var(--motion-ease-out);
+}
+.model-provider-row.is-openable { cursor: pointer; }
+.model-provider-row.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+  opacity: 1;
+  box-shadow: var(--ds-shadow-dialog);
+  transition: none;
+}
+.model-provider-list[aria-busy="true"] .model-provider-row { cursor: default; transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  .model-provider-row { transition: none; }
 }

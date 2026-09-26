@@ -253,7 +253,7 @@ token rather than introducing a decorative palette:
 | State | Semantic color | Shape / motion | Meaning |
 |---|---|---|---|
 | Selected | neutral accent | static outlined ring | current conversation |
-| In progress | warning orange | filled dot with a restrained breathing pulse | agent is producing or executing |
+| In progress | warning orange | filled dot; two breathing cycles, then steady | agent is producing or executing |
 | Completed | success green | check mark | latest unread task turn completed |
 | Failed | error red | circled alert mark | latest unread task turn failed |
 
@@ -262,9 +262,17 @@ turn clears the prior terminal outcome; abort clears the live indicator without
 creating a failure. Opening a conversation acknowledges its unread terminal
 outcome: the terminal mark clears immediately and the matching durable task
 notification is marked read so the mark cannot return after a notification
-refresh or app restart. Outcomes already marked read never produce a terminal
-mark. Reduced-motion mode disables the breathing animation while retaining its
-orange fill and localized accessible name.
+refresh or app restart. Restoring/focusing the app with that conversation still
+visible in the chat applies the same acknowledgement without requiring a
+session switch; other sessions remain unread. Outcomes already marked read
+never produce a terminal mark. Marking the row read, marking all rows read, or
+clearing the inbox also dismisses any matching task-native banner; a late event
+for that durable id cannot restore the mark, row, or banner. Reduced-motion mode
+disables the breathing animation while retaining its orange fill and localized
+accessible name. Running dots in task rows and related-session hover cards
+animate for two 1.6-second cycles when mounted or entering the running state,
+then remain steady until the status changes. They must not continuously
+submit frames while the rest of the window is idle.
 
 ### 4.6 Tailwind CSS variable stub
 
@@ -346,12 +354,13 @@ Implementation note: Tailwind v4 supports CSS-first configuration. The `@theme` 
 
 The UI stack is user-overridable from Settings → Basics → Appearance
 (ADR 0083). The Font row persists a CSS stack in `AppSettings.fontFamily`;
-an absent or empty value keeps the token stack above. Bundled open-licensed
-families (Geist, Inter, Noto Sans SC, LXGW WenKai — SIL OFL 1.1) ship locally
-under `apps/desktop/src/assets/fonts/` with license texts, and installed
-system families are enumerated by Electron main. Every custom stack appends a
-CJK fallback tier so Chinese text stays readable. The mono stack
-(`--font-mono`) is not user-configurable.
+an absent or empty value keeps the token stack above. The app ships no font
+files (ADR 0298): the picker offers the System default and the installed
+system families enumerated by Electron main, and a stack saved while a
+removed family existed still appears under Saved. Every generated stack ends
+in the system-only CJK fallback tier (`PingFang SC`, `Hiragino Sans GB`,
+`Microsoft YaHei`, `sans-serif`) so Chinese text stays readable. The mono
+stack (`--font-mono`) is not user-configurable.
 
 The Font size row (D343 / ADR 0180) persists an optional multiplier in
 `AppSettings.fontScale` (default 1, range 0.8–1.5). The renderer sets
@@ -497,9 +506,9 @@ same 6px contract and scroll-reveal mark. This keeps first-party surfaces such
 as the Files view aligned with the host renderer; the external page loaded
 inside the Browser guest remains page-owned and keeps its own scrollbar style.
 
-The expanded sidebar is a fixed 275px column. Collapse/open changes only whether
-the column is present; the historical resize handle is hidden and legacy width
-preferences are not persisted.
+The expanded sidebar is user-resizable from 240px to 520px (default 275px).
+Dragging the right-edge handle below 160px collapses the column. Collapse/open
+preserves the preferred expanded width.
 
 The profile menu is `280px` wide, opens `8px` above the footer, and uses the
 standard opaque elevated-menu surface, subtle border, and dialog shadow. Its
@@ -660,7 +669,7 @@ and give plain tool blocks a fill in light only.
 | Selection (theme, language, level) | Deeper tint or raised pill plus the existing check mark; no selected border |
 | Floating layers (menus, popovers, dialogs, tooltips, toasts, hover cards) | `0 0 0 0.5px border-default` + shadow on the container; no rules inside |
 | Focus rings | accent tint, 2px box-shadow |
-| Control affordances (switch off-ring, resize handles) | Allowed; they are the control, not a partition. The work-panel divider paints a 50% accent tint on hover and while dragging (roughly 5.3:1 dark, 3.3:1 light); the solid accent is reserved for keyboard focus |
+| Control affordances (switch off-ring, resize handles) | Allowed; they are the control, not a partition. The sidebar and work-panel dividers paint a 32px centered grip on direct hover/focus, not a full-height rail; keyboard focus and an in-progress drag use the solid accent |
 
 ## 7. Iconography
 
@@ -922,13 +931,18 @@ The composer renders only controls connected to the active pi session:
   trigger shows a Bot icon, the current model, and reasoning level; `off` omits
   the level text. Its single `role="menu"`
   popover opens above the trigger at `bottom: calc(100% + 8px)` and starts with
-  exactly two current-value entries. Each entry replaces the menu contents
-  in-place with a back row and its submenu. The Model submenu contains search
-  plus sticky provider groups. Each model row begins at one tab stop beneath
-  its provider heading, making the provider → model hierarchy legible without
-  altering the model label. The Reasoning submenu contains only the selected
-  provider's real `supportedThinkingLevels` with a selected-row check. Selecting
-  either value returns to the root without dismissing the popover.
+  exactly two current-value entries. When the menu lists more than one
+  level (`omit` plus the binding's enabled canonical levels), a drag slider
+  sits directly beneath the Reasoning level entry; slider and tick commits
+  apply without leaving the root. Tick labels are not tab stops — the range
+  input is the accessible control. Each entry replaces
+  the menu contents in-place with a back row and its submenu. The Model
+  submenu contains search plus sticky provider groups. Each model row begins
+  at one tab stop beneath its provider heading, making the provider → model
+  hierarchy legible without altering the model label. The Reasoning submenu
+  lists `omit` then the enabled levels as radio rows with a selected-row
+  check; selecting from the list returns to the root without dismissing the
+  popover.
 - While the active session is running, the draft and runtime controls stay
   editable as next-turn choices; only Send is disabled. Host configuration
   remains pinned for the in-flight turn and the latest queued choice is
@@ -1023,6 +1037,13 @@ Rules:
   renderer layer, so no `z-index` in the table above can raise a popover over
   them. A body-portaled popover clamps to the conversation pane, which ends
   where the work panel begins, instead of to the viewport.
+- A route surface holds no stacking context once its entrance animation
+  finishes, so an overlay authored inside a route page — a modal, a sheet, or
+  their scrims — covers the titlebar band without any `z-index` juggling. On
+  Windows/Linux the renderer-drawn window controls stay above renderer overlays.
+  Route overlays therefore sit on `z-dialog` (40): a leaf popup (60) or a toast
+  (50) a dialog raises — portaled to `document.body`, so in that same stacking
+  context — keeps painting above the dialog's scrim and keeps taking clicks.
 
 ## 10. Layout shell metrics
 
@@ -1033,7 +1054,7 @@ Codex parity decisions (D034/D070) supersede any older value here.
 |---|---|---|
 | Titlebar row height | 46px | Codex toolbar rhythm (D034); traffic lights {x:16,y:16} |
 | Sidebar width (collapsed) | 48px | Icon-only rail |
-| Sidebar width (expanded) | 275px | Fixed column; collapse/open does not resize it |
+| Sidebar width (expanded) | 240–520px (default 275px) | Right-edge handle; drag below 160px collapses (ADR 0141 / ADR 0290) |
 | Main pane minimum readable width | 450px | The MainChat hard floor; the sidebar yields before it is breached (ADR 0238) |
 | Work panel width (closed) | 0px | Hidden by default |
 | Work panel width (open) | `≥244px` (new-profile default 360px), capped by `client width - 450px - expanded sidebar` with no fixed pixel cap | the panel is an in-flow column whose width is taken from the existing client area; the renderer owns its divider (ADR 0033 / ADR 0151 / ADR 0238); saved widths remain unchanged |
@@ -1194,6 +1215,86 @@ Full component contract and usage rules: [08-component-spec.md §17](08-componen
 | Motion | enter 200ms ease-out slide-down/fade, exit 150ms ease-in fade; reduced-motion → near-zero duration (not `none`, removal listens for `animationend`) |
 | Z-index | z-toast (50) |
 
+### 11.9 SettingsToggle
+
+Implementation: `components/ui.tsx → SettingsToggle`.
+
+| Property | Value |
+|---|---|
+| Size | 32×20, thumb 16px |
+| CSS class | `.settings-toggle` / `.settings-toggle.on` |
+| Role | `role="switch"` with `aria-checked` |
+| Variants | default, `busy` (`.is-busy`, `aria-busy`, disabled) |
+| Background | neutral accent when on (not green); theme-specific override in `theme-overrides.css` |
+
+Every boolean on/off control in Settings and editor sheets **must** use
+`SettingsToggle`. Inline `<button role="switch">` with manual class
+assembly is prohibited.
+
+### 11.10 SegmentedControl
+
+Implementation: `components/ui.tsx → SegmentedControl<T>`.
+
+| Property | Value |
+|---|---|
+| CSS class | `.settings-segment` / `.settings-segment-item.active` |
+| Roles | `radiogroup` (default), `group`, or `tablist` |
+| Item roles | `radio` / none / `tab` — derived from container role |
+| Generic | `<T extends string>` for type-safe value/onChange |
+| Options | `readonly { value: T; label: ReactNode; id?: string; controls?: string }[]` — label accepts JSX (e.g. count badge) |
+
+Tablist callers supply stable option `id` and `controls` values to connect
+each tab to its panel through `aria-controls` and the panel's
+`aria-labelledby`. These identifiers must not depend on translated labels.
+Import and Remote Hosts preserve these links when switching tabs or language.
+
+Every multi-option selector rendered as a row of equal buttons **must** use
+`SegmentedControl`. Inline `<div className="settings-segment">` with manual
+button loops is prohibited.
+
+### 11.11 Checkbox
+
+Implementation: `components/ui.tsx → Checkbox`.
+
+| Property | Value |
+|---|---|
+| CSS class | `.ui-checkbox` |
+| Anatomy | `<label> → <input type="checkbox"> + <span>{label}</span>` |
+| Props | Extends `InputHTMLAttributes` (minus `type`) + `label: ReactNode` |
+
+Every standalone labeled checkbox **must** use `Checkbox`. Inline
+`<label><input type="checkbox"/>…</label>` is prohibited.
+
+### 11.11b CheckboxGroup
+
+Implementation: `components/ui.tsx → CheckboxGroup<T>`.
+
+| Property | Value |
+|---|---|
+| CSS class | `.ui-checkbox-group` (container), items use `Checkbox` |
+| Generic | `<T extends string>` for type-safe values/onChange |
+| Props | `values: T[]`, `onChange(values: T[])`, `options: { value: T; label: ReactNode }[]`, `label`, `disabled`, `minSelected` |
+| Minimum selection | `minSelected` (default 0) prevents unchecking below a threshold |
+
+Use `CheckboxGroup` when a set of options maps to an array of selected
+values (e.g. voice languages). For independent boolean fields with
+heterogeneous state shapes, use individual `Checkbox` components.
+
+### 11.12 SettingsMenuSelect
+
+Implementation: `components/settings/SettingsMenuSelect.tsx`.
+
+| Property | Value |
+|---|---|
+| Trigger | Button showing the current label, `IconChevronDown` trailing |
+| Popup | `AnchoredMenu` — portaled, keyboard-navigable, current-value checkmark |
+| Props | `value`, `options: { id, label, disabled? }[]`, `onChange(id)`, `label`, `disabled`, `busy`, `fullWidth` |
+
+Every dropdown / option-list in Settings **must** use `SettingsMenuSelect`
+instead of the native `Select` (`<select>`) component. Native `Select`
+is reserved for non-Settings contexts where OS-level rendering is acceptable.
+
+
 ## 12. State patterns
 
 ### 12.1 Interactive states
@@ -1252,6 +1353,8 @@ Full component contract and usage rules: [08-component-spec.md §17](08-componen
 - Use Lucide/Heroicons SVG icons — never emoji as UI affordances
 - Use compact padding and tight spacing — developer density, not consumer spacing
 - First launch follows the system theme (see §Theme switching); dark is the primary design target
+- Use shared primitives from `components/ui.tsx` (`Button`, `Badge`, `SettingsToggle`, `SegmentedControl`, `Checkbox`, `Input`, `Textarea`, `Select`, `Field`, `Panel`, `HelpIcon`, `TooltipButton`) — never reimplement them inline
+- Use `SettingsMenuSelect` for all Settings dropdowns — never native `<select>` inside Settings
 
 ### Don't
 
@@ -1265,6 +1368,8 @@ Full component contract and usage rules: [08-component-spec.md §17](08-componen
 - Don't apply rounded corners to full-width panels (sidebar, topbar)
 - Don't use `border-radius: 0` on buttons and inputs (use `radius-sm` minimum)
 - Don't show raw API keys in any UI surface
+- Don't write inline `<button role="switch">`, `<div className="settings-segment">`, or `<label><input type="checkbox">` — use the corresponding shared component
+- Don't use native `Select` (`<select>`) in Settings pages — use `SettingsMenuSelect`
 
 ## 15. Acceptance criteria
 
@@ -1293,7 +1398,7 @@ Full component contract and usage rules: [08-component-spec.md §17](08-componen
 - Floating composer plate: Codex elevated-primary (`#212121f5` / `color-mix(gray-800 96%, transparent)`) with standard elevation-prominent (`0 0 0 .5px` stroke + `0 3px 7.5px #0000000a` + `0 0 20px #0000000d`); no heavier night-only lift
 - Light workspace chips capsule: elevated gray `#f4f4f4` (not pure white-on-white)
 - Combined workspace chips: elevated translucent plate over main, not flat main gray
-- Stage Manager: host re-asserts min bounds while collapsed (permanent watchdog)
+- Stage Manager (macOS only): host re-asserts min bounds while collapsed (permanent watchdog). The watchdog does not run on Windows/Linux, so no platform re-layers its own window unprompted (D447)
 
 ## Destination pages
 
@@ -1301,14 +1406,27 @@ Full component contract and usage rules: [08-component-spec.md §17](08-componen
   is embedded in Settings with no duplicate page title or outer page padding;
   the earlier standalone Projects destination and card grid (D042) are
   superseded by D133. Per D267 the destination is composed exactly like the
-  agent capability pages (D257): a quiet description-only intro line, one
-  toolbar (sort segment, search, primary action), and one elevated panel whose
-  Pinned / All projects / Archived groups are in-panel header strips carrying
-  the only counts on the page. It has no hero block, no decorative gradient,
-  and no page-level counter run
+  agent capability pages (D257): one toolbar (sort segment, search, primary
+  action) and one index whose
+  Pinned / All projects / Archived groups are plain section header lines
+  carrying the only counts on the page. Per D455 it stays one column with no
+  side-by-side
+  pane, and the index is an inset grouped list in the iOS sense: each row reads
+  left to right as identity (glyph, name, status tag, path) and right to left as
+  detail (session count, last active, disclosure indicator), and the selected
+  row is the header of the card that opens under it — so the detail repeats no
+  name, path, or tag. It has no hero block, no decorative gradient, and no
+  page-level counter run
 - **Settings**: full-page Codex shell per D063/D090/D133/D166 (275px compact
   navigation rail sharing the main sidebar material, elevated content cards, Back to app);
   per D092, the content cards fill the pane width available from the current
   window instead of retaining D070's fixed 720px cap — the earlier in-shell
   200px rail and broad grouped directory are superseded
+- **Import**: four kinds (sessions / models / skills / MCP) behind one
+  page-scale segmented switcher, composed like the agent capability pages: a
+  quiet pre-scan next-action state per kind, one toolbar per kind (select-all
+  with both counts, the kind's own option, re-scan, import selected), and one
+  list whose group headers are quiet label lines and whose candidates are
+  individual tiles. No per-kind scan card, no tinted group band, no second
+  copy of the settings row scaffold
 - Light destination cards use white elevated plates (not flat gray fills)

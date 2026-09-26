@@ -38,7 +38,12 @@ function handle(msg) {
     send({
       jsonrpc: "2.0",
       id: msg.id,
-      result: { tools: [{ name: "lookup", description: "Look something up" }, { name: "ping" }] },
+      result: {
+        tools: [{ name: "lookup", description: "Look something up" }, { name: "ping" }],
+        // A server that keeps handing back the same cursor can never be listed
+        // to its last page, so the client has to refuse it.
+        ...(process.env.STUB_REPEAT_CURSOR ? { nextCursor: "more" } : {}),
+      },
     });
     return;
   }
@@ -106,6 +111,82 @@ test("a global server contributes mcp_-prefixed tools to any session", async (t)
 
   // A session with no project at all still sees a global server.
   assert.equal((await rt.toolsForProject(null)).length, 2);
+});
+
+test("refreshing HTTP MCP status detects a server that went offline", async (t) => {
+  let online = true;
+  let pings = 0;
+  let connected = false;
+  let finishCall;
+  let failCall;
+  let markCallStarted;
+  const callStarted = new Promise((resolve) => { markCallStarted = resolve; });
+  const client = {
+    isConnected: () => connected,
+    getTools: () => [{ name: "lookup" }],
+    connect: async () => { connected = true; return [{ name: "lookup" }]; },
+    callTool: () => new Promise((resolve, reject) => {
+      finishCall = resolve;
+      failCall = reject;
+      markCallStarted();
+    }),
+    ping: async () => {
+      pings += 1;
+      if (!online) throw new Error("server offline");
+    },
+    close: () => {
+      connected = false;
+      failCall?.(new Error("tool call interrupted by close"));
+    },
+  };
+  const rt = new UserMcpRuntime({ createClient: () => client });
+  t.after(() => rt.disposeAll());
+  rt.setRecords([stubRecord("/unused", { transport: "http", command: undefined, args: undefined, url: "http://127.0.0.1:9999/mcp" })]);
+
+  await rt.toolsForProject("/repo");
+  assert.equal(rt.statusFor("stub").state, "ready");
+  assert.equal((await rt.refreshStatuses())[0].state, "ready");
+  const pendingCall = rt.callTool("mcp_stub_lookup", {}, "/repo");
+  await callStarted;
+  online = false;
+  const statuses = await rt.refreshStatuses();
+  assert.equal(statuses[0].state, "failed");
+  assert.equal(rt.statusFor("stub").state, "failed");
+  assert.equal(connected, true, "a settings probe must not close an in-flight call");
+  finishCall({ content: [{ type: "text", text: "completed" }] });
+  assert.deepEqual(await pendingCall, { content: [{ type: "text", text: "completed" }] });
+  assert.equal(pings, 2);
+});
+test("stopping one session cancels only its active MCP call", async (t) => {
+  const started = new Map();
+  const finish = new Map();
+  const client = {
+    isConnected: () => true,
+    getTools: () => [{ name: "lookup" }],
+    close: () => {},
+    connect: async () => [{ name: "lookup" }],
+    callTool: async (_name, args, signal) => new Promise((resolve, reject) => {
+      finish.set(args.id, resolve);
+      signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      started.get(args.id)();
+    }),
+  };
+  const rt = new UserMcpRuntime({ createClient: () => client });
+  t.after(() => rt.disposeAll());
+  rt.setRecords([stubRecord("/unused")]);
+  await rt.toolsForProject("/repo");
+
+  const firstStarted = new Promise((resolve) => started.set("first", resolve));
+  const first = rt.callTool("mcp_stub_lookup", { id: "first" }, "/repo", "session-a");
+  await firstStarted;
+  const secondStarted = new Promise((resolve) => started.set("second", resolve));
+  const second = rt.callTool("mcp_stub_lookup", { id: "second" }, "/repo", "session-b");
+  await secondStarted;
+
+  rt.cancelSessionCalls("session-a");
+  await assert.rejects(first, /aborted/);
+  finish.get("second")("finished");
+  assert.equal(await second, "finished");
 });
 
 test("a project-scoped server is invisible outside its projects", async (t) => {
@@ -445,4 +526,22 @@ test("configurationChanged separates what a server is from who may use it", () =
   assert.equal(configurationChanged(base, { ...base, enabled: false }), true);
   // Re-enabling does not invalidate anything: nothing was running.
   assert.equal(configurationChanged({ ...base, enabled: false }, base), false);
+});
+
+test("a server whose catalog cannot be listed lands as failed with the reason", async (t) => {
+  const dir = stubDir();
+  const rt = runtime(t);
+  rt.setRecords([stubRecord(dir, { env: { STUB_REPEAT_CURSOR: "1" } })]);
+
+  // The guard trips inside the handshake, so the server contributes nothing
+  // rather than a prefix of its catalog.
+  assert.deepEqual(await rt.toolsForProject("/repo"), []);
+  const status = rt.statusFor("stub");
+  assert.equal(status.state, "failed");
+  assert.equal(status.toolCount, 0);
+  assert.match(status.message, /repeated a tools\/list cursor/);
+
+  // A server that already failed this run is not handshaken again per session.
+  assert.deepEqual(await rt.toolsForProject("/repo"), []);
+  assert.equal(rt.statusFor("stub").state, "failed");
 });

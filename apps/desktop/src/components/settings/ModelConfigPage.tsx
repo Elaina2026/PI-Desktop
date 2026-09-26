@@ -1,47 +1,47 @@
 /**
- * Model configuration tab: default model, configured AI services, OAuth
- * vendor accounts, and the models.dev enrichment snapshot status.
+ * Model configuration tab: default model, the AI service list, and the
+ * models.dev enrichment snapshot status.
+ *
+ * API services, plugin-declared services and vendor subscription accounts
+ * share one list (D625). An account row still lives and dies through the
+ * vendor-account editor and `deleteOauthAccount`, never the provider CRUD.
  *
  * The default picker lists each configured model, while provider rows use
  * `models[0]` as the provider's quick default. Editing the default provider
- * re-syncs `settings.defaultModelId` when that first model changes.
+ * preserves `settings.defaultModelId` while that model remains configured, and
+ * adding a provider claims the chat or image default only while none resolves.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  OAUTH_AUTH_KIND,
-  modelIdsMatch,
+  type ImageGenerationBinding,
   type ModelBinding,
   type ProviderPublic,
 } from "@pi-desktop/shared";
 import { useAppStore } from "../../stores/app-store";
 import { api } from "../../lib/api";
-import { Badge, Button, Field, Input, TooltipButton, cx } from "../ui";
+import { providerDisplayName, providerSearchText } from "../../lib/provider-display";
+import { Button, Input, cx } from "../ui";
 import {
   IconCheck,
   IconChevronDown,
   IconConfig,
-  IconCopy,
-  IconKey,
-  IconPencil,
-  IconPlug,
   IconPlus,
   IconServer,
   IconSearch,
-  IconTrash,
 } from "../icons";
 import { AnchoredMenu } from "./AnchoredMenu";
-import {
-  defaultModelIdOf,
-  defaultModelOptions,
-  displayedDefaultModelId,
-} from "./default-model";
+import { providerServesChatModels } from "./default-model";
+import { planImageGenerationDefaults } from "./image-generation-default";
 import { copyProviderConfiguration, type ProviderCopyDraft } from "./provider-copy";
+import { ImageGenerationModelRow } from "./ImageGenerationModelRow";
+import { OAuthLoginDialog } from "./OAuthLoginDialog";
 import { ProviderSetupDialog } from "./ProviderSetupDialog";
-import { VendorAccountsSection } from "./VendorAccountsSection";
 import { renderVendorLogo } from "../ProviderLogo";
-
-const DELETE_CONFIRM_MS = 3000;
+import { ServiceList } from "./ServiceList";
+import { serviceRowKind } from "./service-row-status";
+import { useVendorAccounts } from "./useVendorAccounts";
+import { VendorAccountDialog, type VendorAccountForm } from "./VendorAccountDialog";
 
 type CatalogStatus = {
   loaded: boolean;
@@ -53,14 +53,49 @@ type CatalogStatus = {
   lastError?: string;
 };
 
-/** Host part of a base URL, or an em dash when nothing is configured. */
-function hostFromBaseUrl(baseUrl?: string | null): string {
-  if (!baseUrl) return "—";
-  try {
-    return new URL(baseUrl).host || baseUrl;
-  } catch {
-    return baseUrl.replace(/^https?:\/\//, "").split("/")[0] || baseUrl;
+const sameWireId = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();
+
+/** Image candidates and chat choices are keyed by complete provider + wire id. */
+function imageCandidates(
+  candidates: readonly ImageGenerationBinding[] | null | undefined,
+  active: ImageGenerationBinding | null | undefined,
+): ImageGenerationBinding[] {
+  const source = candidates === undefined ? (active ? [active] : []) : candidates ?? [];
+  const result: ImageGenerationBinding[] = [];
+  for (const entry of source) {
+    if (!result.some((other) =>
+      other.providerId === entry.providerId && sameWireId(other.modelId, entry.modelId)
+    )) result.push(entry);
   }
+  if (active && !result.some((entry) =>
+    entry.providerId === active.providerId && sameWireId(entry.modelId, active.modelId)
+  )) result.push(active);
+  return result;
+}
+
+function isImageCandidate(candidates: readonly ImageGenerationBinding[], providerId: string, modelId: string) {
+  return candidates.some((entry) => entry.providerId === providerId && sameWireId(entry.modelId, modelId));
+}
+
+function chatModelOptions(providers: readonly ProviderPublic[], imageModels: readonly ImageGenerationBinding[]) {
+  return providers.flatMap((provider) => {
+    const ids = provider.models?.length
+      ? provider.models.map((model) => model.id)
+      : [provider.defaultModelId ?? ""];
+    return ids.filter((id) => !!id.trim() && !isImageCandidate(imageModels, provider.id, id))
+      .map((modelId) => ({ provider, modelId }));
+  });
+}
+
+
+function displayedChatModelId(
+  provider: ProviderPublic,
+  selected: string | undefined,
+  imageModels: readonly ImageGenerationBinding[],
+) {
+  const configured = chatModelOptions([provider], imageModels).map(({ modelId }) => modelId);
+  // Never display a different configured model in place of the saved wire ID.
+  return selected?.trim() || configured[0];
 }
 
 export function ModelConfigPage() {
@@ -77,24 +112,22 @@ export function ModelConfigPage() {
   const [defaultModelQuery, setDefaultModelQuery] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
+  const [changingImageModel, setChangingImageModel] = useState(false);
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
   const [catalogStatus, setCatalogStatus] = useState<CatalogStatus | null>(null);
-  // Two-step delete: the first click arms the row, the second removes it.
-  // Two-step delete: the first click arms the row, the second removes it.
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  // Inline API-key entry for a plugin-declared row. The plugin owns the
-  // provider's fields, so the user supplies only the credential it asks for.
-  const [keyFor, setKeyFor] = useState<string | null>(null);
-  const [keyValue, setKeyValue] = useState("");
-  const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (!confirmDeleteId) return;
-    confirmTimer.current = setTimeout(() => setConfirmDeleteId(null), DELETE_CONFIRM_MS);
-    return () => {
-      if (confirmTimer.current) clearTimeout(confirmTimer.current);
-    };
-  }, [confirmDeleteId]);
+  const {
+    vendors,
+    accountFor,
+    login,
+    busyAccountId,
+    savingAccount,
+    startLogin,
+    finishLogin,
+    closeLogin,
+    removeAccount,
+    saveAccount,
+  } = useVendorAccounts();
+  const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -108,24 +141,23 @@ export function ModelConfigPage() {
     })();
   }, []);
 
-  const providerReady = (provider: ProviderPublic) =>
-    provider.enabled &&
-    !!defaultModelIdOf(provider) &&
-    (provider.hasSecret || provider.hasOauth || provider.authKind === "none");
-
-  const aiProviders = useMemo(
-    () => providers.filter((provider) => provider.authKind !== OAUTH_AUTH_KIND),
-    [providers],
+  const imageGenerationCandidates = useMemo(
+    () => imageCandidates(settings?.imageGenerationModels, settings?.imageGeneration),
+    [settings?.imageGenerationModels, settings?.imageGeneration],
   );
+  const providerReady = (provider: ProviderPublic) =>
+    providerServesChatModels(provider, imageGenerationCandidates);
+
   const readyProviders = providers.filter(providerReady);
-  const defaultModelOptionsList = defaultModelOptions(readyProviders);
+  const defaultModelOptionsList = chatModelOptions(readyProviders, imageGenerationCandidates);
   const visibleDefaultModelOptions = useMemo(() => {
     const query = defaultModelQuery.trim().toLowerCase();
     if (!query) return defaultModelOptionsList;
     return defaultModelOptionsList.filter(({ provider, modelId }) =>
-      `${provider.name} ${modelId}`.toLowerCase().includes(query),
+      `${providerSearchText(provider)} ${modelId}`.toLowerCase().includes(query),
     );
   }, [defaultModelOptionsList, defaultModelQuery]);
+
 
   if (!settings) return null;
 
@@ -133,9 +165,26 @@ export function ModelConfigPage() {
     providers.find((provider) => provider.id === settings.defaultProviderId) ?? null;
   const editingProvider =
     setupFor ? providers.find((provider) => provider.id === setupFor) ?? null : null;
-  const defaultProviderReady = defaultProvider !== null && providerReady(defaultProvider);
+  const editingAccount = editingAccountId
+    ? providers.find((provider) => provider.id === editingAccountId) ?? null
+    : null;
+  const effectiveDefaultModelId = settings.defaultModelId?.trim() ||
+    defaultProvider?.models?.[0]?.id || defaultProvider?.defaultModelId;
+  const defaultProviderReady = defaultProvider !== null && providerReady(defaultProvider) &&
+    chatModelOptions([defaultProvider], imageGenerationCandidates).some(
+      ({ modelId }) => sameWireId(modelId, effectiveDefaultModelId ?? ""),
+    );
+
 
   const setDefaultModel = async (provider: ProviderPublic, modelId: string) => {
+    if (isImageCandidate(
+      imageCandidates(
+        useAppStore.getState().settings?.imageGenerationModels,
+        useAppStore.getState().settings?.imageGeneration,
+      ),
+      provider.id,
+      modelId,
+    )) return;
     setBusyId(provider.id);
     try {
       await api.setSettings({
@@ -156,24 +205,71 @@ export function ModelConfigPage() {
   };
 
   /**
-   * A saved provider that is also the global default may have changed its first
-   * model, which is what `settings.defaultModelId` points at.
+   * Preserve the selected app defaults unless they were removed from the
+   * provider or no longer resolve, and let a newly added provider claim a
+   * default only while none resolves.
    */
-  const afterSaved = async (saved: ProviderPublic, models: ModelBinding[]) => {
-    const firstModelId = models[0]?.id;
+  const afterSaved = async (
+    saved: ProviderPublic,
+    models: ModelBinding[],
+    imageModelIds?: string[],
+  ) => {
+    const selectedImageIds = imageModelIds ?? imageGenerationCandidates
+      .filter((entry) => entry.providerId === saved.id)
+      .map((entry) => entry.modelId);
+    const firstModelId = models.find((model) =>
+      !selectedImageIds.some((id) => sameWireId(id, model.id)),
+    )?.id;
+    const replacementChatModelId =
+      settings.defaultProviderId === saved.id && firstModelId &&
+      !models.some((model) => sameWireId(model.id, settings.defaultModelId ?? "") &&
+        !selectedImageIds.some((id) => sameWireId(id, model.id)))
+        ? firstModelId
+        : undefined;
     try {
-      if (copyDraft) {
+      if (imageModelIds !== undefined) {
+        const current = await api.getSettings();
+        const plan = planImageGenerationDefaults(
+          current,
+          saved.id,
+          imageModelIds,
+          [...providers.filter((provider) => provider.id !== saved.id), saved],
+          current.imageGeneration?.providerId === saved.id &&
+            (!imageModelIds.some((id) => sameWireId(id, current.imageGeneration?.modelId ?? "")) ||
+              !models.some((model) => sameWireId(model.id, current.imageGeneration?.modelId ?? ""))),
+        );
+        const nextSettings = {
+          ...current,
+          ...plan,
+          ...(replacementChatModelId ? { defaultModelId: replacementChatModelId } : {}),
+        };
+        await api.setSettings(nextSettings);
+        useAppStore.setState({ settings: nextSettings });
+        showToast(t(editingProvider ? "settings.providerUpdated" : "settings.providerSaved"), {
+          variant: "success",
+        });
+      } else if (copyDraft) {
         showToast(t("settings.providerSaved"), { variant: "success" });
       } else if (!editingProvider) {
-        await api.setSettings({
-          ...settings,
-          defaultProviderId: saved.id,
-          defaultModelId: firstModelId ?? "",
-        });
+        // A freshly added provider must not take over the app default: whatever
+        // the user already picked keeps running — as long as that default's own
+        // provider is still runnable — until they change it themselves.
+        const currentProvider = providers.find((provider) => provider.id === settings.defaultProviderId);
+        const keepsCurrentDefault = !!currentProvider && providerReady(currentProvider) &&
+          chatModelOptions([currentProvider], imageGenerationCandidates).some(
+            ({ modelId }) => sameWireId(modelId, settings.defaultModelId ?? ""),
+          );
+        if (!keepsCurrentDefault && firstModelId) {
+          await api.setSettings({
+            ...settings,
+            defaultProviderId: saved.id,
+            defaultModelId: firstModelId ?? "",
+          });
+        }
         showToast(t("settings.providerSaved"), { variant: "success" });
       } else {
-        if (settings.defaultProviderId === saved.id && firstModelId) {
-          await api.setSettings({ ...settings, defaultModelId: firstModelId });
+        if (replacementChatModelId) {
+          await api.setSettings({ ...settings, defaultModelId: replacementChatModelId });
         }
         showToast(t("settings.providerUpdated"), { variant: "success" });
       }
@@ -184,6 +280,28 @@ export function ModelConfigPage() {
       showToast(error instanceof Error ? error.message : String(error), {
         variant: "error",
       });
+    }
+  };
+
+  const setImageGenerationDefault = async (binding: ImageGenerationBinding) => {
+    setChangingImageModel(true);
+    try {
+      const current = await api.getSettings();
+      const candidates = imageCandidates(
+        current.imageGenerationModels,
+        current.imageGeneration,
+      );
+      if (!isImageCandidate(candidates, binding.providerId, binding.modelId)) return;
+      const nextSettings = { ...current, imageGeneration: binding };
+      await api.setSettings(nextSettings);
+      useAppStore.setState({ settings: nextSettings });
+      showToast(t("settings.imageModelSelected"), { variant: "success" });
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : String(error), {
+        variant: "error",
+      });
+    } finally {
+      setChangingImageModel(false);
     }
   };
 
@@ -206,7 +324,6 @@ export function ModelConfigPage() {
   };
 
   const removeProvider = async (provider: ProviderPublic) => {
-    setConfirmDeleteId(null);
     setBusyId(provider.id);
     try {
       await api.deleteProvider(provider.id);
@@ -221,24 +338,29 @@ export function ModelConfigPage() {
     }
   };
 
+  /** Resolves true once the key is stored, so the row can close its entry. */
   const saveProviderKey = async (provider: ProviderPublic, value: string) => {
     setBusyId(provider.id);
     try {
       await api.setProviderSecret({ id: provider.id, secretValue: value });
       await refreshProviders();
-      setKeyFor(null);
-      setKeyValue("");
       showToast(
         t(value.trim() ? "settings.pluginProviderKeySaved" : "settings.pluginProviderKeyRemoved"),
         { variant: "success" },
       );
+      return true;
     } catch (error) {
       showToast(error instanceof Error ? error.message : String(error), {
         variant: "error",
       });
+      return false;
     } finally {
       setBusyId(null);
     }
+  };
+
+  const saveEditingAccount = async (provider: ProviderPublic, form: VendorAccountForm) => {
+    if (await saveAccount(provider, form)) setEditingAccountId(null);
   };
 
   const testProvider = async (provider: ProviderPublic) => {
@@ -314,23 +436,36 @@ export function ModelConfigPage() {
                 {t("settings.defaultModel")}
               </div>
               {defaultProviderReady ? (
-                <div className="settings-row-desc model-default-value">
-                  <span className="model-default-provider">{defaultProvider.name}</span>
+                <div className="settings-row-detail model-default-value">
+                  <span className="model-default-provider">
+                    {providerDisplayName(defaultProvider)}
+                  </span>
                   <span className="model-default-sep" aria-hidden>
                     ·
                   </span>
                   <span className="model-default-model font-mono">
-                    {displayedDefaultModelId(defaultProvider, settings.defaultModelId) ||
+                    {displayedChatModelId(defaultProvider, effectiveDefaultModelId, imageGenerationCandidates) ||
                       t("settings.noModel")}
                   </span>
                 </div>
               ) : (
-                <div className="settings-row-desc model-default-value">
-                  <span className="model-default-empty">
-                    {readyProviders.length === 0
-                      ? t("settings.defaultModelNone")
-                      : t("settings.noDefaultProvider")}
-                  </span>
+                <div className="settings-row-detail model-default-value">
+                  {defaultProvider && settings.defaultModelId ? (
+                    <>
+                      <span className="model-default-provider">{providerDisplayName(defaultProvider)}</span>
+                      <span className="model-default-sep" aria-hidden>·</span>
+                      <span className="model-default-model font-mono" title={t("settings.noDefaultProvider")}>
+                        {settings.defaultModelId}
+                      </span>
+                      <span className="model-default-empty">{t("settings.noDefaultProvider")}</span>
+                    </>
+                  ) : (
+                    <span className="model-default-empty">
+                      {readyProviders.length === 0
+                        ? t("settings.defaultModelNone")
+                        : t("settings.noDefaultProvider")}
+                    </span>
+                  )}
                 </div>
               )}
             </div>
@@ -377,7 +512,7 @@ export function ModelConfigPage() {
                   {visibleDefaultModelOptions.map(({ provider, modelId }, index) => {
                     const isCurrent =
                       provider.id === settings.defaultProviderId &&
-                      modelIdsMatch(settings.defaultModelId ?? "", modelId);
+                      sameWireId(settings.defaultModelId ?? "", modelId);
                     const previous = visibleDefaultModelOptions[index - 1];
                     const startsGroup = !previous || previous.provider.id !== provider.id;
                     return (
@@ -390,14 +525,14 @@ export function ModelConfigPage() {
                             )}
                           >
                             {renderVendorLogo(provider, 14)}
-                            <span>{provider.name}</span>
+                            <span>{providerDisplayName(provider)}</span>
                           </div>
                         ) : null}
                         <button
                           type="button"
                           role="option"
                           aria-selected={isCurrent}
-                          aria-label={`${provider.name} · ${modelId}`}
+                          aria-label={`${providerDisplayName(provider)} · ${modelId}`}
                           className={cx("model-default-option", isCurrent && "is-current")}
                           disabled={busyId === provider.id}
                           onClick={() => void setDefaultModel(provider, modelId)}
@@ -414,6 +549,14 @@ export function ModelConfigPage() {
               </div>
             </AnchoredMenu>
           </div>
+          {imageGenerationCandidates.length > 0 ? (
+            <ImageGenerationModelRow
+              settings={settings}
+              providers={providers}
+              busy={changingImageModel}
+              onChange={setImageGenerationDefault}
+            />
+          ) : null}
         </div>
       </section>
 
@@ -421,20 +564,26 @@ export function ModelConfigPage() {
         <div className="model-config-section-head">
           <div className="settings-card-heading-line">
             <h3 className="settings-card-heading">{t("settings.providers")}</h3>
-            {aiProviders.length > 0 ? (
-              <span className="provider-section-count">{aiProviders.length}</span>
+            {providers.length > 0 ? (
+              <span className="provider-section-count">{providers.length}</span>
             ) : null}
           </div>
-          <Button variant="primary" onClick={() => setSetupFor("")}>
-            <span className="model-config-btn-inner">
-              <IconPlus size={14} />
-              <span>{t("settings.addProvider")}</span>
-            </span>
-          </Button>
+          <div className="provider-section-head-actions">
+            <Button
+              variant="primary"
+              className="model-provider-add"
+              onClick={() => setSetupFor("")}
+            >
+              <span className="model-config-btn-inner">
+                <IconPlus size={14} />
+                <span>{t("settings.addProvider")}</span>
+              </span>
+            </Button>
+          </div>
         </div>
 
         <div className="settings-panel model-provider-panel">
-          {aiProviders.length === 0 ? (
+          {providers.length === 0 ? (
             <div className="model-provider-empty">
               <div className="model-provider-empty-icon" aria-hidden>
                 <IconServer size={18} />
@@ -449,235 +598,54 @@ export function ModelConfigPage() {
               </Button>
             </div>
           ) : (
-            <ul className="model-provider-list">
-              {aiProviders.map((provider) => {
-                const isDefault = settings.defaultProviderId === provider.id;
-                const rowBusy = busyId === provider.id || testingId === provider.id;
-                const confirming = confirmDeleteId === provider.id;
-                const modelCount = provider.models?.length ?? 0;
-                // A plugin-declared row is refreshed from the plugin's manifest
-                // on every load, so its fields and its enabled switch are not
-                // the user's to change. The credential is.
-                const ownedByPlugin = provider.ownerPluginId;
-                const keyEntry = keyFor === provider.id;
-                return (
-                  <li
-                    key={provider.id}
-                    className={cx("model-provider-row", !provider.enabled && "is-disabled")}
-                  >
-                    <div className="model-provider-row-copy">
-                      <div className="model-provider-row-title">
-                        {renderVendorLogo(provider, 20)}
-                        <span className="model-provider-row-name">{provider.name}</span>
-                        {isDefault ? (
-                          <Badge tone="success">{t("settings.default")}</Badge>
-                        ) : null}
-                        {!provider.hasSecret && provider.authKind !== "none" ? (
-                          <Badge tone="warning">{t("settings.noSecret")}</Badge>
-                        ) : null}
-                        {!provider.enabled ? (
-                          <Badge tone="neutral">{t("settings.providerDisabledBadge")}</Badge>
-                        ) : null}
-                        {ownedByPlugin ? (
-                          <span
-                            title={t("settings.pluginProviderManaged", {
-                              plugin: ownedByPlugin,
-                            })}
-                          >
-                            <Badge tone="neutral">{t("settings.pluginProviderBadge")}</Badge>
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="model-provider-row-meta">
-                        <span>{hostFromBaseUrl(provider.baseUrl)}</span>
-                        <span className="model-provider-meta-dot" aria-hidden>
-                          ·
-                        </span>
-                        <span>{t("settings.providerModelCount", { count: modelCount })}</span>
-                        {ownedByPlugin ? (
-                          <>
-                            <span className="model-provider-meta-dot" aria-hidden>
-                              ·
-                            </span>
-                            <span>{t("settings.pluginProviderBy", { plugin: ownedByPlugin })}</span>
-                          </>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    <div className="model-provider-row-actions">
-                      {!isDefault ? (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={rowBusy || !providerReady(provider)}
-                          onClick={() =>
-                            void setDefaultModel(provider, defaultModelIdOf(provider) ?? "")
-                          }
-                        >
-                          {t("settings.makeDefault")}
-                        </Button>
-                      ) : null}
-                      {!ownedByPlugin ? (
-                        <TooltipButton
-                          type="button"
-                          className="icon-btn icon-btn-square model-provider-icon-btn"
-                          tooltip={t("settings.copyProvider")}
-                          ariaLabel={t("settings.copyProvider")}
-                          disabled={rowBusy}
-                          onClick={() => {
-                            setCopyDraft(copyProviderConfiguration(provider, t("settings.copyProviderName", { name: provider.name })));
-                            setSetupFor("");
-                          }}
-                        >
-                          <IconCopy size={14} />
-                        </TooltipButton>
-                      ) : null}
-                      {ownedByPlugin && provider.authKind === "api_key" ? (
-                        <TooltipButton
-                          type="button"
-                          className="icon-btn icon-btn-square model-provider-icon-btn"
-                          tooltip={t("settings.pluginProviderKey")}
-                          ariaLabel={t("settings.pluginProviderKey")}
-                          disabled={rowBusy}
-                          onClick={() => {
-                            setKeyFor(keyEntry ? null : provider.id);
-                            setKeyValue("");
-                          }}
-                        >
-                          <IconKey size={14} />
-                        </TooltipButton>
-                      ) : null}
-                      <TooltipButton
-                        type="button"
-                        className="icon-btn icon-btn-square model-provider-icon-btn"
-                        tooltip={
-                          ownedByPlugin
-                            ? t("settings.pluginProviderManaged", { plugin: ownedByPlugin })
-                            : t("settings.editProvider")
-                        }
-                        ariaLabel={t("settings.editProvider")}
-                        disabled={rowBusy || Boolean(ownedByPlugin)}
-                        onClick={() => setSetupFor(provider.id)}
-                      >
-                        <IconPencil size={14} />
-                      </TooltipButton>
-                      <TooltipButton
-                        type="button"
-                        className={cx(
-                          "icon-btn icon-btn-square model-provider-icon-btn",
-                          testingId === provider.id && "is-testing",
-                        )}
-                        tooltip={t("settings.testConnection")}
-                        ariaLabel={t("settings.testConnection")}
-                        disabled={rowBusy}
-                        onClick={() => void testProvider(provider)}
-                      >
-                        <IconPlug size={14} />
-                      </TooltipButton>
-                      {confirming ? (
-                        <button
-                          type="button"
-                          className="model-provider-delete-confirm"
-                          disabled={rowBusy}
-                          onBlur={() => setConfirmDeleteId(null)}
-                          onClick={() => void removeProvider(provider)}
-                        >
-                          {t("settings.deleteConfirm")}
-                        </button>
-                      ) : (
-                        <TooltipButton
-                          type="button"
-                          className="icon-btn icon-btn-square model-provider-icon-btn is-danger"
-                          tooltip={
-                            ownedByPlugin
-                              ? t("settings.pluginProviderManaged", { plugin: ownedByPlugin })
-                              : t("settings.delete")
-                          }
-                          ariaLabel={t("settings.delete")}
-                          disabled={rowBusy || Boolean(ownedByPlugin)}
-                          onClick={() => setConfirmDeleteId(provider.id)}
-                        >
-                          <IconTrash size={14} />
-                        </TooltipButton>
-                      )}
-                      <TooltipButton
-                        type="button"
-                        className={cx("settings-toggle", provider.enabled && "on")}
-                        role="switch"
-                        aria-checked={provider.enabled}
-                        tooltip={
-                          ownedByPlugin
-                            ? t("settings.pluginProviderManaged", { plugin: ownedByPlugin })
-                            : t("settings.enabledToggle")
-                        }
-                        ariaLabel={t("settings.enabledToggle")}
-                        disabled={rowBusy || Boolean(ownedByPlugin)}
-                        onClick={() => void toggleEnabled(provider)}
-                      >
-                        <span className="settings-toggle-thumb" />
-                      </TooltipButton>
-                    </div>
-                    {keyEntry ? (
-                      <div className="model-provider-key-entry">
-                        <Field
-                          label={t("settings.pluginProviderKey")}
-                          hint={t("settings.pluginProviderKeyHint")}
-                        >
-                          <Input
-                            type="password"
-                            autoFocus
-                            value={keyValue}
-                            placeholder={
-                              provider.hasSecret ? t("settings.apiKeyKeepHint") : undefined
-                            }
-                            onChange={(event) => setKeyValue(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === "Escape") setKeyFor(null);
-                              if (event.key === "Enter") {
-                                void saveProviderKey(provider, keyValue);
-                              }
-                            }}
-                          />
-                        </Field>
-                        <div className="model-provider-key-actions">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            disabled={rowBusy}
-                            onClick={() => setKeyFor(null)}
-                          >
-                            {t("settings.cancel")}
-                          </Button>
-                          {provider.hasSecret ? (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              disabled={rowBusy}
-                              onClick={() => void saveProviderKey(provider, "")}
-                            >
-                              {t("settings.pluginProviderKeyRemove")}
-                            </Button>
-                          ) : null}
-                          <Button
-                            size="sm"
-                            disabled={rowBusy || !keyValue.trim()}
-                            onClick={() => void saveProviderKey(provider, keyValue)}
-                          >
-                            {t("settings.save")}
-                          </Button>
-                        </div>
-                      </div>
-                    ) : null}
-                  </li>
+            <ServiceList
+              providers={providers}
+              defaultProviderId={settings.defaultProviderId}
+              isReady={providerReady}
+              accountFor={accountFor}
+              busy={
+                busyId !== null ||
+                testingId !== null ||
+                setupFor !== null ||
+                editingAccountId !== null ||
+                busyAccountId !== null ||
+                savingAccount ||
+                login !== null
+              }
+              isRowBusy={(id) => busyId === id || testingId === id || busyAccountId === id}
+              testingId={testingId}
+              onEdit={(provider) =>
+                serviceRowKind(provider) === "account"
+                  ? setEditingAccountId(provider.id)
+                  : setSetupFor(provider.id)
+              }
+              onMakeDefault={(provider) =>
+                void setDefaultModel(
+                  provider,
+                  chatModelOptions([provider], imageGenerationCandidates)[0]?.modelId ?? "",
+                )
+              }
+              onTest={(provider) => void testProvider(provider)}
+              onCopy={(provider) => {
+                setCopyDraft(
+                  copyProviderConfiguration(
+                    provider,
+                    t("settings.copyProviderName", { name: provider.name }),
+                  ),
                 );
-              })}
-            </ul>
+                setSetupFor("");
+              }}
+              onToggleEnabled={(provider) => void toggleEnabled(provider)}
+              onRemove={(provider) =>
+                void (serviceRowKind(provider) === "account"
+                  ? removeAccount(provider)
+                  : removeProvider(provider))
+              }
+              onSaveKey={saveProviderKey}
+            />
           )}
         </div>
       </section>
-
-      <VendorAccountsSection />
 
       <div className="model-catalog-status">
         <span className="model-catalog-status-text">
@@ -715,7 +683,43 @@ export function ModelConfigPage() {
           provider={editingProvider}
           initialDraft={copyDraft}
           onClose={() => { setSetupFor(null); setCopyDraft(null); }}
-          onSaved={(saved, models) => void afterSaved(saved, models)}
+          imageModelIds={editingProvider
+            ? imageGenerationCandidates
+                .filter((binding) => binding.providerId === editingProvider.id)
+                .map((binding) => binding.modelId)
+            : undefined}
+          onSaved={afterSaved}
+          vendors={vendors}
+          onPickSubscription={(vendor) => {
+            setSetupFor(null);
+            setCopyDraft(null);
+            // Started here, not in the dialog: a click happens once, where
+            // StrictMode would run a mount effect twice and open two browsers.
+            startLogin(vendor);
+          }}
+        />
+      ) : null}
+
+      {editingAccount ? (
+        <VendorAccountDialog
+          provider={editingAccount}
+          initialName={
+            accountFor(editingAccount.id)?.account.accountLabel ||
+            editingAccount.oauthAccountLabel ||
+            editingAccount.name
+          }
+          saving={savingAccount}
+          onClose={() => setEditingAccountId(null)}
+          onSave={(form) => void saveEditingAccount(editingAccount, form)}
+        />
+      ) : null}
+
+      {login ? (
+        <OAuthLoginDialog
+          vendor={login.vendor}
+          session={login.session}
+          onDone={finishLogin}
+          onClose={closeLogin}
         />
       ) : null}
     </div>

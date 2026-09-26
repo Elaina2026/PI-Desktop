@@ -1,3 +1,5 @@
+import { GeneratedImages } from "./GeneratedImages";
+import "../../../styles/generated-images.css";
 import {
   Fragment,
   memo,
@@ -6,13 +8,17 @@ import {
   useId,
   useLayoutEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
 import type { UiMessage } from "@pi-desktop/shared";
 import { useOpenPreviewTarget } from "../../../hooks/use-preview-target";
+import { useChatFileMenu } from "../../../hooks/use-chat-file-menu";
+import { ContextMenu } from "../../../components/ContextMenu";
 import { useFollowScroll } from "../../../hooks/use-follow-scroll";
 import { getToolPreviewTarget } from "../../../lib/chat-links";
+import { disclosureKey } from "./disclosure";
 import {
   formatToolDuration,
   getToolAction,
@@ -72,6 +78,7 @@ import {
   TOOL_ACTION_KEYS,
   TOOL_RUNNING_KEYS,
   useAutomaticDisclosure,
+  useMessageRevealRequest,
 } from "./shared";
 import {
   delegateAgentName,
@@ -85,6 +92,10 @@ type ToolRowProps = {
   delegate?: SubagentRun;
   /** Card treatment used when several Task calls form a delegation topology. */
   variant?: "default" | "topology";
+  /** Open the latest detailed-mode tool unless the user took over. */
+  autoOpen?: boolean;
+  /** The containing turn renders image results outside its process disclosure. */
+  imagesInTurn?: boolean;
   /** Claims the containing activity group when this row is manually used. */
   onUserInteraction?: () => void;
   /** Live delegation statuses read from the turn's lifecycle-tool rows. */
@@ -291,6 +302,8 @@ function toolRowPropsEqual(
   if (
     previous.message !== next.message ||
     previous.variant !== next.variant ||
+    previous.autoOpen !== next.autoOpen ||
+    previous.imagesInTurn !== next.imagesInTurn ||
     previous.onUserInteraction !== next.onUserInteraction ||
     !subagentRunsEqual(previous.delegate, next.delegate)
   ) {
@@ -315,6 +328,8 @@ export const ToolRow = memo(function ToolRow({
   message,
   delegate,
   variant = "default",
+  autoOpen = false,
+  imagesInTurn = false,
   onUserInteraction,
   delegationStatuses,
   delegationTimings,
@@ -323,8 +338,9 @@ export const ToolRow = memo(function ToolRow({
   const detailsId = useId();
   const root = useAppStore((s) => s.workspace?.path);
   const openTarget = useOpenPreviewTarget();
-  const toggleSubagentPanel = useAppStore((s) => s.toggleSubagentPanel);
-  const subagentPanel = useAppStore((s) => s.subagentPanel);
+  const { fileMenu, openFileMenu, closeFileMenu } = useChatFileMenu();
+  const openSubagentTab = useAppStore((s) => s.openSubagentTab);
+  const activeWorkPanelTabId = useAppStore((s) => s.activeWorkPanelTabId);
   const status = message.toolStatus;
   const action = getToolAction(message.toolName);
   // A run row states what the command did, not what the call around it did: an
@@ -337,9 +353,15 @@ export const ToolRow = memo(function ToolRow({
   const isDeepResearch = rawToolLower === "deepresearch" || rawToolLower === "research";
   const isWebFetch = rawToolLower === "webfetch" || rawToolLower === "fetch";
   const isRichCard = isWebSearch || isDeepResearch || isWebFetch;
-  // Tool details are always user-opened. Failure stays visible in the row head
-  // through its status icon/label without expanding the payload automatically.
-  const disclosure = useAutomaticDisclosure(false);
+  // Detailed mode opens the last tool of the last activity group. Compact keeps
+  // payloads collapsed so a live burst only updates the header. Failure and
+  // denial stay in the row head without expanding the payload automatically.
+  const revealRequest = useMessageRevealRequest(message.id);
+  const disclosure = useAutomaticDisclosure(
+    autoOpen && !failed && status !== "denied",
+    revealRequest,
+    disclosureKey("tool", message.id),
+  );
   const { open, toggle: toggleDisclosure, collapse: collapseDisclosure } = disclosure;
   const titleRef = disclosure.titleRef;
   const toggleRow = useCallback(() => {
@@ -388,15 +410,25 @@ export const ToolRow = memo(function ToolRow({
   // The delegate's last answer row is its report, so the body must not print
   // the same text a second time.
   const nestedReport = delegate?.items.some((item) => item.kind === "answer");
-  // Streaming updates replace the message object each tick; only pay the
-  // full payload walk once the row is actually expanded.
-  const blocks =
-    variant !== "topology" && open && hasDetails
-      ? buildToolPresentation(message, {
-          hideSummaryArg: true,
-          ...(nestedReport ? { hideDelegateReport: true } : {}),
-        })
-      : null;
+  // Keep mounted output and its reading position while an ancestor is folded,
+  // but defer formatting hidden streaming updates until it becomes visible.
+  const presentation = useRef<{
+    message: UiMessage;
+    nestedReport: boolean | undefined;
+    blocks: ReturnType<typeof buildToolPresentation>;
+  } | null>(null);
+  if (variant !== "topology" && open && hasDetails && disclosure.parentVisible &&
+    (presentation.current?.message !== message || presentation.current?.nestedReport !== nestedReport)) {
+    presentation.current = {
+      message,
+      nestedReport,
+      blocks: buildToolPresentation(message, {
+        hideSummaryArg: true,
+        ...(nestedReport ? { hideDelegateReport: true } : {}),
+      }),
+    };
+  }
+  const blocks = variant !== "topology" && open && hasDetails ? presentation.current?.blocks : null;
   const outcome =
     variant === "topology" ? subagentOutcome(message, delegationStatuses) : null;
   // A bare `running` Task row (no delegation result yet) is still being
@@ -447,7 +479,7 @@ export const ToolRow = memo(function ToolRow({
       : message.toolCallId || message.id;
   const panelOpen =
     variant === "topology" &&
-    subagentPanel?.delegationId === panelSelectionId;
+    activeWorkPanelTabId === `subagent:${panelSelectionId}`;
   const renderedOpen = variant === "topology" ? panelOpen : open;
   const inlineOpen = variant !== "topology" && open;
   const delegationTiming =
@@ -484,6 +516,27 @@ export const ToolRow = memo(function ToolRow({
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, [outcome]);
+
+  // Auto-scroll the nested `.tool-row-content` containers to their bottom
+  // while the tool is still running. These elements have `max-height: 260px`
+  // and `overflow: auto`, creating a nested scroll area that the transcript-
+  // level follow scroll cannot reach once the height cap is hit. Only scroll
+  // when the container is already near the bottom so a manual scroll-up by
+  // the user is not overridden.
+  useLayoutEffect(() => {
+    if (status !== "running" || !open) return;
+    const body = disclosure.bodyRef.current;
+    if (!body) return;
+    const containers = body.querySelectorAll<HTMLElement>(".tool-row-content");
+    for (const el of containers) {
+      const nearBottom =
+        el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+      if (nearBottom) {
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+  }, [status, open, message, disclosure.bodyRef]);
+
 
   const statusTone =
     run === "running" || (!run && status === "running")
@@ -589,13 +642,13 @@ export const ToolRow = memo(function ToolRow({
         <button
           className="subagent-topology-node-header"
           aria-expanded={panelOpen}
-          aria-controls={hasDetails ? "subagent-panel" : undefined}
+          aria-controls={panelOpen ? `work-panel-surface-subagent:${panelSelectionId}` : undefined}
           disabled={!hasDetails}
           title={[agentName || rawName, modelLabel, summary].filter(Boolean).join(" · ")}
           onClick={() => {
             if (!hasDetails) return;
             onUserInteraction?.();
-            toggleSubagentPanel(panelSelectionId);
+            openSubagentTab(panelSelectionId, agentName || undefined);
           }}
         >
           <span className="subagent-topology-avatar" aria-hidden>
@@ -632,7 +685,9 @@ export const ToolRow = memo(function ToolRow({
               </span>
             </span>
             {summary ? (
-              <span className="subagent-topology-node-summary">{summary}</span>
+              <span className="subagent-topology-node-summary" title={summary}>
+                {summary}
+              </span>
             ) : null}
             {delegate?.items.length ? (
               <span className="subagent-topology-node-steps">
@@ -700,6 +755,12 @@ export const ToolRow = memo(function ToolRow({
                       }
                     : undefined
                 }
+                onContextMenu={
+                  previewTarget?.kind === "file"
+                    ? (event) =>
+                        openFileMenu(event, { path: previewTarget.path })
+                    : undefined
+                }
               >
                 {summary}
               </span>
@@ -758,10 +819,10 @@ export const ToolRow = memo(function ToolRow({
           {statusLabel}
         </span>
       ) : null}
-      {inlineOpen && hasDetails ? (
-        <div className="tool-row-body" id={detailsId}>
+      {inlineOpen && (hasDetails || (blocks && blocks.length > 0)) ? (
+        <div className="tool-row-body" id={detailsId} ref={disclosure.bodyRef} {...disclosure.bodyEvents}>
           <DisclosureCollapseRail
-            label={t("chat.collapseDetails")}
+            label={t("chat.collapseToolOutput")}
             onCollapse={collapseRow}
           />
           {isWebSearch ? (
@@ -781,6 +842,7 @@ export const ToolRow = memo(function ToolRow({
           ) : null}
         </div>
       ) : null}
+      {!imagesInTurn && <GeneratedImages message={message} />}
       {inlineOpen && delegate ? (
         <SubagentRunRows
           run={delegate}
@@ -788,6 +850,7 @@ export const ToolRow = memo(function ToolRow({
           onCollapse={collapseRow}
         />
       ) : null}
+      <ContextMenu state={fileMenu} onClose={closeFileMenu} />
     </div>
   );
 }, toolRowPropsEqual);

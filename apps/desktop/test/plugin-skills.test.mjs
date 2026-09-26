@@ -89,8 +89,8 @@ test("the composer lists active skills last and routes slash skills to the Skill
     mainSrc,
     /\.\.\.extensionCommands,\s*\.\.\.skillCommands,/,
   );
-  assert.match(mainSrc, /command\?\.kind === "skill" && command\.skillId/);
-  assert.match(mainSrc, /Call the \\`Skill\\` tool with id/);
+  assert.match(mainSrc, /findSkillMentions\(req\.content, activeSkills\)/);
+  assert.match(mainSrc, /Call the \\`Skill\\` tool with each of these ids/);
   assert.match(composerAutocompleteSrc, /item\.command\.kind === "skill"/);
 });
 
@@ -105,7 +105,7 @@ test("the built-in plugin skill only activates for plugin workspaces", () => {
   assert.match(builtinSrc, /isPluginWorkspace/);
   assert.match(builtinSrc, /schemaVersion.*number/s);
   assert.match(builtinSrc, /pluginPaths\.some/);
-  assert.match(builtinSrc, /if \(!isPluginWorkspace\(input\.workspacePath, input\.pluginPaths\)\) return \[\]/);
+  assert.match(builtinSrc, /if \(isPluginWorkspace\(input\.workspacePath, input\.pluginPaths\)\) ids\.push\(PLUGIN_DEV_SKILL_ID\)/);
   assert.match(mainSrc, /builtinSkills\(\{/);
 });
 
@@ -169,7 +169,7 @@ test("only PluginCheck is available outside agent mode", () => {
   assert.doesNotMatch(nonAgentBranch, /PluginScaffold|PluginPack/);
   assert.match(
     builder.slice(agentBranchStart),
-    /tools\.push\("PluginScaffold", "PluginPack"\)/,
+    /tools\.push\("PluginScaffold", "PluginPack"/,
   );
 });
 

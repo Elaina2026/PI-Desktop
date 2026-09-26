@@ -14,6 +14,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { assertImportedPackagePath, discoverImportedPackageSkills } from "./imported-package-skills";
+import {
+  IMPORTED_PLUGIN_ID_PREFIX,
+  IMPORTED_PLUGIN_MAIN,
+  IMPORTED_PLUGIN_WRAPPER_SOURCE,
+} from "./imported-plugin-wrapper";
 import { discoverManualPath } from "@pi-desktop/agent-runtime";
 export { defaultDependencyRunner, installExtensionDependencies } from "./npm-installer";
 export type { DependencyCommandRunner, ExtensionDependencyInstallResult } from "./npm-installer";
@@ -37,6 +42,7 @@ type SessionState = {
 };
 
 type PendingPrompt = {
+  prompt: TrustedExtensionUiPrompt;
   sessionId: string;
   kind: "confirm" | "select" | "input";
   resolve: (response: TrustedExtensionUiResponse) => void;
@@ -54,7 +60,7 @@ export type AgentExtensionBridgeOptions = {
 };
 
 function dismissedResponse(kind: PendingPrompt["kind"]): TrustedExtensionUiResponse {
-  return kind === "confirm" ? { kind, value: false } : { kind, value: undefined };
+  return kind === "confirm" ? { kind, value: false, cancelled: true } : { kind, value: undefined, cancelled: true };
 }
 
 export class AgentExtensionBridge {
@@ -63,6 +69,7 @@ export class AgentExtensionBridge {
   private readonly pending = new Map<string, PendingPrompt>();
   /** One interactive prompt per session at a time (spec §9). */
   private readonly promptQueues = new Map<string, Promise<unknown>>();
+  private readonly uiRequests = new Map<string, { sessionId: string; controller: AbortController }>();
 
   constructor(options: AgentExtensionBridgeOptions) {
     this.options = options;
@@ -136,6 +143,11 @@ export class AgentExtensionBridge {
   async requestUi(envelope: TrustedExtensionUiRequestEnvelope): Promise<TrustedExtensionUiResponse> {
     const { request } = envelope;
     switch (request.kind) {
+      case "cancel": {
+        const key = JSON.stringify([envelope.sessionId, envelope.extensionId, request.requestId]);
+        this.uiRequests.get(key)?.controller.abort();
+        return { kind: "cancel" };
+      }
       case "notify":
         this.options.onToast(`${envelope.extensionLabel}: ${request.message}`, request.level);
         return { kind: "notify" };
@@ -165,10 +177,30 @@ export class AgentExtensionBridge {
         errorCode: ErrorCodes.UNSUPPORTED,
       });
     }
+    const key = JSON.stringify([envelope.sessionId, envelope.extensionId, envelope.requestId ?? randomUUID()]);
+    if (this.uiRequests.has(key)) throw new Error("Duplicate extension UI request");
+    const controller = new AbortController();
+    this.uiRequests.set(key, { sessionId: envelope.sessionId, controller });
     const previous = this.promptQueues.get(envelope.sessionId) ?? Promise.resolve();
-    const run = previous.then(() => this.showPrompt(envelope, request));
-    this.promptQueues.set(envelope.sessionId, run.catch(() => undefined));
-    return run;
+    const run = previous.then(() => controller.signal.aborted
+      ? dismissedResponse(request.kind)
+      : this.showPrompt(envelope, request, controller.signal));
+    const tail = run.catch(() => undefined);
+    this.promptQueues.set(envelope.sessionId, tail);
+    let retire!: () => void;
+    const cancelled = new Promise<TrustedExtensionUiResponse>((resolve) => {
+      retire = () => resolve(dismissedResponse(request.kind));
+      controller.signal.addEventListener("abort", retire, { once: true });
+      if (controller.signal.aborted) retire();
+    });
+    try { return await Promise.race([run, cancelled]); }
+    finally {
+      controller.signal.removeEventListener("abort", retire);
+      this.uiRequests.delete(key);
+      void tail.then(() => {
+        if (this.promptQueues.get(envelope.sessionId) === tail) this.promptQueues.delete(envelope.sessionId);
+      });
+    }
   }
 
   respond(promptId: string, value: string | boolean | undefined): boolean {
@@ -180,6 +212,9 @@ export class AgentExtensionBridge {
 
   /** Aborting a turn dismisses that session's open prompts (spec §9). */
   cancelPrompts(sessionId: string): void {
+    for (const entry of this.uiRequests.values()) {
+      if (entry.sessionId === sessionId) entry.controller.abort();
+    }
     for (const [promptId, pending] of this.pending) {
       if (pending.sessionId === sessionId) this.settle(promptId, dismissedResponse(pending.kind));
     }
@@ -194,26 +229,27 @@ export class AgentExtensionBridge {
   private showPrompt(
     envelope: TrustedExtensionUiRequestEnvelope,
     request: TrustedExtensionUiPrompt["request"],
+    signal: AbortSignal,
   ): Promise<TrustedExtensionUiResponse> {
     return new Promise((resolvePrompt) => {
       const promptId = randomUUID();
+      const prompt = { promptId, sessionId: envelope.sessionId, extensionId: envelope.extensionId,
+        extensionLabel: envelope.extensionLabel, request };
+      const abort = () => this.settle(promptId, dismissedResponse(request.kind));
       const timer = setTimeout(
         () => this.settle(promptId, dismissedResponse(request.kind)),
         this.options.promptTimeoutMs ?? TRUSTED_EXTENSION_PROMPT_TIMEOUT_MS,
       );
       this.pending.set(promptId, {
+        prompt,
         sessionId: envelope.sessionId,
         kind: request.kind,
-        resolve: resolvePrompt,
+        resolve: (response) => { signal.removeEventListener("abort", abort); resolvePrompt(response); },
         timer,
       });
-      this.options.onPrompt({
-        promptId,
-        sessionId: envelope.sessionId,
-        extensionId: envelope.extensionId,
-        extensionLabel: envelope.extensionLabel,
-        request,
-      });
+      signal.addEventListener("abort", abort, { once: true });
+      this.options.onPrompt(prompt);
+      if (signal.aborted) abort();
     });
   }
 
@@ -222,6 +258,7 @@ export class AgentExtensionBridge {
     if (!pending) return;
     clearTimeout(pending.timer);
     this.pending.delete(promptId);
+    this.options.onPrompt({ ...pending.prompt, cancelled: true });
     pending.resolve(response);
   }
 
@@ -244,7 +281,6 @@ export class AgentExtensionBridge {
 }
 
 
-const PLUGIN_ID_PREFIX = "imported.";
 const NPM_LOCKFILE_NAMES = ["package-lock.json", "npm-shrinkwrap.json"] as const;
 
 const IMPORT_SENSITIVE_FILE_NAMES = new Set([
@@ -289,7 +325,7 @@ function slugFor(path: string): string {
 /**
  * Build a plugin directory from a pi extension file or directory (spec §3):
  * copies the source under `src/`, writes a manifest that declares the entry
- * files as `contributes.agentExtensions`, and a no-op `main.js`. A directory
+ * files as `contributes.agentExtensions`, and a CommonJS no-op `main.cjs`. A directory
  * that ships a `package.json` also gets it (plus its lockfile) at the plugin
  * root so {@link installExtensionDependencies} can resolve its dependencies
  * there; `node_modules` itself is never copied — it is reinstalled.
@@ -341,7 +377,7 @@ export function generateImportedExtensionPlugin(
       throw error;
     }
   }
-  const id = `${PLUGIN_ID_PREFIX}${basename(dir)}`;
+  const id = `${IMPORTED_PLUGIN_ID_PREFIX}${basename(dir)}`;
   const srcDir = join(dir, "src");
   try {
     mkdirSync(srcDir);
@@ -373,7 +409,7 @@ export function generateImportedExtensionPlugin(
       name: slug,
       version: "0.0.0",
       description: `Imported pi extension from ${resolved}`,
-      main: "main.js",
+      main: IMPORTED_PLUGIN_MAIN,
       permissions: [...(entries.length ? ["agent.extension"] : []), ...(skills.length ? ["agent.prompt.inject"] : [])],
       contributes: {
         ...(entries.length ? { agentExtensions: entries } : {}),
@@ -386,8 +422,8 @@ export function generateImportedExtensionPlugin(
     };
     writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n", "utf8");
     writeFileSync(
-      join(dir, "main.js"),
-      "// Generated by PI-Desktop: declarative skills and/or agent extensions.\nmodule.exports = {};\n",
+      join(dir, IMPORTED_PLUGIN_MAIN),
+      IMPORTED_PLUGIN_WRAPPER_SOURCE,
       "utf8",
     );
     if (isDirectory) {

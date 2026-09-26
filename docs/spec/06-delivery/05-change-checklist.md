@@ -34,25 +34,28 @@ change or starting follow-up:
 
 - [ ] Pull request title, body, files, commits, comments, checks, draft
   state, base/head, and linked issues were fetched.
-- [ ] The **principle** was independently judged (real in-scope problem;
-  approach compatible with baseline, security, and architecture).
-- [ ] Completeness gaps (specs, tests, i18n, e2e docs, style, naming) were
-  not treated as merge blockers.
-- [ ] If the principle is sound: the pull request was merged first,
+- [ ] The **root-cause bar** was independently judged: real in-scope problem;
+  the change actually removes that failure mode at the root; the diff is the
+  smallest coherent fix; approach compatible with baseline, security, and
+  architecture.
+- [ ] Completeness gaps (specs, extra tests, i18n, e2e docs, style, naming)
+  were not treated as merge blockers **unless** they are required to prove
+  the root-cause fix.
+- [ ] If the root-cause bar holds: the pull request was merged first,
   preserving the contributor's commits; landing blockers received only
   smallest-on-top commits.
 - [ ] Follow-up started only after the pull request was in `main`, using a
   new R4 request branch and worktree.
-- [ ] If the principle is not sound or a harm blocker exists: the pull
-  request was not merged, and a comment recorded the evidence. The idea was
-  not silently reimplemented.
+- [ ] If the root-cause bar fails or a harm blocker exists: the pull
+  request was not merged, was not approved as "direction is fine", and a
+  comment recorded the evidence. The idea was not silently reimplemented.
 - [ ] A draft pull request was not merged unless the user explicitly asked.
 - [ ] The comment uses the pull request's language.
 - [ ] No unrelated pull request was commented on or merged.
 - [ ] The contributor's branch was not force-pushed. Unrelated remote
   publishing was not inferred from the pull request link.
 
-See [R6 — Merge a linked pull request whose principle is sound, then follow up](03-ai-development-workflow.md#r6--merge-a-linked-pull-request-whose-principle-is-sound-then-follow-up).
+See [R6 — Land a linked pull request only when it fixes the root cause with a minimal diff](03-ai-development-workflow.md#r6--land-a-linked-pull-request-only-when-it-fixes-the-root-cause-with-a-minimal-diff).
 
 ---
 
@@ -65,14 +68,15 @@ Before editing any file for a new request:
   worktree is clean.
 - [ ] A dedicated `<type>/<short-description>` request branch and worktree are
   created from that updated `main` commit.
-- [ ] The request worktree reuses the primary checkout's toolchains, package
-  stores, caches, and ignored local configuration where safe.
-- [ ] Mutable, incompatible, or concurrency-sensitive environment state stays
-  worktree-local and ignored.
+- [ ] The request worktree reuses the primary checkout's host toolchains,
+  compatible dependency tree, package stores, caches, and ignored local
+  configuration where safe; no separate environment is installed for E2E.
+- [ ] Only mutable, incompatible, or concurrency-sensitive environment state
+  stays worktree-local and ignored.
 - [ ] The current branch is not `main` before implementation begins.
-- [ ] Delivery scope is recorded: a commit request includes local `main`
-  integration; a push request includes PR-based remote `main` integration and
-  local synchronization. Explicit branch-only or draft-only limits are honored.
+- [ ] Delivery scope is recorded: a commit request stays on the request
+  branch; a push request includes PR-based remote `main` integration after
+  `pnpm check:pr-base`. Explicit branch-only or draft-only limits are honored.
 
 ---
 
@@ -118,11 +122,15 @@ After implementation (or alongside it):
   cross-component regression risk makes them necessary.
 - [ ] The smallest necessary targeted local checks passed, or local validation
   was assessed as unnecessary with no separate approval or waiver required.
-- [ ] Relevant E2E suites were selected and passed on the integrated local
-  `main` before the request branch was pushed and a PR/MR was opened, or before
-  a commit-only delivery was declared complete; required validation needs no
-  separate user request. Documentation-only changes retain their existing
-  exemption.
+- [ ] Relevant E2E suites were selected and passed on a candidate that contains
+  latest `origin/main` before the request branch was pushed and a PR/MR was
+  opened, or before a commit-only delivery was declared complete; required
+  validation needs no separate user request. Documentation-only changes retain
+  their existing exemption.
+- [ ] Task-candidate E2E used the host development environment already
+  provisioned in the primary checkout; no `pnpm install`/`npm install` or
+  second dependency/runtime environment was created solely for E2E. Any
+  missing/incompatible-host exception is recorded with its reason.
 - [ ] Results apply to the commit the gate ran on, and the affected suites were
   rerun when the landed executable content changed. Any required suite not run
   is recorded with its reason, alternative validation, and remaining risk;
@@ -151,23 +159,22 @@ After implementation (or alongside it):
 Before marking requested integration complete, apply the R4 delivery scope;
 explicit branch-only or draft-only requests retain their narrower scope:
 
-- [ ] Requested commit/push delivery is integrated into local `main`; a
-  task-branch commit or push alone was not reported as completion, and no second
-  merge confirmation was requested.
-- [ ] For a code-bearing change: the relevant E2E gate ran against the
-  integrated local `main` before the branch push and PR/MR creation, or before
-  a commit-only delivery was declared complete, or its `NOT RUN` limitation is
-  recorded with reason, alternative validation, and remaining risk.
-- [ ] Commit-only or local-merge delivery did not publish remotely without
-  separate authorization.
+- [ ] Before a PR/MR is opened or updated, `origin/main` is an ancestor of the
+  request head (`pnpm check:pr-base`). A PR behind `origin/main` is not opened.
+- [ ] For a code-bearing change: the relevant E2E gate ran against a candidate
+  that contains latest `origin/main` before the branch push and PR/MR creation,
+  or before a commit-only delivery was declared complete, or its `NOT RUN`
+  limitation is recorded with reason, alternative validation, and remaining risk.
+- [ ] Commit-only delivery did not publish remotely without separate
+  authorization.
 - [ ] For authorized remote delivery: the request branch was pushed, its PR/MR
   targeted `main` with only this task's changes, and the description documented
   impacted specs, E2E scenarios, and validation.
-- [ ] For authorized remote delivery: PR self-review, required checks, and
-  reviews passed; the PR/MR merged into remote `main` using a permitted
-  strategy; local `main` was synchronized with the landed change; when the
-  landed executable content differs from the commit the gate ran on, the
-  affected suites were rerun and recorded.
+- [ ] For authorized remote delivery: PR self-review, required checks (including
+  the PR-base ancestry gate), and reviews passed; the PR/MR merged into remote
+  `main` using a permitted strategy; local `main` was synchronized with the
+  landed change; when the landed executable content differs from the commit the
+  gate ran on, the affected suites were rerun and recorded.
 - [ ] No direct push to `main`, force-push, discarded unrelated work, or bypassed
   gate was inferred from the delivery request. Genuine blockers were reported.
 - [ ] Request worktree is removed after merge.
@@ -231,18 +238,18 @@ user's delivery scope:
 
 | # | Gate | Source |
 |---|---|---|
-| 1 | Request branch and worktree created from an up-to-date `main`; primary environment reused where safe | [R4 — Request branch + worktree + merge gate](03-ai-development-workflow.md#r4--request-branch--worktree--merge-gate) |
+| 1 | Request branch and worktree created from an up-to-date `origin/main`; primary environment reused where safe | [R4 — Request branch + worktree + merge gate](03-ai-development-workflow.md#r4--request-branch--worktree--merge-gate) |
 | 2 | Code/doc implements the planned change | Step 4 of [development loop](03-ai-development-workflow.md#2-development-loop) |
 | 3 | All impacted specs updated | [R1 — Spec-sync](03-ai-development-workflow.md#r1--spec-first--spec-sync) |
 | 4 | E2E scenarios documented (or confirmed not needed) | [R3 — E2E coverage doc](03-ai-development-workflow.md#r3--e2e-coverage-doc) |
-| 5 | Targeted local checks follow the existing risk standard; for a code-bearing change the relevant E2E gate passed on the integrated local `main` before the branch push, the PR/MR, or a commit-only completion (or its `NOT RUN` limitation is recorded); after the remote merge the affected suites were rerun when the landed executable content changed; required tests need no separate user request | Steps 7, 10, and 11 of development loop |
+| 5 | Targeted local checks follow the existing risk standard; for a code-bearing change the relevant E2E gate passed on a candidate that contains latest `origin/main` (`pnpm check:pr-base`) before the branch push, the PR/MR, or a commit-only completion (or its `NOT RUN` limitation is recorded); after the remote merge the affected suites were rerun when the landed executable content changed; required tests need no separate user request | Steps 7, 10, and 11 of development loop |
 | 6 | Change committed with conventional message | [R2 — Commit-per-change](03-ai-development-workflow.md#r2--commit-per-change) |
 | 7 | BOARD updated if milestone deliverable completed | Step 9 of development loop |
 | 8 | No secrets or local data in commit | [§4.4 Never commit](03-ai-development-workflow.md#44-never-commit) |
 | 9 | Requested local/remote `main` integration completed under R4; expected commits verified and merged worktree/branch removed; any requested launch uses integrated `main` | [R4 — Request branch + worktree + merge gate](03-ai-development-workflow.md#r4--request-branch--worktree--merge-gate) |
 | 10 | No merged worktree left on disk; `git worktree list` has no stale entry for this request | [§6.1 Merge Cleanup Checklist](#61-merge-cleanup-checklist) |
 | 11 | If a GitHub issue was linked: verified before work; commented in the issue language; closed when conclusive | [R5 — Verify linked GitHub issues](03-ai-development-workflow.md#r5--verify-linked-github-issues-before-work-then-reply-and-close) |
-| 12 | If a GitHub pull request was linked: principle reviewed; merged first when sound; follow-up after merge; contributor work not discarded | [R6 — Merge a linked pull request whose principle is sound, then follow up](03-ai-development-workflow.md#r6--merge-a-linked-pull-request-whose-principle-is-sound-then-follow-up) |
+| 12 | If a GitHub pull request was linked: root-cause bar reviewed; merged only when it actually fixes the problem with a minimal diff; follow-up after merge; contributor work not discarded for nits | [R6 — Land a linked pull request only when it fixes the root cause with a minimal diff](03-ai-development-workflow.md#r6--land-a-linked-pull-request-only-when-it-fixes-the-root-cause-with-a-minimal-diff) |
 
 If any applicable gate fails, the requested integration is **not Done**; report
 the blocker without weakening the gate.

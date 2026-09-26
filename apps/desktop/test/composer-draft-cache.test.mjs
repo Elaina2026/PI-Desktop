@@ -11,12 +11,14 @@ import {
   captureComposerDraft,
   deleteComposerDraft,
   draftKeyForSession,
-  flushScheduledHomeDraftAdopt,
-  scheduleHomeDraftAdopt,
   draftOwnerSessionId,
+  flushScheduledHomeDraftAdopt,
+  markComposerDraftEdited,
   pruneComposerDrafts,
   readComposerDraft,
+  readComposerDraftRevision,
   resetComposerDraftCache,
+  scheduleHomeDraftAdopt,
   snapshotComposerDraft,
   writeComposerDraft,
 } from "../src/lib/composer-draft-cache.ts";
@@ -36,6 +38,26 @@ test("draft keys isolate the home slot from a session id", () => {
   assert.equal(draftOwnerSessionId("sess-1"), "sess-1");
 });
 
+test("draft revisions distinguish edit-and-restore and remain isolated by key", () => {
+  const submitted = readComposerDraftRevision("session-a");
+  const edited = markComposerDraftEdited("session-a");
+  const restored = markComposerDraftEdited("session-a");
+  const otherSession = readComposerDraftRevision("session-b");
+  assert.notEqual(edited, submitted);
+  assert.notEqual(restored, edited);
+  assert.notEqual(otherSession, restored);
+  assert.equal(readComposerDraftRevision("session-a"), restored);
+});
+
+test("prune and reset discard revision entries without reusing old versions", () => {
+  const pruned = markComposerDraftEdited("pruned");
+  pruneComposerDrafts([]);
+  assert.notEqual(readComposerDraftRevision("pruned"), pruned);
+  const reset = markComposerDraftEdited("reset");
+  resetComposerDraftCache();
+  assert.notEqual(readComposerDraftRevision("reset"), reset);
+});
+
 test("home snapshots keep file references owned by the empty session id", () => {
   const snapshot = snapshotComposerDraft(
     "see this",
@@ -52,14 +74,29 @@ test("home snapshots keep file references owned by the empty session id", () => 
 });
 
 test("the module cache survives a Composer remount", () => {
-  captureComposerDraft("sess-a", "draft A", []);
+  captureComposerDraft("sess-a", "draft A", [], "/project-a");
   captureComposerDraft(HOME_DRAFT_KEY, "home draft", [
     { sessionId: "", path: "/tmp/note.txt", name: "note.txt", kind: "file" },
-  ]);
+  ], "/project-a");
   // A remount is just another reader of the same map.
   assert.equal(readComposerDraft("sess-a")?.text, "draft A");
+  assert.equal(readComposerDraft("sess-a")?.workspacePath, "/project-a");
   assert.equal(readComposerDraft(HOME_DRAFT_KEY)?.text, "home draft");
   assert.equal(readComposerDraft(HOME_DRAFT_KEY)?.fileReferences[0]?.name, "note.txt");
+});
+
+test("adopting a home draft preserves its workspace owner", () => {
+  captureComposerDraft(HOME_DRAFT_KEY, "home draft", [
+    { sessionId: "", path: "src/main.ts", name: "main.ts", kind: "file", token: "\uE000" },
+  ], "/project-a");
+  adoptHomeDraftForSession("sess-new");
+  assert.equal(readComposerDraft("sess-new")?.workspacePath, "/project-a");
+});
+
+test("draft writes without workspace metadata retain the existing owner", () => {
+  captureComposerDraft("sess-a", "draft A", [], "/project-a");
+  writeComposerDraft("sess-a", { text: "draft A with an attachment", fileReferences: [] });
+  assert.equal(readComposerDraft("sess-a")?.workspacePath, "/project-a");
 });
 
 test("pruning drops deleted sessions and keeps home plus the live key", () => {
@@ -131,10 +168,11 @@ test("composer hydrates from the shared cache and persists across unmount and hi
 test("composer handles home drafts, deleted sessions, and async sends by key", () => {
   assert.match(composer, /pruneComposerDrafts\(\[/);
   assert.match(composer, /HOME_DRAFT_KEY,/);
-  assert.match(composer, /const clearDraftForKey = \(key: string\)/);
+  assert.match(composer, /const clearDraftForKey = \(\s*key: string,\s*expectedRevision\?: number,\s*submitted\?: ComposerDraftSnapshot/);
   assert.match(composer, /deleteComposerDraft\(key\)/);
   assert.match(composer, /draftKeyForSession\(useAppStore\.getState\(\)\.activeSessionId\)/);
   assert.match(composer, /const submittedDraftKey = draftKey/);
-  assert.match(composer, /clearDraftForKey\(submittedDraftKey\)/);
+  assert.match(composer, /clearDraftForKey\(submittedDraftKey, submittedDraftRevision, submittedDraft\)/);
+  assert.match(composer, /readComposerDraftRevision\(key\) !== expectedRevision/);
   assert.doesNotMatch(composer, /if \(accepted\) clearDraft\(\);/);
 });

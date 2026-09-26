@@ -40,43 +40,20 @@
 
 ### R4 — 请求分支+工作树+合并门
 
-> **每个开发请求都必须从 `main` 的专用分支和工作树开始。用户请求提交或推送时，还必须通过获准的交付路径将该任务集成到 `main`。**
+> **每个开发请求都必须从当前 `origin/main` 的专用分支和工作树开始。打开或更新 PR 时，该 head 必须包含最新的 `origin/main`。**
 
-- 在编辑之前，保留任何现有的未提交工作，获取 `origin/main`，
-  当工作树干净时快进本地 `main`，并创建一个新请求
-  来自最新提交的分支和工作树。小学现有工作
-  决不能仅仅为了开始新的操作而移动、隐藏或覆盖结账
-  请求。
-- 每个请求使用一个短期分支。命名它
-  `<type>/<short-description>`，其中 `type` 匹配常规更改
-  实用时键入，例如 `feat/provider-import` 或
-  `docs/request-branch-workflow`。
-- 每个请求使用一个专用工作树。不要在
-  主要结账或重用另一个请求的工作树。
-- 在安全的情况下重用主要结帐的开发环境：已安装
-  工具链、包管理器存储、构建缓存和忽略本地
-  环境配置仍然是规范环境。参考或
-  需要时将这些资源链接到请求工作树中；请勿复制
-  环境状态写入跟踪文件。安装或生成worktree-local
-  仅当隔离或版本兼容性需要时才声明。
-- 禁止对 `main` 进行开发提交和直接推送。
-- 用户请求提交、推送或两者时，即授权并要求将本次任务集成到本地
-  `main`。如果用户没有明确要求仅保留分支或草稿，不得停在任务分支提交或推送，
-  也不得再次请求合并确认。
-- 仅请求提交或本地合并，并不自动授权远程发布。未获远程交付授权时，完成必要的
-  验证并合入本地 `main`，不要推送或创建远程 PR/MR。
-- 远程推送获得授权后，推送请求分支，创建面向 `main` 的 PR/MR，通过所需的远程
-  检查和审查，并使用仓库允许的策略合并。随后安全地获取并同步本地 `main`。
-  不得据此推断可以直接推送 `main`、强制推送或丢弃无关本地工作。
-- 两条交付路径都必须保留验证、E2E、安全和冲突门禁。如果门禁、认证、权限或所需
-  审查阻止集成，必须报告实际阻塞原因和剩余工作；该请求尚未完成。
-- 工作树清理是强制性的并且是立即的。一旦请求分支
-  集成到 `main` — 包括请求时的本地 `main` 合并
-  在没有远程 PR/MR 的情况下交付 — 删除工作树并删除合并的
-  分支。合并的请求不得在磁盘上留下工作树。仅删除您的
-  自己的工作树和分支，并且只有在验证合并提交之后
-  存在于 `main` 中。
-- 如果用户在交付后要求启动应用，必须从已集成的 `main` 工作树和开发环境构建并启动。
+- 编辑前保留未提交工作，获取 `origin/main`，工作树干净时快进本地 `main`，并从该提交创建请求分支和工作树。不得为了开新请求而移动、藏匿或覆盖主工作区里的现有工作。
+- 每个请求使用一个短期分支，命名为 `<type>/<short-description>`。
+- 每个请求使用一个专用工作树。不要在主工作区或别人的工作树里实现新请求。
+- 在安全的情况下复用主工作区的宿主开发环境：工具链、兼容的
+  `node_modules`、Electron、Rust/Cargo 目标、包存储、缓存和忽略的本地配置。
+  必要时通过引用或链接使用，不要为 E2E 单独安装第二套环境。
+- 禁止在 `main` 上开发或直接推送。
+- 仅请求提交并不授权远程发布。未获远程授权时，停在任务分支提交；不要为了跑 E2E 把任务合进本地 `main`。
+- 打开或更新 PR/MR 之前，获取 `origin/main` 并确认它是请求 head 的祖先（`git merge-base --is-ancestor origin/main HEAD` 或 `pnpm check:pr-base`）。私有分支用 rebase；已共享且不宜改写历史时用非破坏性合并。不得打开或更新落后于 `origin/main` 的 PR。
+- 获准远程交付后，按 `AGENTS.md` 的固定顺序：相对最新 `origin/main` 刷新，在工作树跑 task-candidate E2E，推送请求分支，打开面向 `main` 的 PR/MR，通过远程检查（含 PR-base 门）和审查后合并，再同步本地 `main`。
+- 合入 `main` 后立即删除自己的工作树和已合并分支。
+- 若用户要求启动应用，从已集成的 `main` 构建并启动。
 
 ### R5 — 先核实链接的 GitHub issue，再回复并关闭
 
@@ -93,23 +70,26 @@
 - issue 链接仅授权评论并关闭**该** issue。它不授权 git push。远程发布仍按 R4 和 `AGENTS.md` 选择加入。
 - 不得评论或关闭无关 issue。除非用户明确要求，否则不得重新打开已关闭的 issue。
 
-### R6 — 原则没问题的链接 PR 先合入，再完善
+### R6 — 链接 PR 必须根治问题且改动最小才可合入
 
-> **链接的 GitHub pull request 只要方向正确，就必须先合入。完整性、风格、规格同步和打磨在合入之后进行，以免贡献者的工作被丢掉。**
+> **链接的 GitHub pull request 只有真正从根上消掉所报告的失败路径、且改动是最小一致修复时才可合入。方向正确不够。完整性细枝末节可以合入后再做；没修完的问题不能合。**
 
 当用户提示包含 GitHub pull request URL，或本仓库中无歧义的 pull request 编号时，适用本规则。
 
 - 在创建替代实现或要求重写之前，先获取 pull request（标题、正文、文件、提交、评论、检查、草稿状态、base/head 以及关联 issue）。
-- 独立判断**原则**是否成立。该变更必须针对真实且在范围内的问题，并且方案与基线、安全边界和架构兼容（或是有规格依据的正当修订）。判断的是方向，而不是该 pull request 是否已经满足 R1–R5 的完整性。
-- 当原则成立时，不得把该 pull request 重写为替代实现、因细枝末节关闭它，或要求贡献者从头再来。
-- 若原则成立：
+- 独立核实以下全部成立：
+  1. 所报告的问题真实且在范围内（与 R5 同一标准）。
+  2. 该变更必须从根上修复所报告的问题，且是最小一致改动——不是旁边的症状、纯文档重述、配置契约测试，或留下原路径的半截绕过。
+  3. 多出来的文件、重构和规格表演不能弥补没修完的问题。方案仍须与基线、安全边界和架构兼容（或是有规格依据的正当修订）。
+- 当 (1)–(3) 成立时，不得把该 pull request 重写为替代实现、因细枝末节关闭它，或要求贡献者从头再来。
+- 若 (1)–(3) 成立：
   1. 先合入**该** pull request，并保留贡献者的提交。使用仓库允许的、能让贡献者作为合入工作作者的合并策略。
-  2. 额外测试覆盖、文档、命名清理、格式化和其他非阻塞打磨可以作为后续工作。构建、类型检查、相关既有测试、必需的 E2E、安全、数据安全、协议兼容性和合并冲突失败仍然是落地阻塞项。
-  3. 会破坏 `main` 的落地阻塞（无法编译、使改动区域的现有测试失败、或存在合并冲突）可以在作者工作**之上**追加最小提交以便合入。不得 squash 掉作者。不得改写设计。
+  2. 额外测试覆盖、文档、命名清理、格式化和其他非阻塞打磨可以作为后续工作，**前提是它们不是证明根因修复所必需的**。构建、类型检查、相关既有测试、必需的 E2E、安全、数据安全、协议兼容性和合并冲突失败仍然是落地阻塞项。
+  3. 会破坏 `main` 的落地阻塞（无法编译、使改动区域的现有测试失败、或存在合并冲突）可以在作者工作**之上**追加最小提交以便合入。不得 squash 掉作者。不得改写设计。不得把 diff 扩到根因修复之外。
   4. 该 pull request 进入 `main` 之后，按 R4 从更新后的 `main` 做任何后续完善。
   5. 用该 pull request 的原文语言评论：肯定贡献、说明已合入的内容，并列后续工作（如有）。
-- 若原则不成立，或存在危害阻塞（密钥、沙箱或权限绕过、恶意或明显破坏性改动、超出范围地推翻冻结决策、无关的顺便改动）：不得合入。用该 pull request 的原文语言评论证据。不得在假装该 pull request 从未存在的情况下悄悄重做同一想法。
-- 不得合入作者尚未标为 ready 的草稿 pull request，除非用户明确要求合入该草稿。评论原则审查结果并等到它 ready。
+- 若 (1)–(3) 不成立，或存在危害阻塞（密钥、沙箱或权限绕过、恶意或明显破坏性改动、超出范围地推翻冻结决策、无关的顺便改动）：不得合入，不得以「方向没问题、以后再补」为由通过，并用该 pull request 的原文语言评论证据。作者的方案若能真正修到根因，优先做最小补完。除非用户要求接管，否则不得假装该 pull request 从未存在而悄悄重做同一想法。
+- 不得合入作者尚未标为 ready 的草稿 pull request，除非用户明确要求合入该草稿。评论审查结果并等到它 ready。
 - pull request 链接在本规则适用时，授权审查、评论并合入**该** pull request。它不授权对贡献者分支 force-push，也不授权发布无关分支。后续工作仍遵循 R4 的远程发布选择加入规则。
 - 不得评论或合入无关 pull request。已合入的 pull request 不再重新打开；剩余缺口转为普通后续工作。
 - 当同时链接了 issue 和 pull request 时，R6 适用于该 pull request；R5 在合入结果之后仍适用于该 issue。
@@ -145,11 +125,11 @@
 
 ## 2. 开发循环
 
-每一个变化都遵循这个顺序。如果实施过程中出现新的需求，则可以重复步骤。如果提示包含 GitHub issue，必须在步骤 1 之前完成 R5 核实。如果提示包含 GitHub pull request，必须在开始替代实现或后续完善之前完成 R6 原则审查（原则成立时先合入）。
+每一个变化都遵循这个顺序。如果实施过程中出现新的需求，则可以重复步骤。如果提示包含 GitHub issue，必须在步骤 1 之前完成 R5 核实。如果提示包含 GitHub pull request，必须在开始替代实现或后续完善之前完成 R6 根因审查（只有真正修好且改动最小时才合入）。
 
 ```
 0. If a GitHub issue is linked: verify the claim (R5) before any implementation
-0b. If a GitHub pull request is linked: review the principle (R6); merge first when sound; start follow-up only after it is in `main`
+0b. If a GitHub pull request is linked: review root cause and minimality (R6); merge only when it actually fixes the problem; start follow-up only after it is in `main`
 1. Sync main + create a request branch and worktree
 2. Read baseline + relevant specs
 3. Plan change + list impacted specs and necessary validation
@@ -170,7 +150,7 @@
 | 步骤 | 行动 | 输出 |
 |---|---|---|
 | **0. Issue 核实** | 当链接了 GitHub issue 时，先获取并独立核实所报告的问题是否存在。若不存在则停止实现（评论，并仅在结论明确时关闭）。 | 已核实的 issue，或评论以及关闭/保持打开的决定。 |
-| **0b. PR 审查** | 当链接了 GitHub pull request 时，先获取并独立判断原则是否成立。成立则先合入；仅在它进入 `main` 之后开始后续完善。不成立则停止（评论，不重写）。 | 已合入的贡献者 PR 加后续计划，或评论且不合入。 |
+| **0b. PR 审查** | 当链接了 GitHub pull request 时，先获取并独立核实它是否从根上修好所报告的问题、且改动最小。成立才合入；仅在它进入 `main` 之后开始后续完善。不成立则停止（评论，不重写）。 | 已合入的贡献者 PR 加后续计划，或评论且不合入。 |
 | **1.分支+工作树** | 保留现有工作，从 `origin/main` 进行更新，并在专用工作树中创建专用请求分支。在安全的情况下重复使用主要结账环境。 | 当前 `main` 上的独立任务文件具有一致的开发环境。 |
 | **2.阅读** | 阅读 `00-baseline.md` 以及与变更区域相关的任何规范。 | 约束的心理模型。 |
 | **3. Plan** | 描述预期的改变。列出需要更新的每个规范、ADR 和 e2e 场景，并评估是否需要本地验证。 | 变更计划+影响和验证列表。 |
@@ -197,6 +177,7 @@
 - E2E 场景文档和 E2E 执行是不同的问题。 R3依然
   需要场景更新以实现用户可见或协议可见的行为。
 - 每个代码 PR 或本地 `main` 集成都必须运行至少一个相关 E2E 套件，并运行受影响回归面所需套件的并集。可用命令由根目录 `package.json` 和 `04-e2e-test-plan.md` 中的选择说明定义。
+- task-candidate E2E 可以使用请求工作树中的源码，但必须使用 R4 所述的宿主依赖/运行时环境。不要每次运行都重新安装仓库环境；仅当宿主依赖缺失或不兼容时才安装或重建，并记录原因。临时 profile、数据、socket、端口、日志和工件仍须与宿主可变运行时状态隔离。
 - 开发迭代仍然基于风险：小改动不需要每次都运行全部套件，但合入前所有相关 E2E 必须通过。
 - 如果本地环境无法运行必需套件，必须记录套件、原因、替代验证和剩余风险。在具备条件且可信的环境中通过前，分支不具备合入条件。
 - 托管平台在运行后自动启动所需的 E2E 作业
@@ -307,9 +288,7 @@
   安全的本地配置。请求可能会创建隔离的本地状态
   当共享不安全或不兼容时，但该状态仍被忽略
 并且不得泄漏到提交中。
-- **交付遵循 R4 的授权边界。** 仅提交的交付完成经过验证的本地 `main` 合并；获得
-  远程交付授权时，完成进入远程 `main` 的 PR/MR 合并并同步本地 `main`。明确要求仅
-  分支或草稿时，以较窄的范围为准。
+- **交付遵循 R4 的授权边界及其固定顺序。** 仅提交的交付停在工作树里的请求分支提交。获准远程交付时，先相对最新 `origin/main` 刷新（`pnpm check:pr-base`），在工作树跑 task-candidate E2E，再推送并打开 PR/MR，合入远程 `main` 后同步本地。明确要求仅分支或草稿时，以较窄的范围为准。不得打开或更新落后于 `origin/main` 的 PR。
 
 典型请求开始（从主结帐运行；选择其外部的路径）：
 
@@ -336,42 +315,36 @@ git worktree add -b <type>/<short-description> <worktree-path> origin/main
 并清理）：
 
 ```bash
+# from the request worktree
+git fetch origin main
+git rebase origin/main   # private branch; do not force-push a shared branch
+pnpm check:pr-base
+# run the required task-candidate E2E suites for this change (R7)
 git push -u origin <type>/<short-description>
 gh pr create --base main --head <type>/<short-description>
 gh pr checks --watch
 gh pr merge --merge
-cd <primary-checkout>
+git fetch origin main
+# from a clean primary checkout
 git switch main
-git pull --ff-only origin main
-git merge-base --is-ancestor <type>/<short-description> main
+git merge --ff-only origin/main
 git worktree remove <worktree-path>
 git branch -d <type>/<short-description>
 git worktree prune
 git push origin --delete <type>/<short-description>
 ```
 
-通过合并到本地 `main` 来集成请求时进行请求清理
-而不是远程 PR/MR（从主结帐运行）：
+远程合并后，尽可能快进同步本地 `main`。确认请求提交已在远程 `main` 且没有仅本地提交后，才把本地 `main` 重置到 `origin/main`。
 
-```bash
-git switch main
-git merge <type>/<short-description>
-git merge-base --is-ancestor <type>/<short-description> main
-git worktree remove <worktree-path>
-git branch -d <type>/<short-description>
-git worktree prune
-```
+如果主工作区无法做这次同步，另开一个短命的 `main` 工作树，不要打扰无关工作。
 
-本地交付时，如果请求分支仍跟踪不包含本地提交的 `origin/main`，`git branch -d` 可能
-会拒绝删除。仅当上面的 ancestry 检查成功且该分支确实属于本次请求时，才解除上游后
-再次执行普通删除：
+不要为了跑 E2E 或开 PR 把请求分支合进本地 `main`。无远程 PR/MR 的本地交付留在请求分支上，直到用户明确要求集成。
 
-```bash
-git branch --unset-upstream <type>/<short-description>
-git branch -d <type>/<short-description>
-```
-
-本地 `main` 必须包含每个任务提交；已发布但尚未合入远程 `main` 的请求分支不适用此回退。
+拆卸前工作树必须清洁；提交或丢弃请求自己的
+首先进行剩余的更改。使用 `git branch -d` 而不是 `-D` 因此未合并
+分支拒绝删除。如果 `git worktree remove` 报告工作树为脏
+或锁定，解决该状态而不是强制删除，并且永远不要删除
+另一个请求的工作树。
 
 拆卸前工作树必须清洁；提交或丢弃请求自己的
 首先进行剩余的更改。使用 `git branch -d` 而不是 `-D` 因此未合并
@@ -397,7 +370,7 @@ git branch -d <type>/<short-description>
 9. 按用户要求的提交/推送交付已集成到本地 `main`；获得远程交付授权时，PR/MR 已审核并合入远程 `main`，且本地 `main` 包含已落地的变更。
 10. 集成后已在 `main` 中确认预期提交，且请求工作树已移除、合并的请求分支已删除。
 11. 若链接了 GitHub issue：在实现前已核实该主张；issue 收到以其原文语言撰写的评论；结论明确时已关闭该 issue。
-12. 若链接了 GitHub pull request：已审查原则；原则成立时已先合入；后续完善在合入之后落地；贡献者的工作未被丢掉。
+12. 若链接了 GitHub pull request：已审查根因门槛；仅在真正修好且改动最小时合入；后续完善在合入之后落地；未因细枝末节丢掉贡献者的工作。
 
 ### 发布/版本标签门
 
@@ -426,6 +399,7 @@ D164 与 D260。 GitHub 发行说明并不能替代。
 | 直接在 `main` 上开发、提交或推送 | 违反 R4；绕过隔离和审查门 |
 | 在主结帐或另一个请求的工作树中开发新请求 | 违反 R4；混合任务文件和本地状态 |
 | 重用请求分支来完成不相关的工作 | 混合请求范围并削弱可追溯性 |
+| 打开或更新 head 落后于 `origin/main` 的 PR/MR | 违反 R4；审查会从过期基线开始 |
 | 用户要求提交/推送交付时停在任务分支提交或推送 | 违反 R4，除非用户明确限定为分支或草稿交付 |
 | 将合并的请求工作树保留在磁盘上 | 违反 R4；陈旧的工作树积累并导致交叉请求污染 |
 | 修改基线冻结决策，无需 ADR + 版本升级 | 基线被冻结；变更需要正式流程 |
@@ -433,9 +407,10 @@ D164 与 D260。 GitHub 发行说明并不能替代。
 | 在一次提交中混合多个逻辑更改而没有明确的消息 | 历史粒度的损失 |
 | 未核实问题是否存在就开始实现链接的 GitHub issue | 违反 R5；把工作浪费在无效或已修复的主张上 |
 | 关闭链接的 GitHub issue 时没有以其原文语言撰写的评论 | 违反 R5；没有公开记录处理结果 |
-| 关闭、重写或要求重启原则成立的链接 pull request | 违反 R6；丢掉贡献者的工作 |
-| 仅因缺失规格、测试、风格或智能体工作流完整性而阻止合入原则成立的链接 pull request | 违反 R6；完整性是合入后的后续工作 |
-| 合入原则不成立或引入危害阻塞的链接 pull request | 违反 R6；先合入不适用于不安全或方向错误的改动 |
+| 关闭、重写或要求重启已经根治问题且改动最小的链接 pull request（仅因细枝末节） | 违反 R6；丢掉贡献者的工作 |
+| 仅因缺失规格、额外测试、风格或智能体工作流完整性而阻止合入已根治问题的链接 pull request | 违反 R6；那些是合入后的后续工作 |
+| 合入只是方向正确、仍留下原失败路径、或未经说明就大于最小修复的链接 pull request | 违反 R6；方向正确不够 |
+| 合入引入危害阻塞的链接 pull request | 违反 R6 |
 | 为落地链接 pull request 而对贡献者分支 force-push | 违反 R6；落地修复加在作者提交之上 |
 | 在不为每个已发货语言更新 `packages/shared/src/changelog.ts` 的情况下标记稳定的应用程序版本 | 违反 D164/D345/发布操作手册；该语言版本的应用内新增功能为空 |
 | 在 `README.md` / `README.zh-CN.md` 仍声明旧版本线时标记稳定版本，或用 `--skip-docs-check` 绕过 `scripts/check-release-docs.mjs` | 违反 D260/发布操作手册；已发布文档宣传的版本与实际发布不符 |
@@ -466,5 +441,5 @@ D164 与 D260。 GitHub 发行说明并不能替代。
 - [ ] 禁止行为列表涵盖已知的风险领域。
 - [ ] `AGENTS.md` 指向此文档、`04-e2e-test-plan.md` 和 `05-change-checklist.md`。
 - [ ] 链接的 GitHub issue 必须在实现前核实，然后以其原文语言评论，并在结论明确时关闭。
-- [ ] 原则成立的链接 GitHub pull request 必须先合入，再完善；不得丢掉贡献者的工作。
+- [ ] 链接的 GitHub pull request 只有根治问题且改动最小才可合入；不得因细枝末节丢掉贡献者的工作。
 - [ ] 更新所有索引（NAV、交付自述文件、规格自述文件、文档自述文件、董事会）。

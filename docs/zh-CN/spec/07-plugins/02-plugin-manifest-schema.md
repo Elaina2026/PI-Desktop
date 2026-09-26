@@ -104,6 +104,9 @@ locale 声明。扩展页、插件启动器和市场（从 catalog 条目读取�
    系统语言）。存储行保留作者原文，因此切换语言只改变读取结果，绝不改写注册表。
 4. 该块是展示元数据。格式错误（不是 locale → 对象的对象）会让 manifest 校验失败；
    条目里未知的 locale 与未知字段一律忽略。
+5. 该块只服务身份文案（`name`、`description`、`safetyNotes`）。插件自有文案——面板、
+   视图、widget、生成式设置、toast、运行时命令标题——不在这里翻译。宿主只发布当前
+   语言（`pi.app.getLocale`、`appearance:changed`），由插件自行本地化（ADR 0280）。
 
 ## 4. 贡献
 
@@ -145,7 +148,7 @@ type PluginAgentToolContrib = {
 
 type PluginSettingContrib = {
  key: string;
- title: string;
+ title: string; // 作者语言；生成式设置面板不做本地化
  description?: string;
  type: "string" | "number" | "boolean" | "select" | "json" | "shortcut";
  default?: unknown;
@@ -180,8 +183,9 @@ type PluginThemeContrib = {
  label: string;
  path: string; // relative `.css` file
  base?: "light" | "dark"; // palette the overrides layer on, default `dark`
- assets?: string[]; // 绝对路径的 png/jpg/jpeg/webp/avif/svg/woff2，总和上限 4 MB；
-                    // 命中的 `url()` 会被改写为 `plugin-asset://`
+ assets?: string[]; // 插件包内相对路径或绝对路径；png/jpg/jpeg/webp/avif/svg/woff2 白名单，总和上限 4 MB；
+                    // 相对路径在插件根目录内解析，拒绝路径穿越和 `node_modules`；
+                    // 命中的 `url()` 改写为 `plugin-asset://`
 };
 
 type PluginWindowAppearanceContrib = {
@@ -244,8 +248,17 @@ type PluginProviderModelContrib = {
  contextWindow?: number;
  maxTokens?: number;
  supportsImages?: boolean;
+ /** 模型可提供的规范思考档位，按声明顺序保留。 */
+ thinkingLevels?: string[];
+ /** 当该值存在于 `thinkingLevels` 时，新会话使用它。 */
+ defaultThinkingLevel?: string;
 };
 ```
+`thinkingLevels` 可选。宿主会裁剪条目、丢弃未知规范档位、去重，并保留剩余的声明顺序。
+缺失或不可用的列表会变成空绑定。只有当 `defaultThinkingLevel` 命中该模型列表中的归一化档位
+时才会保留；否则会被丢弃，普通绑定归一化会选择第一个可用档位。
+清单校验会拒绝非数组的 `thinkingLevels`、其中任何非字符串条目，或非字符串的
+`defaultThinkingLevel`；未知的字符串档位则会被接受并在归一化时丢弃。
 
 ## 5. 权限枚举
 
@@ -279,8 +292,10 @@ type PluginPermission =
  | "session.read.own"
  | "session.update.own"
  | "session.delete.own"
+ | "usage.read"
  | "audio.capture.background"
  | "audio.playback.background"
+ | "speech.adapter.register"
  | "keyboard.globalShortcut"
  | "net.websocket";
 ```

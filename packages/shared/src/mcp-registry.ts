@@ -11,9 +11,10 @@ import {
   catalogEntryError,
   type McpCatalogCategory,
   type McpCatalogEntry,
+  type McpCatalogHeaderBinding,
   type McpCatalogRequiredEnv,
 } from "./mcp-catalog.js";
-import { isPublicHttpsUrl } from "./public-network.js";
+import { isPublicHttpsUrl, isSafeUserEndpointUrl } from "./public-network.js";
 export { isPublicHostname, isPublicIpLiteral } from "./public-network.js";
 
 export type RegistryEnvVar = {
@@ -41,10 +42,24 @@ export type RegistryPackage = {
   environmentVariables?: RegistryEnvVar[];
 };
 
+/**
+ * A registry input: the shape shared by a remote header, a package environment
+ * variable and an entry of a header's `variables` map.
+ */
+export type RegistryInput = {
+  description?: string;
+  format?: string;
+  isRequired?: boolean;
+  isSecret?: boolean;
+  value?: string;
+  default?: string;
+  variables?: Record<string, RegistryInput>;
+};
+
 export type RegistryRemote = {
   type?: string;
   url?: string;
-  headers?: Array<{ name?: string; value?: string }>;
+  headers?: Array<RegistryInput & { name?: string }>;
 };
 
 export type RegistryServer = {
@@ -125,23 +140,68 @@ function packageSpecifier(pkg: RegistryPackage, separator: "@" | "=="): string |
   return version ? `${identifier}${separator}${version}` : identifier;
 }
 
-const REMOTE_PLACEHOLDER = /\$\{([A-Z_][A-Z0-9_]*)\}/g;
+/** Registry variables are scoped to each header; legacy dollar tokens remain supported. */
+const REMOTE_PLACEHOLDER = /\$?\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
-function remoteHeaderTemplates(remote: RegistryRemote): {
-  headers: Record<string, string>;
-  requiredEnv?: McpCatalogRequiredEnv[];
-} {
-  const headers = Object.fromEntries(
+function remoteHeaderTemplates(remote: RegistryRemote): Pick<McpCatalogEntry, "headers" | "headerBindings" | "requiredEnv"> {
+  // Keep the same last-header-wins behavior as Object.fromEntries, including its metadata.
+  const headerInputs = new Map(
     (remote.headers ?? [])
       .filter((header) => typeof header.name === "string" && !!header.name && typeof header.value === "string")
-      .map((header) => [header.name!, header.value!]),
+      .map((header) => [header.name!, header]),
   );
-  const names = new Set<string>();
-  for (const value of Object.values(headers)) {
-    for (const match of value.matchAll(REMOTE_PLACEHOLDER)) names.add(match[1]);
+  const inputs = [...headerInputs].map(([header, input]) => {
+    const tokens = new Map<string, { name: string; variable?: RegistryInput }>();
+    for (const match of input.value!.matchAll(REMOTE_PLACEHOLDER)) {
+      const variable = input.variables && Object.hasOwn(input.variables, match[1]) ? input.variables[match[1]] : undefined;
+      // The official contract preserves unbound {name}; only legacy ${NAME} is inferred.
+      if (variable || /^\$\{[A-Z_][A-Z0-9_]*\}$/.test(match[0])) {
+        tokens.set(match[0], { name: match[1], variable });
+      }
+    }
+    return { header, input, tokens };
+  });
+  const nameCounts = new Map<string, number>();
+  for (const { tokens } of inputs) {
+    const names = new Set([...tokens.values()].filter(({ variable }) => typeof variable?.value !== "string").map(({ name }) => name));
+    for (const name of names) nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
   }
-  const requiredEnv = [...names].sort().map((name) => ({ name }));
-  return { headers, ...(requiredEnv.length ? { requiredEnv } : {}) };
+  const usedNames = new Set(nameCounts.keys());
+  const requiredEnv: McpCatalogRequiredEnv[] = [];
+  const headerBindings: Array<[string, Record<string, McpCatalogHeaderBinding>]> = [];
+  for (const [index, { header, tokens }] of inputs.entries()) {
+    const localNames = new Map<string, string>();
+    const bindings: Array<[string, McpCatalogHeaderBinding]> = [];
+    for (const [token, { name, variable }] of tokens) {
+      if (typeof variable?.value === "string") {
+        bindings.push([token, { value: variable.value }]);
+        continue;
+      }
+      let inputName = localNames.get(name);
+      if (!inputName) {
+        inputName = name;
+        if ((nameCounts.get(name) ?? 0) > 1) {
+          inputName = `${name}_${index + 1}`;
+          while (usedNames.has(inputName)) inputName += "_";
+        }
+        usedNames.add(inputName);
+        localNames.set(name, inputName);
+        requiredEnv.push({
+          name: inputName,
+          ...(variable?.description ? { description: variable.description } : {}),
+          ...(variable && variable.isRequired !== true ? { optional: true } : {}),
+          ...(typeof variable?.default === "string" ? { defaultValue: variable.default } : {}),
+        });
+      }
+      bindings.push([token, { input: inputName }]);
+    }
+    headerBindings.push([header, Object.fromEntries(bindings)]);
+  }
+  return {
+    headers: Object.fromEntries(inputs.map(({ header, input }) => [header, input.value!])),
+    headerBindings: Object.fromEntries(headerBindings),
+    ...(requiredEnv.length ? { requiredEnv: requiredEnv.sort((left, right) => left.name.localeCompare(right.name)) } : {}),
+  };
 }
 
 /*
@@ -246,8 +306,7 @@ export function mapRegistryServer(record: RegistryRecord): McpCatalogEntry | nul
       ...base,
       transport: "http",
       url: remote.url!,
-      ...(Object.keys(template.headers).length ? { headers: template.headers } : {}),
-      ...(template.requiredEnv ? { requiredEnv: template.requiredEnv } : {}),
+      ...template,
     };
     return catalogEntryError(entry) ? null : entry;
   }
@@ -293,18 +352,29 @@ export const DEFAULT_MARKET_SOURCE: MarketSource = {
 
 const MAX_MARKET_SOURCES = 16;
 /**
- * Guard for user-entered source URLs. The same credentials-free public HTTPS
- * policy is used by renderer validation and by main-process requests.
+ * Guard for a source URL the user entered.
+ *
+ * The user typed this address, so it may be a LAN or loopback catalog under the
+ * stored `networkPolicy`; plain `http` needs the explicit opt-in. Everything a
+ * source *returns* — a registry record, a catalog body, a redirect target — is
+ * judged by the third-party policy instead, so loosening this guard never
+ * widens the boundary for content the app did not receive from the user.
  */
-export function isSafeMarketSourceUrl(url: string): boolean {
-  return isPublicHttpsUrl(url);
+export function isSafeMarketSourceUrl(
+  url: string,
+  options: { allowInsecureHttp?: boolean } = {},
+): boolean {
+  return isSafeUserEndpointUrl(url, options);
 }
 
 /** A catalog entry tagged with the source that produced it. */
 export type SourcedCatalogEntry = McpCatalogEntry & { sourceId: string };
 
 /** Repair whatever the renderer persisted into a usable source list. */
-export function sanitizeMarketSources(value: unknown): MarketSource[] {
+export function sanitizeMarketSources(
+  value: unknown,
+  options: { allowInsecureHttp?: boolean } = {},
+): MarketSource[] {
   const raw = Array.isArray(value) ? value : [];
   const seen = new Set<string>();
   const sources: MarketSource[] = [];
@@ -317,7 +387,7 @@ export function sanitizeMarketSources(value: unknown): MarketSource[] {
       typeof candidate.name !== "string" ||
       typeof candidate.url !== "string" ||
       (candidate.kind !== "registry" && candidate.kind !== "catalog") ||
-      !isSafeMarketSourceUrl(candidate.url) ||
+      !isSafeMarketSourceUrl(candidate.url, options) ||
       seen.has(candidate.id)
     ) {
       continue;

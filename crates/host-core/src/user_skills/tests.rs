@@ -668,3 +668,219 @@ fn rewriting_a_name_keeps_the_frontmatter_shaped_document_intact() {
         "---\nmeta:\n  name: A\nname: C\n---\n\nBody\n"
     );
 }
+
+#[test]
+fn imports_a_directory_with_skill_md_in_copy_mode() {
+    let app = tempdir().unwrap();
+    let source_dir = app.path().join("incoming/example-skill");
+    fs::create_dir_all(&source_dir).unwrap();
+    fs::write(
+        source_dir.join("SKILL.md"),
+        "---\nname: Example\ndescription: Anthropic-style skill\n---\n\nBody.\n",
+    )
+    .unwrap();
+    fs::write(source_dir.join("resource.txt"), "extra\n").unwrap();
+
+    let mut registry = UserSkillRegistry::new(app.path());
+    let record = registry
+        .import(
+            source_dir.to_str().unwrap(),
+            input("Ignored", "project", Some(app.path().to_str().unwrap())),
+        )
+        .unwrap();
+    let normalized_project =
+        crate::agent_capabilities::normalize_project_path(app.path().to_str().unwrap());
+    let expected_root = crate::agent_capabilities::capability_dir(
+        CapabilityLevel::Project,
+        Some(&normalized_project),
+        "skills",
+    )
+    .unwrap()
+    .join("example");
+    assert!(expected_root.is_dir(), "target dir exists");
+    assert!(expected_root.join("SKILL.md").is_file(), "SKILL.md placed");
+    assert!(
+        expected_root.join("resource.txt").is_file(),
+        "resources copied"
+    );
+    assert_eq!(record.name, "Example");
+    // The record path points at the SKILL.md the scanner selects.
+    assert_eq!(
+        record.path,
+        expected_root.join("SKILL.md").to_string_lossy()
+    );
+    // Source is untouched under copy mode.
+    assert!(source_dir.join("SKILL.md").is_file());
+}
+
+#[test]
+fn imports_a_directory_with_skill_md_in_link_mode() {
+    let app = tempdir().unwrap();
+    let source_dir = app.path().join("incoming/linked-skill");
+    fs::create_dir_all(&source_dir).unwrap();
+    fs::write(
+        source_dir.join("SKILL.md"),
+        "---\nname: Linked\n---\n\nBody.\n",
+    )
+    .unwrap();
+
+    let mut registry = UserSkillRegistry::new(app.path());
+    let mut payload = input("Ignored", "project", Some(app.path().to_str().unwrap()));
+    payload.mode = Some("link".into());
+    let record = registry
+        .import(source_dir.to_str().unwrap(), payload)
+        .unwrap();
+    let normalized_project =
+        crate::agent_capabilities::normalize_project_path(app.path().to_str().unwrap());
+    let expected_root = crate::agent_capabilities::capability_dir(
+        CapabilityLevel::Project,
+        Some(&normalized_project),
+        "skills",
+    )
+    .unwrap()
+    .join("linked");
+    let metadata = fs::symlink_metadata(&expected_root).unwrap();
+    assert!(
+        metadata.file_type().is_symlink(),
+        "link mode leaves a symlink at the destination"
+    );
+    // The symlink resolves and the scanned SKILL.md path reads back through it.
+    assert!(expected_root.join("SKILL.md").is_file());
+    assert_eq!(record.name, "Linked");
+}
+
+#[test]
+fn imports_a_file_in_link_mode() {
+    let app = tempdir().unwrap();
+    let source = app.path().join("incoming/notes.md");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(
+        &source,
+        "---\nname: Notes\ndescription: linked file\n---\n\nBody.\n",
+    )
+    .unwrap();
+
+    let mut registry = UserSkillRegistry::new(app.path());
+    let mut payload = input("Ignored", "project", Some(app.path().to_str().unwrap()));
+    payload.mode = Some("link".into());
+    let record = registry.import(source.to_str().unwrap(), payload).unwrap();
+    let normalized_project =
+        crate::agent_capabilities::normalize_project_path(app.path().to_str().unwrap());
+    let expected = crate::agent_capabilities::capability_dir(
+        CapabilityLevel::Project,
+        Some(&normalized_project),
+        "skills",
+    )
+    .unwrap()
+    .join("notes.md");
+    let metadata = fs::symlink_metadata(&expected).unwrap();
+    assert!(metadata.file_type().is_symlink());
+    assert_eq!(record.name, "Notes");
+}
+
+#[test]
+fn directory_import_without_skill_md_is_rejected() {
+    let app = tempdir().unwrap();
+    let source_dir = app.path().join("incoming/no-skill");
+    fs::create_dir_all(&source_dir).unwrap();
+    fs::write(source_dir.join("readme.md"), "just docs\n").unwrap();
+
+    let mut registry = UserSkillRegistry::new(app.path());
+    let err = registry
+        .import(
+            source_dir.to_str().unwrap(),
+            input("Ignored", "project", Some(app.path().to_str().unwrap())),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("SKILL_INVALID"), "err = {err}");
+    assert!(err.contains("SKILL.md"), "err = {err}");
+}
+
+#[test]
+fn unknown_import_mode_is_rejected() {
+    let app = tempdir().unwrap();
+    let source = app.path().join("incoming.md");
+    fs::write(&source, "---\nname: Any\n---\n\nBody.\n").unwrap();
+    let mut registry = UserSkillRegistry::new(app.path());
+    let mut payload = input("Ignored", "project", Some(app.path().to_str().unwrap()));
+    payload.mode = Some("teleport".into());
+    let err = registry
+        .import(source.to_str().unwrap(), payload)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("unknown import mode"), "err = {err}");
+}
+
+#[test]
+fn shape_dir_requires_a_directory_source() {
+    let app = tempdir().unwrap();
+    let source = app.path().join("incoming.md");
+    fs::write(&source, "---\nname: X\n---\n\nBody.\n").unwrap();
+    let mut registry = UserSkillRegistry::new(app.path());
+    let mut payload = input("Ignored", "project", Some(app.path().to_str().unwrap()));
+    payload.shape = Some("dir".into());
+    let err = registry
+        .import(source.to_str().unwrap(), payload)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("SKILL_INVALID") && err.contains("directory"),
+        "err = {err}"
+    );
+}
+
+#[test]
+fn directory_skill_package_resources_round_trip_without_execution() {
+    let app = tempdir().unwrap();
+    let project = app.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let mut registry = UserSkillRegistry::new(app.path());
+    let mut payload = input("Packaged", "project", Some(project.to_str().unwrap()));
+    payload.id = Some("packaged".into());
+    payload.shape = Some("dir".into());
+    let record = registry.create(payload).unwrap();
+    registry
+        .write_package_files(
+            &record.id,
+            CapabilityLevel::Project,
+            Some(project.to_str().unwrap()),
+            &[("scripts/check.txt".into(), b"safe bytes".to_vec())],
+        )
+        .unwrap();
+    let files = registry
+        .package_files(
+            &record.id,
+            CapabilityLevel::Project,
+            Some(project.to_str().unwrap()),
+        )
+        .unwrap();
+    assert_eq!(
+        files,
+        vec![("scripts/check.txt".into(), b"safe bytes".to_vec())]
+    );
+    assert!(record.path.ends_with("SKILL.md"));
+}
+
+#[test]
+fn directory_skill_package_rejects_traversal() {
+    let app = tempdir().unwrap();
+    let project = app.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let mut registry = UserSkillRegistry::new(app.path());
+    let mut payload = input("Packaged", "project", Some(project.to_str().unwrap()));
+    payload.id = Some("packaged".into());
+    payload.shape = Some("dir".into());
+    let record = registry.create(payload).unwrap();
+    let error = registry
+        .write_package_files(
+            &record.id,
+            CapabilityLevel::Project,
+            Some(project.to_str().unwrap()),
+            &[("../outside.txt".into(), b"unsafe".to_vec())],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("SKILL_INVALID"));
+    assert!(!app.path().join("outside.txt").exists());
+}

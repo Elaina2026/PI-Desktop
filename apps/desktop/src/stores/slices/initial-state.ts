@@ -41,7 +41,6 @@ export function createInitialState(): AppStateData {
         .filter(([, meta]) => meta.collapsed === true)
         .map(([path]) => [path, true]),
     ),
-    subagentPanel: null,
     workPanelOpen: false,
     workPanelTabs: [],
     activeWorkPanelTabId: null,
@@ -51,6 +50,7 @@ export function createInitialState(): AppStateData {
     projectSort: initialSidebarPreferences.projectSort,
     messages: [],
     retainedSessionIds: [],
+    dismissedAssistantErrorMessages: {},
     retainedTranscripts: {},
     transcriptViews: {},
     sessionHistory: {},
@@ -75,6 +75,7 @@ export function createInitialState(): AppStateData {
     page: "chat",
     settingsTab: "general",
     settingsAnchor: null,
+    settingsTabNonce: 0,
     navStack: [{ page: "chat" }],
     navIndex: 0,
     toasts: [],

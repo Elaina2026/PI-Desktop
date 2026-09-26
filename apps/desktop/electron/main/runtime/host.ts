@@ -160,14 +160,16 @@ export function createHostRuntime({
         let payload: Record<string, unknown>;
         if (q.toolName.startsWith("mcp_")) {
           try {
-            const result = await userMcp.callTool(q.toolName, q.args, projectPath);
+            const result = await userMcp.callTool(q.toolName, q.args, projectPath, q.sessionId);
             payload = { executionId: q.executionId, ok: true, content: result ?? null };
           } catch (e) {
             payload = {
               executionId: q.executionId,
               ok: false,
               errorCode:
-                (e as { errorCode?: string })?.errorCode ?? "TOOL_FAILED",
+                (e as { code?: string; errorCode?: string })?.code === "TOOL_ABORTED"
+                  ? "TOOL_ABORTED"
+                  : (e as { errorCode?: string })?.errorCode ?? "TOOL_FAILED",
               content: { error: e instanceof Error ? e.message : String(e) },
             };
           }
@@ -269,7 +271,7 @@ export function createHostRuntime({
             payload = {
               executionId: q.executionId,
               ok: false,
-              errorCode: code === "PERMISSION_DENIED" ? "PERMISSION_DENIED" : "TOOL_FAILED",
+              errorCode: code === "PERMISSION_DENIED" || code === "TOOL_ABORTED" ? code : "TOOL_FAILED",
               content: { error: e instanceof Error ? e.message : String(e) },
             };
           }
@@ -302,6 +304,13 @@ export function createHostRuntime({
       );
     } else if (method === "plans.changed") {
       sendToRenderer(IPC.event.plansChanged, params);
+    } else if (method === "configSync.changed") {
+      sendToRenderer(IPC.event.configSyncChanged, params);
+    } else if (method === "configSync.progress") {
+      // A sync is one request that answers only when it is over, so these
+      // reports are the only thing the page has to show while it runs. The
+      // request's own answer is still the outcome.
+      sendToRenderer(IPC.event.configSyncProgress, params);
     }
   });
   h.onExit(({ code, signal, intentional }) => {

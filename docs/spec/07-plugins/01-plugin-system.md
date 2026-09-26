@@ -300,6 +300,7 @@ Namespace: `pi.plugin.*`
 - `pi.session.list()` / `get()` / `listMessages()` // `session.read.own`
 - `pi.session.rename()` // `session.update.own`
 - `pi.session.delete()` // `session.delete.own`
+- `pi.usage.listTurns()` // `usage.read`; read-only completed-turn facts, no message bodies
 - `pi.agent.complete(input)` // `agent.complete`; host-owned one-shot
 
 Skills are contributed declaratively (`contributes.skills` + `agent.prompt.inject`),
@@ -516,6 +517,16 @@ Rules the control encodes:
   policy (edit or Test connection to retry), rather than repeatedly connecting
   on each call. Removed tools return `TOOL_NOT_FOUND`. Recovery never replays a
   failed `tools/call`, which may already have performed a mutation.
+
+- Streamable HTTP `202 Accepted` acknowledgements for notifications and client
+  responses are not JSON-RPC replies. Any acknowledgement body is discarded,
+  including plain-text `Accepted`; ordinary request replies still follow the
+  JSON/SSE parsing and response-size limits.
+- The MCP row shows “Authorization required” only when runtime status explicitly
+  reports `authRequired`. Missing credentials, an untested connection, and
+  non-authentication failures do not imply OAuth is required. A stored OAuth
+  credential does not hide a subsequent authentication failure. Manual OAuth
+  authorization remains available from the HTTP server menu.
 
 ### 12.3 Skills management in Settings > Agent
 

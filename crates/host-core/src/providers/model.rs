@@ -134,7 +134,16 @@ pub struct ModelBinding {
     /// seed is inherited).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window_source: Option<String>,
+    /// Context window in tokens. Optional on the wire: an absent key reads as
+    /// `0`, which `normalize_model_bindings` replaces with the generic default,
+    /// so a stored record that omits it still loads as one binding instead of
+    /// failing the whole array. A plugin manifest already declares a model
+    /// without either limit, and this is what makes the two paths agree.
+    #[serde(default)]
     pub context_window: u32,
+    /// Max output tokens. Optional on the wire for the same reason as
+    /// `context_window`.
+    #[serde(default)]
     pub max_tokens: u32,
     #[serde(default)]
     pub thinking_levels: Vec<String>,
@@ -149,6 +158,11 @@ pub struct ModelBinding {
     /// None/false keeps the opt-in disabled for existing provider records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available_for_subagents: Option<bool>,
+    /// Opt-in for attaching the provider-hosted web search tool to requests
+    /// for this model. None/false keeps the tool off; there is no catalog
+    /// default because models.dev does not publish hosted-tool capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_web_search: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

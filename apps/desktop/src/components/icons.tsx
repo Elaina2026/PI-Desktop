@@ -88,6 +88,7 @@ import {
   Sun,
   Target,
   Terminal,
+  TextSelect,
   Trash2,
   TriangleAlert,
   Unlock,
@@ -184,6 +185,8 @@ export const IconSidebar = icon(PanelLeft);
 export const IconArrowUp = icon(ArrowUp);
 export const IconArrowDown = icon(ArrowDown);
 export const IconCopy = icon(Copy);
+/* Chat context menus: hand a message's rendered text to the platform selection. */
+export const IconTextSelect = icon(TextSelect);
 export const IconCode = icon(Code2);
 export const IconDatabase = icon(Database);
 export const IconCheck = icon(Check);

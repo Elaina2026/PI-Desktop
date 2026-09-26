@@ -41,7 +41,9 @@ packages/i18n/src/locales/
 ├── tr/index.ts
 ├── de/index.ts
 ├── es/index.ts
-└── fr/index.ts
+├── fr/index.ts
+├── ko/index.ts
+└── pt-BR/index.ts
 ```
 
 英文目录是翻译目录的源类型。`packages/i18n` 中的注册表列出每个已发布语言（id、本地名称、英文名称）。自动化测试会校验每个已发布语言的目录键和插值变量。新增语言只需加一份目录和一行注册表；语言选择器读取该注册表。
@@ -86,7 +88,7 @@ domain.section.item
 - 插件示例文档
 - 核心产品中的命令标题
 
-插件稍后可能会包含本地化的显示字段，但英语字段是必需的。
+插件身份文案（`manifest.i18n`）由宿主解析（ADR 0267）。插件自有界面从宿主语言自行本地化（`pi.app.getLocale`，ADR 0280）。扁平身份字段仍须提供英文。
 
 ## 6. 验收
 

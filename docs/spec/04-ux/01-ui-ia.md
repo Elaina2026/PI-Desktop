@@ -33,15 +33,15 @@ destination, chat as the home surface, tools and permissions inline.
   **Sessions** section with new-session and sort actions, retained open-project
   groups under a following **Projects** section with a persistent new-project
   action, and the WorkBuddy-inspired footer. The footer keeps compact Settings,
-  Extensions, and notification icon actions; Pull requests and Scheduled
-  are intentionally omitted from the home sidebar. Each retained project is a
+  Extensions, Scheduled (clock), and notification icon actions; Pull requests
+  remains omitted from the home sidebar. Each retained project is a
   path-keyed tab/group that can be
   collapsed independently. Project and conversation rows expose
   non-destructive pin/archive actions, an independent conversation-branch
   command, and sortable views. Projects not retained in the sidebar remain
   discoverable through Settings → Project archive.
-  Collapsible to an icon rail (Cmd/Ctrl+B). Its expanded column is fixed at
-  275px; persisted resize preferences from older builds are ignored.
+  Collapsible to an icon rail (Cmd/Ctrl+B). Its expanded column is user-resizable
+  from 240px to 520px (default 275px); dragging below 160px collapses it.
 - **Product identity**: runtime shell copy uses `PI-Desktop`; the home hero and
   sidebar reuse the derived `src/assets/brand/logo-*.png` marks, while composer prompt
   rows have no leading brand icon and session-creation controls use a dedicated
@@ -73,7 +73,14 @@ destination, chat as the home surface, tools and permissions inline.
   left and accessible minimize / maximize-or-restore / close controls at the
   right edge of the conversation pane when the panel is closed (D129). When
   the work panel is open, those controls stay viewport-fixed over the panel
-  header rather than travelling with MainPane. Destination history is
+  header rather than travelling with MainPane. One window-level control band
+  stays outside pane stacking contexts across panel open, preview, restore,
+  and Settings transitions. Its background follows the adjacent titlebar surface
+  (dock header when open, conversation surface when closed) in both themes.
+  Boot splash, search, and toasts stay above that band.
+  Preview navigation must also remain above the panel;
+  macOS keeps native traffic lights and its existing fullscreen insets.
+  Destination history is
   shortcut-first (`Cmd/Ctrl+[` and `Cmd/Ctrl+]`) with no dedicated back/forward
   chrome; while Extensions is active, the footer Plugins button performs one
   Back step as the only pointer affordance. The main titlebar has no
@@ -107,9 +114,10 @@ destination, chat as the home surface, tools and permissions inline.
   revealing it without creating a resource tab and collapsing it without
   discarding one; the create trigger remains unavailable while the panel is
   closed. Closing the final tab keeps the panel open and shows the New launcher.
-  A
-  successful active-session workspace Write/Edit artifact opens Review;
-  scratch, failed, and background-session writes never steal focus. The inner
+  No agent or tool result opens, activates, or resizes the panel: Review is
+  reached only through an explicit user action, so a successful workspace
+  Write/Edit leaves the panel exactly as the user left it and shows its
+  evidence as a transcript card instead. The inner
   divider resizes the panel through the shared three-column budget; moving it
   left takes space until MainChat reaches 450px, at which point the expanded
   sidebar yields immediately, and moving it right gives space back. A manual
@@ -213,6 +221,10 @@ destination, chat as the home surface, tools and permissions inline.
   delete remain separate actions. Rename edits the task label only; archive
   never removes the transcript. Open folder is a project action, not a
   conversation action.
+- **Temporary-task attachments**: selecting a saved attachment opens its file
+  preview even without an open project. Back returns to the no-project browsing
+  state. Branches preserve referenced pasted/imported inputs as child-owned
+  copies; deleting the source task does not break these previews.
 - **Sort**: user-facing modes are Recently updated, Created date, Oldest
   first, and Name. Pinned rows precede unpinned rows. Project groups switch
   to `manual` by dragging a title or using ArrowUp/ArrowDown on that
@@ -236,14 +248,57 @@ title, status badge, branch meta, external link, and "Review with agent"
 (creates a chat turn). Requires an active workspace and `gh`.
 
 ### 3.4 Scheduled
-Create card + task rows (cadence/enabled badges, prompt preview, last run,
-Run now / toggle / Delete). Run now opens a session seeded with the prompt.
+Tasks and Run history views, with an explicit create/edit form, a cadence dropdown, time,
+next occurrence, saved project, per-task permission/model selection, pause/resume and delete confirmation. Hourly
+schedules repeat at one-hour intervals without a time selector. Daily schedules
+use a themed time-period dropdown: Morning 09:00, Afternoon 14:00, Evening
+19:00, Night 22:00. The form does not expose hour/minute editing. AI tools may
+set an exact time; a non-preset time displays as Custom with its HH:mm value
+and survives other form edits until the user explicitly selects a preset. Weekly schedules select one or more weekdays (Monday = 0) in a
+separate dropdown listing Monday through Sunday with selection markers.
+Each day toggles independently; there are no preset combinations. An empty
+selection disables saving. The menu supports arrows, Home/End, Enter/Space,
+Escape/outside dismissal, and exposes selected states. The footer clock and global search open
+this route. Run now dispatches in the background and selects Run history; a
+conversation link opens the real transcript. The latest 100 runs show running,
+completed, failed or interrupted status. Automatic runs never steal foreground
+focus. See [desktop automations](../../adr/scheduled-desktop-automations.md).
+
+The application must remain running. The host polls every 30 seconds and skips
+occurrences more than 90 seconds late or overlapping a running task. Startup
+rearms future occurrences only. Hourly schedules wait a full hour after saving,
+enabling, startup or the preceding automatic admission; Run now leaves the
+automatic occurrence unchanged. Legacy cadence-only tasks require explicit
+schedule configuration. New tasks explicitly save the selected project, Ask
+permission mode and the current default provider/model. Each selector writes only
+to that task. The prompt is labelled Instruction, and these three selectors sit
+inside its bottom toolbar using the same shell, chip and anchored-menu treatment
+as the main Composer. Both surfaces render the same controlled permission picker
+and searchable, provider-grouped model list with capability badges. The task model
+chip displays the model name or alias without a provider prefix. Task selection
+callbacks update only the task draft, never the active conversation or app defaults.
+The instruction input has its own rounded border and tonal
+background above the toolbar, with no native resize handle; longer text scrolls
+inside the input. Existing tasks without provider/model fields continue following the
+app defaults; unavailable saved models remain visible and are not silently replaced.
+Selecting Auto warns that restricted actions may run without asking. The current
+project is captured when first configured when no explicit selection exists;
+subsequent foreground project changes do not retarget it. This includes Manual
+tasks and tasks saved without a project: Run now, renaming, and cadence changes
+preserve that binding, including after restart. Only legacy tasks without a saved
+binding capture the current project on their first explicit configuration. Legacy automatic
+runs without a saved permission mode use Ask and may wait for input in their conversation.
 New tasks default to Agent. A migrated Plan or Goal task is allowed to remain
 stored, but an unattended run is explicitly rejected before provider, artifact,
 or queue work with `PLAN_REQUIRES_INTERACTIVE_SESSION`; it cannot display or
 auto-approve a contract.
 The user must explicitly switch it to Agent before enabling unattended
 execution.
+
+Agent tools can change a Manual task to Hourly by supplying only its id and
+`cadence: "hourly"`; no calendar time is required. Preserve existing schedule
+fields and paused state. Daily and Weekly still require a valid saved or supplied
+schedule. Renaming an Hourly task does not restart its interval.
 
 ### 3.5 Extensions
 

@@ -23,6 +23,7 @@ const [
   eventsSlice,
   queueSlice,
   transcriptSlice,
+  storeHelpers,
   toolbar,
   submitHook,
   draftHook,
@@ -38,6 +39,7 @@ const [
   readStoreModule("slices/events-slice.ts"),
   readStoreModule("slices/queue-slice.ts"),
   readStoreModule("slices/transcript-slice.ts"),
+  readStoreModule("helpers/store-helpers.ts"),
   readComposerModule("ComposerToolbar.tsx"),
   readComposerModule("hooks/useComposerSubmit.ts"),
   readComposerModule("hooks/useComposerDraft.ts"),
@@ -131,21 +133,21 @@ test("running prompts use a removable per-session queue with priority actions", 
     /\.\.\.promoted,\s*\n\s*\{ \.\.\.item, priority: highest \+ 1 \},\s*\n\s*\.\.\.waiting,/,
   );
   assert.match(queuedPromptsLib, /Math\.max\(max, candidate\.priority\)/);
-  // A promoted row is the next turn: move up/down, edit, and remove all lock.
+  // Promotion fixes ordering and editing; removal remains available until delivery.
   assert.match(composer, /data-priority=\{promoted \? "true" : "false"\}/);
   assert.match(composer, /disabled=\{sendNowLocked\}/);
   assert.match(
     composer,
-    /\{promoted \? t\("chat\.sendNowPending"\) : t\("chat\.sendNow"\)\}/,
+    /\{promoted\s*\? t\("chat\.sendNowPending"\)\s*: pending\s*\? t\("common\.saving"\)\s*: t\("chat\.sendNow"\)\}/,
   );
   assert.equal(
-    (composer.match(/disabled=\{promoted\}/g) ?? []).length,
-    8,
-    "four promoted rows set disabled and aria-disabled on move up/down, edit, and remove",
+    (composer.match(/disabled=\{actionsLocked\}/g) ?? []).length,
+    6,
+    "three pending or promoted row actions lock move up/down and edit",
   );
   assert.equal(
-    (composer.match(/aria-disabled=\{promoted\}/g) ?? []).length,
-    4,
+    (composer.match(/aria-disabled=\{actionsLocked\}/g) ?? []).length,
+    3,
     "each locked action carries its own aria-disabled state",
   );
   assert.doesNotMatch(composer, /sendNowRequested/);
@@ -248,10 +250,10 @@ test("send clears the composer before the round trip and restores a rejected dra
     /if \(!steering && !modelReady\) \{\s*showToast\(t\("errors\.MODEL_NOT_CONFIGURED"\), \{ variant: "error" \}\);\s*return;\s*\}/,
   );
   // Optimistic clear, restore on rejection. The clear must precede the await.
-  const clearAt = submit.indexOf("draft.clearDraftForKey(submittedDraftKey);\n    const accepted = steering");
+  const clearAt = submit.indexOf("draft.clearDraftForKey(submittedDraftKey, submittedDraftRevision, submittedDraft);\n    const accepted = steering");
   assert.ok(clearAt > 0, "draft must be cleared before awaiting sendPrompt");
   assert.match(submit, /if \(!accepted\) draft\.restoreDraftForKey\(submittedDraftKey, submittedDraft\);/);
-  assert.doesNotMatch(submit, /if \(accepted\) draft\.clearDraftForKey\(submittedDraftKey\);\s*\};/);
+  assert.doesNotMatch(submit, /if \(accepted\) draft\.clearDraftForKey\(submittedDraftKey, submittedDraftRevision, submittedDraft\);\s*\};/);
   const restore = draftHook.match(
     /const restoreDraftForKey = \(key: string, snapshot: ComposerDraftSnapshot\) => \{[\s\S]*?\n  \};/,
   )?.[0] ?? "";
@@ -273,7 +275,7 @@ test("mode slash prefixes send the trailing prompt and retain failed drafts", ()
   assert.match(submit, /const isModeCommand =/);
   assert.match(
     submit,
-    /if \(isModeCommand && commandBody\)[\s\S]*?await runPaletteCommand\(command\.id\);[\s\S]*?const accepted = await sendPrompt\([\s\S]*?draft\.draftSnapshot\(visibleCommandBody\)[\s\S]*?if \(accepted\) draft\.clearDraftForKey\(submittedDraftKey\);/,
+    /if \(isModeCommand && commandBody\)[\s\S]*?await runPaletteCommand\(command\.id\);[\s\S]*?const accepted = await sendPrompt\([\s\S]*?draft\.draftSnapshot\(visibleCommandBody\)[\s\S]*?if \(accepted\) draft\.clearDraftForKey\(submittedDraftKey, submittedDraftRevision, submittedDraft\);/,
   );
   assert.match(
     submit,
@@ -281,7 +283,7 @@ test("mode slash prefixes send the trailing prompt and retain failed drafts", ()
   );
   assert.match(
     submit,
-    /const submittedDraft = draft\.draftSnapshot\(text\);\s*draft\.clearDraftForKey\(submittedDraftKey\);\s*const accepted = steering[\s\S]*?await steerPrompt\(inlineContent, submittedDraft\)[\s\S]*?await sendPrompt\(inlineContent, submittedDraft\);\s*if \(!accepted\) draft\.restoreDraftForKey\(submittedDraftKey, submittedDraft\);/,
+    /const submittedDraftRevision = draft\.draftRevision\(submittedDraftKey\);\s*const submittedDraft = draft\.draftSnapshot\(text\);[\s\S]*?draft\.clearDraftForKey\(submittedDraftKey, submittedDraftRevision, submittedDraft\);\s*const accepted = steering[\s\S]*?await steerPrompt\(inlineContent, submittedDraft\)[\s\S]*?await sendPrompt\(inlineContent, submittedDraft\);\s*if \(!accepted\) draft\.restoreDraftForKey\(submittedDraftKey, submittedDraft\);/,
   );
   assert.match(store, /draft\?: ComposerDraftSnapshot/);
   const sendPrompt = queueSlice.slice(
@@ -296,9 +298,11 @@ test("mode slash prefixes send the trailing prompt and retain failed drafts", ()
 });
 
 test("draft attachment routing keeps image chips structured and file chips textual", () => {
-  const helperSource = appStore.match(
-    /function promptAttachmentsFromDraft\([\s\S]*?\n\}\n\nfunction promptAttachmentsFromMessage/,
-  )?.[0]?.replace(/\n\nfunction promptAttachmentsFromMessage[\s\S]*$/, "");
+  const helperSource = storeHelpers.match(
+    /(?:export\s+)?function promptAttachmentsFromDraft\([\s\S]*?\n\}\n\n(?:export\s+)?function promptAttachmentsFromMessage/,
+  )?.[0]
+    ?.replace(/\n\n(?:export\s+)?function promptAttachmentsFromMessage[\s\S]*$/, "")
+    .replace(/^export\s+/, "");
   assert.ok(helperSource, "prompt attachment mapper not found");
   const executable = helperSource.replace(
     /function promptAttachmentsFromDraft\(\s*references: ComposerDraftSnapshot\["fileReferences"\],\s*\): AgentPromptAttachment\[\] \{/,

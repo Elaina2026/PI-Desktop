@@ -12,6 +12,7 @@ import {
   createProvider,
   type Api,
   type Context,
+  type FetchFunction,
   type Model,
   type ModelAuth,
   type Models,
@@ -33,6 +34,8 @@ import {
   OPENCODE_GO_API_STYLE,
   OPENCODE_GO_BASE_URL,
   resolveApiStyle,
+  resolveNativeWebSearch,
+  nativeWebSearchTransport,
   deepseekRequestCompat,
   zhipuRequestCompat,
   type ThinkingLevel,
@@ -92,6 +95,32 @@ export function runtimeBaseUrlForApi(api: Api, baseUrl: string): string {
   const withoutTrailingSlash = baseUrl.replace(/\/+$/, "");
   const withoutVersion = withoutTrailingSlash.replace(/\/v1$/i, "");
   return withoutVersion || withoutTrailingSlash;
+}
+
+/**
+ * Whether `api`'s pi-ai adapter accepts a caller-supplied `fetch`.
+ *
+ * The Google adapters throw unless `options.fetch` is `globalThis.fetch`
+ * itself, and every wrapper this runtime builds is a different function, so a
+ * request bound for them must carry no `fetch` at all (issue #1072). An
+ * unknown wire API is treated as accepting one: only these two are known to
+ * refuse, and the default must stay "inject" for everything else.
+ */
+export function adapterAcceptsCustomFetch(api: Api | undefined): boolean {
+  return api !== "google-generative-ai" && api !== "google-vertex";
+}
+
+/**
+ * The `fetch` one request may hand to `api`'s adapter: the caller's wrapper
+ * where the adapter accepts one, otherwise nothing. Callers keep building the
+ * wrapper (response capture, header override); this only decides whether it
+ * reaches the adapter.
+ */
+export function providerRequestFetch(
+  api: Api | undefined,
+  fetchFn: FetchFunction | undefined,
+): FetchFunction | undefined {
+  return adapterAcceptsCustomFetch(api) ? fetchFn : undefined;
 }
 
 /** Map a stored provider apiStyle onto a pi-ai wire API. Unknown styles fall
@@ -169,7 +198,16 @@ export function apiBindingForProviderModel(provider: RuntimeProviderConfig): Api
   if (provider.vendorKey === "antigravity" || provider.apiStyle === "antigravity") {
     return apiBindingForStyle("antigravity");
   }
-  return apiBindingForStyle(resolveApiStyle(provider.modelConfig?.api) ?? provider.apiStyle);
+  return apiBindingForStyle(providerRequestTransport(provider).apiStyle);
+}
+
+function providerRequestTransport(provider: RuntimeProviderConfig) {
+  const apiStyle = resolveApiStyle(provider.modelConfig?.api) ?? provider.apiStyle;
+  return nativeWebSearchTransport({
+    apiStyle,
+    baseUrl: provider.baseUrl ?? provider.modelConfig?.baseUrl ?? apiBindingForStyle(apiStyle).defaultBaseUrl,
+    enabled: provider.modelConfig?.webSearch === true,
+  });
 }
 
 /**
@@ -204,6 +242,24 @@ export function copilotRequestHeaders(
   });
 }
 
+/**
+ * Claude models that publish an effort ladder without a `budget_tokens`
+ * option (Opus 4.7+, Opus 5.x, Fable, ...) reject `thinking.type=enabled`
+ * with a 400. pi-ai only sends adaptive thinking when
+ * `compat.forceAdaptiveThinking` is set, and models.dev carries no compat
+ * record, so derive the flag from the published reasoning options.
+ */
+function requiresAdaptiveThinking(
+  model: Pick<ModelConfig, "reasoning" | "reasoningOptions">,
+): boolean {
+  const options = model.reasoningOptions ?? [];
+  return (
+    model.reasoning &&
+    options.some((option) => option.type === "effort") &&
+    !options.some((option) => option.type === "budget_tokens")
+  );
+}
+
 export function buildProviderModel(
   provider: RuntimeProviderConfig,
 ): Model<Api> {
@@ -217,7 +273,7 @@ export function buildProviderModel(
       ? (provider.baseUrl?.replace(/\/+$/, "").replace(/\/v1internal$/i, "") || "https://cloudcode-pa.googleapis.com")
       : runtimeBaseUrlForApi(
           binding.api,
-          provider.baseUrl ?? catalog?.baseUrl ?? binding.defaultBaseUrl,
+          providerRequestTransport(provider).baseUrl ?? binding.defaultBaseUrl,
         );
   const zhipuCompat = zhipuRequestCompat({
     vendorKey: provider.vendorKey,
@@ -251,13 +307,22 @@ export function buildProviderModel(
           ...(deepseekCompat ?? {}),
           supportsDeveloperRole: catalogModel.compat?.supportsDeveloperRole === true,
         }
-      : catalogModel.compat;
+      : binding.api === "anthropic-messages" && requiresAdaptiveThinking(catalogModel)
+        ? { ...(catalogModel.compat ?? {}), forceAdaptiveThinking: true }
+        : catalogModel.compat;
   return {
     ...catalogModel,
     id: provider.modelId,
     api: binding.api,
     provider: provider.id,
     baseUrl,
+    webSearch:
+      resolveNativeWebSearch({
+        wireApi: binding.api,
+        modelWebSearch: catalogModel.webSearch,
+      }) === "on"
+        ? true
+        : undefined,
     ...(compat ? { compat } : {}),
     ...(Object.keys(modelHeaders).length > 0 ? { headers: modelHeaders } : {}),
   } as Model<Api>;
@@ -275,7 +340,7 @@ export function createProviderModels(
     createProvider({
       id: provider.id,
       name: provider.name,
-      baseUrl: provider.baseUrl,
+      baseUrl: model.baseUrl,
       auth: {
         apiKey: {
           name: `${provider.name} API key`,

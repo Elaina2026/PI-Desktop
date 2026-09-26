@@ -48,8 +48,19 @@ export function createInteractionSlice({
   | "dismissToast"
   | "openLightbox"
   | "closeLightbox"
+  | "dismissAssistantErrorMessage"
 > {
   return {
+    dismissAssistantErrorMessage: (messageId) => {
+      if (!messageId) return;
+      set((state) => ({
+        dismissedAssistantErrorMessages: {
+          ...state.dismissedAssistantErrorMessages,
+          [messageId]: true,
+        },
+      }));
+    },
+
     setPage: (page, opts) => {
       runtime.beginNavigationIntent();
       const record = opts?.record !== false;
@@ -74,7 +85,10 @@ export function createInteractionSlice({
 
     setSettingsTab: (settingsTab) => {
       get().setPage("settings");
-      set({ settingsTab });
+      set((state) => ({
+        settingsTab,
+        settingsTabNonce: state.settingsTabNonce + 1,
+      }));
     },
     setSettingsAnchor: (settingsAnchor) => set({ settingsAnchor }),
     canNavBack: () => get().navIndex > 0,

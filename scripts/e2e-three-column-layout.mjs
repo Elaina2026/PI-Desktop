@@ -19,6 +19,7 @@
  */
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -174,6 +175,7 @@ async function seedSidebarProjects(hostBinary, dataDir, tempDirs) {
 class CdpClient {
   constructor(ws) {
     this.ws = ws;
+    this.closed = false;
     this.seq = 0;
     this.pending = new Map();
     this.console = [];
@@ -195,6 +197,13 @@ class CdpClient {
       if (message.error) entry.reject(new Error(JSON.stringify(message.error)));
       else entry.resolve(message.result);
     };
+    ws.onclose = () => {
+      this.closed = true;
+      for (const entry of this.pending.values()) {
+        entry.reject(new Error("CDP websocket closed"));
+      }
+      this.pending.clear();
+    };
   }
 
   static connect(url) {
@@ -206,6 +215,7 @@ class CdpClient {
   }
 
   send(method, params = {}) {
+    if (this.closed) return Promise.reject(new Error("CDP websocket closed"));
     const id = ++this.seq;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
@@ -259,9 +269,12 @@ const MEASURE = `(() => {
   const main = document.querySelector(".main-pane");
   const panel = document.querySelector('[data-testid="work-panel"]');
   const sidebar = document.querySelector(".sidebar, .sidebar-rail");
+  const chatShell = document.querySelector(".app-chat-shell");
   const handle = document.querySelector(".work-panel-resize");
   return {
     windowWidth: window.innerWidth,
+    chatHidden: chatShell?.hidden ?? null,
+    settings: Boolean(document.querySelector(".settings-shell")),
     sidebar: round(sidebar),
     sidebarKind: sidebar ? String(sidebar.className).split(" ")[0] : null,
     main: round(main),
@@ -597,21 +610,39 @@ async function main() {
     );
 
     const composer = await cdp.evaluate(`(() => {
+      const stack = document.querySelector(".composer-stack");
       const bar = document.querySelector(".composer-toolbar");
       const left = document.querySelector(".composer-left");
       const right = document.querySelector(".composer-right");
-      if (!bar || !left || !right) return null;
-      return {
+      const modelChip = document.querySelector(".composer-model-thinking-chip");
+      const modelLabel = document.querySelector(".composer-model-thinking-model");
+      if (!stack || !bar || !left || !right || !modelChip || !modelLabel) return null;
+
+      const originalWidth = stack.style.width;
+      const originalTransition = stack.style.transition;
+      stack.style.transition = "none";
+      stack.style.width = "450px";
+      const modelLabelStyles = getComputedStyle(modelLabel);
+      const result = {
         width: Math.round(bar.getBoundingClientRect().width),
         clipped: bar.scrollWidth > bar.clientWidth + 1,
         sameRow:
           Math.round(left.getBoundingClientRect().top) ===
           Math.round(right.getBoundingClientRect().top),
+        modelLabelHidden: modelLabelStyles.display === "none",
+        modelChipWidth: Math.round(modelChip.getBoundingClientRect().width),
       };
+      stack.style.width = originalWidth;
+      stack.style.transition = originalTransition;
+      return result;
     })()`);
     check(
-      composer !== null && composer.clipped === false && composer.sameRow === true,
-      "the composer toolbar stays on one unfolded row at the MainChat floor",
+      composer !== null &&
+        composer.clipped === false &&
+        composer.sameRow === true &&
+        composer.modelLabelHidden === true &&
+        composer.modelChipWidth <= 32,
+      "the composer toolbar stays on one row and collapses the model to its icon at the 450px Composer floor",
       JSON.stringify(composer),
     );
 
@@ -698,7 +729,7 @@ async function main() {
         const actions = [...row.querySelectorAll("[data-nav]")];
         const headerBox = header.getBoundingClientRect();
         const firstTab = document.querySelector(".work-panel-tab");
-        const controls = row.querySelector(".window-controls");
+        const controls = document.querySelector(".window-controls");
         const sidebar = document.querySelector(".sidebar");
         const platform = document.documentElement.dataset.platform;
         const inset = parseFloat(getComputedStyle(row).paddingLeft);
@@ -761,7 +792,7 @@ async function main() {
         sidebarToggle:
           !!document.querySelector('.window-chrome-row [data-nav="toggle-sidebar"]') ||
           !!document.querySelector('.sidebar [data-nav="toggle-sidebar"]'),
-        controls: !!document.querySelector(".window-chrome-row .window-controls"),
+        controls: !!document.querySelector(".window-controls"),
       };
     })()`);
     check(
@@ -826,6 +857,94 @@ async function main() {
         ),
       "plugin route remains visible after preview mode",
     );
+    // E2E: a plugin modal covers the window chrome. The 46px band is an opaque
+    // absolute row, and the route surface must not hold a stacking context that
+    // leaves the modal's veil underneath it — that is what put the band over
+    // the install consent. The viewport-fixed work-panel toggle sits inside the
+    // band and used to paint over the veil too; it must not any more.
+    // Measure after the entrance: opacity animation still creates a stacking
+    // context while it is in effect, even without a fill.
+    await waitFor(
+      () =>
+        cdp.evaluate(`(() => {
+          const surface = document.querySelector(".route-surface");
+          if (!surface) return false;
+          const animations = surface.getAnimations();
+          return animations.length === 0
+            || animations.every((animation) => animation.playState === "finished");
+        })()`),
+      "plugin route entrance finished",
+    );
+    await cdp.evaluate(`document.querySelector(".plugins-header-menu")?.click?.()`);
+    await waitFor(
+      () =>
+        cdp.evaluate(
+          `!!document.querySelector('[role="menuitem"][data-action="newFromTemplate"]')`,
+        ),
+      "plugins overflow newFromTemplate item",
+    );
+    await cdp.evaluate(
+      `document.querySelector('[role="menuitem"][data-action="newFromTemplate"]')?.click?.()`,
+    );
+    await waitFor(
+      () => cdp.evaluate(`!!document.querySelector(".plugins-modal-backdrop")`),
+      "plugin template modal",
+    );
+    const modalCoverage = await cdp.evaluate(`(() => {
+      const veil = document.querySelector(".plugins-modal-backdrop");
+      if (!veil) return { opened: false };
+      const toggle = document.querySelector(".app-work-panel-toggle");
+      const toggleBox = toggle?.getBoundingClientRect();
+      const toggleStack = toggleBox
+        ? document.elementsFromPoint(
+            toggleBox.left + toggleBox.width / 2,
+            toggleBox.top + toggleBox.height / 2,
+          )
+        : [];
+      // The band opts out of pointer events, so it is made an explicit target
+      // for this one measurement and put back afterwards.
+      const band = document.querySelector(".main-titlebar");
+      const previous = band?.style.pointerEvents ?? "";
+      if (band) band.style.pointerEvents = "auto";
+      const bandBox = band?.getBoundingClientRect();
+      const bandStack = bandBox
+        ? document.elementsFromPoint(
+            bandBox.left + bandBox.width / 2,
+            bandBox.top + bandBox.height / 2,
+          )
+        : [];
+      if (band) band.style.pointerEvents = previous;
+      return {
+        opened: true,
+        veilIsTopmostAtToggle: toggleStack[0] === veil,
+        toggleTopmost: (toggleStack[0]?.className ?? toggleStack[0]?.tagName ?? "").toString().slice(0, 40),
+        bandIsTopmost: bandStack[0] === band,
+        bandTopmost: (bandStack[0]?.className ?? bandStack[0]?.tagName ?? "").toString().slice(0, 40),
+      };
+    })()`);
+    check(
+      modalCoverage.opened === true,
+      "a plugin modal opens over the plugins route",
+      JSON.stringify(modalCoverage),
+    );
+    check(
+      modalCoverage.veilIsTopmostAtToggle === true,
+      "the modal veil covers the work-panel toggle in the titlebar band",
+      JSON.stringify(modalCoverage),
+    );
+    check(
+      modalCoverage.bandIsTopmost === false,
+      "the titlebar band does not paint over the modal veil",
+      JSON.stringify(modalCoverage),
+    );
+    await cdp.evaluate(
+      `document.querySelector('.plugins-modal-backdrop .plugins-modal-actions [data-action="cancel"]')?.click?.()`,
+    );
+    await waitFor(
+      () => cdp.evaluate(`!document.querySelector(".plugins-modal-backdrop")`),
+      "plugin modal closed",
+    );
+    check(true, "the plugin modal closes and leaves the route clean");
     // Once Extensions is active the footer Plugins button reuses the existing
     // Back action, so a second activation returns to the previous destination
     // (E2E-NAV-plugins-button-goes-back).
@@ -955,7 +1074,7 @@ async function main() {
     };
     const e2eChromeProbe = `(() => {
       const band = document.querySelector(".window-chrome-row");
-      const controls = document.querySelector(".window-chrome-row .window-controls");
+      const controls = document.querySelector(".window-controls");
       const sidebar = document.querySelector(".sidebar, .sidebar-rail");
       const handle = document.querySelector(".sidebar-resize-handle");
       const panel = document.querySelector('[data-testid="work-panel"]');
@@ -1018,17 +1137,17 @@ async function main() {
     const e2eChromeSidebar = await cdp.evaluate(e2eChromeProbe);
     check(
       e2eChromeSidebar.sidebarWidth === null || e2eChromeSidebar.sidebarWidth === 275,
-      "sidebar stays at its fixed width",
+      "sidebar defaults to 275px when no preference is stored",
       JSON.stringify(e2eChromeSidebar),
     );
     check(
-      e2eChromeSidebar.handleVisible === false,
-      "the sidebar edge is no longer a resize affordance",
+      e2eChromeSidebar.sidebarWidth === null || e2eChromeSidebar.handleVisible === true,
+      "the expanded sidebar edge is a resize affordance",
       JSON.stringify(e2eChromeSidebar),
     );
     check(
       e2eChromeSidebar.storedWidth === null,
-      "sidebar width is no longer persisted",
+      "no sidebar width preference is stored at launch",
       JSON.stringify(e2eChromeSidebar),
     );
 
@@ -1628,10 +1747,74 @@ async function main() {
     );
     await cdp.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(originalTheme)}`);
 
-    await checkSidebarRowStates({ cdp, check, waitFor, seed: sidebarSeed });
     await checkSidebarSettings({
       cdp, check, waitFor, artifactDir: process.env.PI_DESKTOP_LAYOUT_ARTIFACT_DIR,
     });
+
+    const crashSentinel = `renderer-crash-${Date.now()}`;
+    await cdp.evaluate(
+      `window.__PI_E2E_RENDERER_CRASH_SENTINEL = ${JSON.stringify(crashSentinel)}`,
+    );
+    void cdp.send("Page.crash").catch(() => undefined);
+    let recoveryCdp = cdp;
+    const recoveryState = await waitFor(async () => {
+      if (recoveryCdp.closed) {
+        const page = (await listTargets(cdpPort).catch(() => [])).find(
+          (candidate) => candidate.type === "page" && candidate.id === target.id,
+        );
+        if (!page?.webSocketDebuggerUrl) return false;
+        const connected = await CdpClient.connect(page.webSocketDebuggerUrl).catch(
+          () => null,
+        );
+        if (!connected) return false;
+        recoveryCdp = connected;
+        activeCdp = recoveryCdp;
+        await recoveryCdp.send("Runtime.enable").catch(() => undefined);
+      }
+      const state = await recoveryCdp
+        .evaluate(`({
+          sentinel: window.__PI_E2E_RENDERER_CRASH_SENTINEL,
+          chatSurface: Boolean(document.querySelector('.chat-surface')),
+          splash: Boolean(document.querySelector('.startup-splash')),
+        })`)
+        .catch(() => null);
+      return state?.chatSurface && !state.splash && state.sentinel !== crashSentinel
+        ? state
+        : false;
+    }, "the renderer automatically reloads after a crash", 90_000);
+    const recoveredTarget = (await listTargets(cdpPort).catch(() => [])).find(
+      (candidate) => candidate.type === "page" && candidate.id === target.id,
+    );
+    check(
+      recoveryState.chatSurface && recoveredTarget?.id === target.id,
+      "the existing app window restores the chat after a renderer crash",
+      JSON.stringify({ recoveryState, targetId: recoveredTarget?.id }),
+    );
+    const diagnostics = await readFile(
+      join(dataDir, "logs", "app", "diagnostics.log"),
+      "utf8",
+    ).catch(() => "");
+    const rendererRecoveryLog = diagnostics
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .find(
+        (entry) =>
+          entry?.event === "renderer.process.gone" && entry.data?.reloaded === true,
+      );
+    check(
+      Boolean(rendererRecoveryLog?.data?.reason),
+      "renderer crash recovery records the exit reason and reload decision",
+      JSON.stringify(rendererRecoveryLog),
+    );
+
+    await checkSidebarRowStates({ cdp: recoveryCdp, check, waitFor, seed: sidebarSeed });
 
     const failed = results.filter((entry) => !entry.ok);
     console.log(

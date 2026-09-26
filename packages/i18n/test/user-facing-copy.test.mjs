@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { en, flattenCatalog, ko, zhCN, zhTW } from "../src/index.ts";
+import { catalogs, en, flattenCatalog, ko, zhCN, zhTW } from "../src/index.ts";
 
 const english = flattenCatalog(en);
 const chinese = flattenCatalog(zhCN);
@@ -94,13 +94,6 @@ test("Plan mode and Auto permission copy stay explicit in both locales", () => {
   assert.match(chinese["plan.autoWarning"], /可能修改文件/);
 });
 
-test("page copy keeps actions and removes redundant explanatory paragraphs", () => {
-  assert.equal(english["project.archiveSubtitle"], "Opened folders and their chats.");
-  assert.equal(chinese["project.archiveSubtitle"], "已打开的文件夹及其对话。");
-  assert.doesNotMatch(english["project.archiveSubtitle"], /without losing|Activate|archive the rest/);
-  assert.doesNotMatch(chinese["project.archiveSubtitle"], /可以|而不丢失/);
-});
-
 /**
  * E2E-024X: a page may not restate its own title as a subtitle, and a setting
  * may not explain an obvious control. These keys were rendered once and are
@@ -108,6 +101,7 @@ test("page copy keeps actions and removes redundant explanatory paragraphs", () 
  */
 const REMOVED_EXPLANATORY_KEYS = [
   "project.subtitle",
+  "project.archiveSubtitle",
   "project.emptyIndexBody",
   "scheduled.emptyBody",
   "chat.emptyHint",
@@ -160,4 +154,52 @@ test("font size presets use Starbucks-style cup names", () => {
   assert.equal(chinese["settings.fontSizeDefault"], "大杯");
   assert.equal(chinese["settings.fontSizeLarge"], "超大杯");
   assert.equal(chinese["settings.fontSizeXl"], "超超大杯");
+});
+
+test("chat context-menu copy stays user-facing", () => {
+  assert.equal(english["chat.copyFailed"], "Couldn't copy to the clipboard");
+  assert.equal(english["chat.messageMenu"], "Message actions");
+  assert.equal(english["chat.copyConversation"], "Copy conversation");
+  assert.equal(chinese["chat.copyFailed"], "复制到剪贴板失败");
+  assert.equal(chinese["chat.copyConversation"], "复制整个对话");
+  assert.equal(chinese["chat.selectMessageText"], "选中消息文本");
+});
+
+test("pt-BR keeps security disclosures and action semantics intact", () => {
+  const brazilian = flattenCatalog(catalogs["pt-BR"]);
+  const importWarning = brazilian["plugins.agentExtension.importConfirm"];
+  assert.match(importWarning, /processo/i);
+  assert.match(importWarning, /ferramentas|acesso/i);
+  assert.match(importWarning, /instru[çc][oõ]es/i);
+  assert.match(importWarning, /\bnpm\b/i);
+  assert.match(importWarning, /depend[eê]ncias/i);
+
+  assert.match(brazilian["plugins.permissionHelp.clipboard.read"], /hist[oó]rico/i);
+  assert.match(brazilian["plugins.permissionHelp.clipboard.write"], /substitu/i);
+  assert.match(brazilian["settings.permissionModeDesc"], /sem.{0,24}(?:permiss|autoriza|confirm)/i);
+  assert.match(brazilian["settings.permissionModeDesc"], /alterar.{0,20}arquivos?/i);
+  assert.match(brazilian["settings.networkInsecureNoticeBody"], /credenciais/i);
+  assert.match(brazilian["settings.infiniteProviderRetryDesc"], /API/i);
+  assert.match(brazilian["settings.infiniteProviderRetryDesc"], /parar|interromper/i);
+  assert.match(brazilian["settings.importModelsScanDesc"], /chaves de API salvas são copiadas/i);
+  assert.match(brazilian["settings.importModelsScanDesc"], /logins de assinatura não são/i);
+  assert.match(brazilian["settings.copyProviderHint"], /serviço independente/i);
+  assert.match(brazilian["settings.copyProviderHint"], /chaves de API.*logins de contas.*cabeçalhos personalizados não são copiados/i);
+  assert.match(brazilian["settings.copyProviderHint"], /modelo padrão.*inalterado/i);
+  assert.match(brazilian["settings.apiStyleChooseCustom"], /conta do provedor/i);
+  assert.match(brazilian["settings.apiStyleChooseCustom"], /formato de API compatível.*salvar este serviço/i);
+  assert.match(brazilian["settings.modelsFallbackNote"], /somente o modelo configurado está disponível/i);
+  assert.match(brazilian["plugins.marketEmpty"], /nenhum plugin corresponde à sua pesquisa/i);
+  assert.doesNotMatch(brazilian["chat.queuedPromptEmpty"], /vazi[oa]/i);
+  assert.match(brazilian["chat.queuedPromptEmpty"], /mensagem na fila/i);
+  assert.match(brazilian["settings.promptEnhancementCustomTemplate"], /modelo personalizado/i);
+  assert.equal(brazilian["settings.smoothStreaming"], "Exibição gradual");
+  assert.match(brazilian["settings.smoothStreamingDesc"], /caractere por caractere/i);
+  assert.match(brazilian["settings.smoothStreamingDesc"], /máquina de escrever/i);
+  assert.match(brazilian["settings.smoothStreamingDesc"], /reduzir animações/i);
+
+  assert.doesNotMatch(brazilian["project.clear"], /excluir|deletar/i);
+  assert.doesNotMatch(brazilian["notifications.clearAll"], /excluir|deletar/i);
+  assert.match(brazilian["chat.acHint"], /Enter/);
+  assert.match(brazilian["chat.acHint"], /Esc/);
 });

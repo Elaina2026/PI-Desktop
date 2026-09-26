@@ -47,10 +47,10 @@ test("session reads use a bounded tail and load older pages on demand", () => {
   assert.match(transcript, /onLoadOlder\?: \(\) => Promise<void>/);
   // The near-top band is one named constant shared by the scroll check and the
   // D269 boundary observer, so the two triggers cannot drift apart.
-  assert.match(transcript, /HISTORY_REVEAL_THRESHOLD_PX = 120/);
+  assert.match(transcript, /HISTORY_REVEAL_THRESHOLD_PX/);
   assert.match(
     transcript,
-    /el\.scrollTop <= HISTORY_REVEAL_THRESHOLD_PX/,
+    /isHistoryRevealPosition\(el, pinnedRef\.current && !gesturing\)/,
   );
   // Paging is wired per retained pane (ADR 0137), so each pane requests its own
   // older pages rather than the surface requesting them for whichever session
@@ -119,7 +119,7 @@ test("each retained session keeps its own mounted pane", () => {
   // already-painted pane instead of re-pointing one transcript (ADR 0137).
   assert.match(
     chatSurface,
-    /retainedSessionIds\.map\(\(id\) => \(\s*<SessionPane\s*key=\{id\}\s*sessionId=\{id\}\s*visible=\{id === visibleSessionId\}\s*\/>/,
+    /retainedSessionIds\.map\(\(id\) => \(\s*<SessionPane\s*key=\{id\}\s*sessionId=\{id\}\s*visible=\{visible && id === visibleSessionId\}\s*\/>/,
   );
   assert.match(chatSurface, /const visibleSessionId = retainedSessionIds\[0\]/);
   // The retention bound lives in a pure module, so eviction is unit-testable

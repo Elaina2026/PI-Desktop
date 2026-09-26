@@ -68,11 +68,19 @@ type AppError = {
 | `APPROVAL_STALE` | 不 | RACP：审批已被处理或属于更早的回合 |
 | `PAYLOAD_TOO_LARGE` | 不 | RACP：帧超过协商的大小上限 |
 | `TIMEOUT` | 是的 | 通用超时 |
-| `NETWORK_POLICY_BLOCKED` | 不 | 主进程公网策略守卫拒绝了一次抓取,因为它**判定了**目标：URL 未通过公网 HTTPS 语法检查,或本地 DNS 解析返回了策略判定为非公网的地址——其中包括本地代理生成的 fake-IP 占位地址（ADR 0243）。仅桌面端使用；拒绝即判定,因此在地址改变前重试不会成功。本地解析完全没有返回答案时改用 `NETWORK_RESOLVE_FAILED`（issue #419）。 |
+| `NETWORK_POLICY_BLOCKED` | 不 | 主进程公网策略守卫拒绝了一次抓取,因为它**判定了**目标：URL 未通过公网 HTTPS 语法检查,或本地 DNS 解析返回了策略判定为非公网的地址——其中包括本地代理生成的 fake-IP 占位地址（ADR 0243）。仅桌面端使用；拒绝即判定,因此在地址改变前重试不会成功。本地解析完全没有返回答案时改用 `NETWORK_RESOLVE_FAILED`（issue #419）。自 ADR 0304 起,用户自己填写的端点可以解析到本机回环或局域网地址,因此该错误码现在只针对两类首跳：命中完全无服务语义的地址类别（云元数据、unspecified、multicast、reserved）,或第三方跳——重定向目标、目录正文、registry 记录。 |
 | `NETWORK_RESOLVE_FAILED` | 是的 | 主进程公网策略守卫无法判定目标主机：本地 DNS 解析没有返回答案,或在返回前抛错。请求仍与策略拒绝一样被拒,但没有判定任何地址,因此任何界面或日志都不得把它描述成地址校验的判定结果。与 `NETWORK_ERROR` 不同,后者是请求本身的失败。可重试：当解析器或代理开始应答同一主机时,同一请求即可成功（ADR 0243,issue #419）。 |
 | `HOST_SHUTTING_DOWN` | 是的 | 主机收到 EOF 正在排空；调用被拒绝而不是被启动 |
 | `RATE_LIMITED` | 是的 | 某个按调用方计的主机预算（插件会话导入、批量操作）在其窗口内被超出 |
 | `LIMIT_EXCEEDED` | 不 | 载荷超过了固定的主机上限（条目数、字节数）并被拒绝 |
+| `CONFIG_SYNC_INVALID` | 不 | 同步配置、密码、路径、请求或审批输入无效 |
+| `CONFIG_SYNC_LOCKED` | 不 | 本地加密同步 vault 尚未解锁 |
+| `CONFIG_SYNC_UNSUPPORTED` | 不 | vault 格式或 WebDAV 服务器能力不受支持 |
+| `CONFIG_SYNC_REMOTE` | 也许 | 远端 WebDAV 对象、认证、配额或可用性失败 |
+| `CONFIG_SYNC_CONFLICT` | 也许 | 远端 head、vault 身份或审批 digest 冲突 |
+| `CONFIG_SYNC_CRYPTO` | 不 | 认证加密、对象身份或密文校验失败 |
+| `CONFIG_SYNC_MAPPING_REQUIRED` | 不 | 导入的项目作用域配置需要明确的本地文件夹/项目组映射 |
+| `CONFIG_SYNC_LIMIT_EXCEEDED` | 不 | 加密同步状态超过实体、对象、资源、归档或解压上限 |
 
 `HOST_UNAVAILABLE` 是为丢失或损坏的主机 process/transport 保留的，
 不是普通的入学压力。 RPC 容量返回 `HOST_OVERLOADED`，并且
@@ -90,16 +98,20 @@ stdio 与 Tokio 的动态阻塞池隔离，因此后一种情况
 | `TURN_NOT_FOUND` | 不 | 使 id 无效 |
 | `TURN_ABORTED` | 不 | 回合被 user/system 中止 |
 | `MODEL_NOT_CONFIGURED` | 不 | 未选择可用模型，或提供商因未知而拒绝所选模型 |
-| `PROVIDER_ERROR` | 是的 | 上游提供商故障；可重试的故障（5xx 网关）最多获得四次同回合重试，格式错误的 400/422 请求是终止的 |
+| `PROVIDER_ERROR` | 是的 | 上游提供商故障；可重试的故障（5xx 网关）最多获得四次同回合重试，而格式错误的 400/422 请求，以及适配器自身拒绝的请求选项（Google 适配器遇到自定义 `fetch`，issue #1072）都是终止的 |
 | `PROVIDER_UNAUTHORIZED` | 不 | bad/missing 提供商凭证 |
 | `PROVIDER_RATE_LIMITED` | 是的 | 供应商费率有限 |
 | `CONTEXT_TOO_LARGE` | 不 | 恢复后 prompt/context 仍超出安全模型预算、发生第二个提供程序溢出或禁用自动恢复 |
 | `CONTEXT_COMPACTION_FAILED` | 不 | 自动保留尾部恢复无法准备、持久或适合检查点，或手动检查点摘要生成/持久追加失败；受保护的下一个提供程序请求不会启动 |
 | `STREAM_FAILED` | 是的 | 提供程序流在完整响应之前终止、提前关闭或以其他方式结束；最多四次同回合重试可能会在终止事件之前发生 |
-| `EMPTY_MODEL_RESPONSE` | 是的 | 模型在没有工具调用且没有可见文本的情况下结束了两次：一次是流式传输，一次是在自动重新运行后（规范 02-agent-runtime §5e） |
+| `EMPTY_MODEL_RESPONSE` | 是的 | 模型在没有工具调用且没有可见文本的情况下结束了两次：一次是流式传输，一次是在自动重新运行后；对 Host 账本完成通知的第一条回复除外（规范 02-agent-runtime §5e、D446） |
 | `PROMPT_ENHANCEMENT_EMPTY` | 不 | 一次性增强模型没有返回任何文本 |
+| `SPEECH_NOT_CONFIGURED` | 不 | 设置里没有绑定转写或朗读 |
+| `SPEECH_PROTOCOL_UNSUPPORTED` | 不 | 语音协议未知或不支持该角色 |
+| `SPEECH_INPUT_TOO_LARGE` | 不 | 语音输入超过 25 MB |
 | `SUBAGENT_IDLE_TIMEOUT` | 不 | 已撤回（D328）：空闲看门狗不再武装；代码仅为已存储结果保留 |
 | `SUBAGENT_DURATION_TIMEOUT` | 不 | 已撤回（D328）：时长看门狗不再武装；代码仅为已存储结果保留 |
+| `SUBAGENT_CONTEXT_OVERFLOW` | 不 | 委派自身的模型上下文超出其安全预算，自动的回合边界压缩与仅保留任务简报和最近消息的降级重试都没能把它带回限制以内；该失败给出可执行的恢复方式，而不是提供商的溢出文本 |
 
 ### 3. 3 工作空间/工具/权限
 
@@ -208,6 +220,7 @@ reveal 不并入任何行，必须重新读取。
 |---|---|---|
 | `PROVIDER_SECRET_MISSING` | 不 | 启用的提供程序需要 API 密钥 |
 | `MODEL_ALIAS_TOO_LONG` | 不 | 已配置模型别名超过 60 个 Unicode 字符 |
+| `MODEL_BINDINGS_DEGRADED` | 不 | 存储模型绑定已降级；为防止数据丢失，拒绝显式替换模型数组 |
 | `SECRET_STORE_UNAVAILABLE` | 也许 | 操作系统安全存储不可用（保留） |
 | `SETTINGS_INVALID` | 不 | 设置有效负载无效（保留） |
 
@@ -267,6 +280,29 @@ reveal 不并入任何行，必须重新读取。
 同级结果字段中的有界窗口
 （请参阅 [16-工具-结果-限制](/zh-CN/spec/03-runtime/16-tool-result-limits)）。
 
+### 3.8 远程控制（RACP-WS / SSH 引导）
+
+当会话位于经 `RACP-WS` 驱动的已配对远程主机上时，由桌面端的远程主机客户端与
+`pi-host` 服务端发出（参见
+[19-远程代理控制协议](/zh-CN/spec/03-runtime/19-remote-agent-control-protocol)、
+[../05-security/02-remote-control-security](/zh-CN/spec/05-security/02-remote-control-security)、
+ADR 0285）。渲染进程除了一个标识徽章外看不到本地/远程之分；这些码通过与其他调用
+相同的错误对象浮现。
+
+| 码 | 可重试 | 含义 |
+|---|---|---|
+| `HOST_DISCONNECTED` | 是 | 远程主机连接断开；进行中的调用被拒绝，客户端按游标重连并重新订阅 |
+| `HOST_BOOTSTRAP_FAILED` | 否 | 经 SSH 配置远程 `pi-host` 失败（下载、校验和不匹配或 `install.sh`）；`details.reason` 指明阶段 |
+| `HOST_VERSION_MISMATCH` | 否 | 远程 `pi-host` 版本与桌面不匹配；桌面拒绝驱动不兼容的主机 |
+| `REMOTE_AUTH_FAILED` | 否 | 设备或配对令牌在 RACP-WS 升级时被拒 |
+| `REMOTE_CONNECTION_FAILED` | 是 | RACP-WS 传输无法连接（非回环 URL、套接字被拒） |
+| `REMOTE_FORWARD_FAILED` | 是 | 无法建立 SSH 回环端口转发 |
+| `REMOTE_PATH_NOT_FOUND` | 否 | 远程项目/工作区路径在主机上不存在 |
+| `REMOTE_PATH_FORBIDDEN` | 否 | 远程路径在主机允许的根之外 |
+| `PAIRING_FAILED` | 否 | `connection/pair` 无法铸造设备凭据 |
+| `PAIRING_TOKEN_EXPIRED` | 否 | 一次性配对令牌在配对完成前已过期 |
+| `CAPABILITY_UNAVAILABLE` | 否 | 请求的操作对应主机声明为不可用的能力（如附件、工具中继） |
+
 ## 4. 映射规则
 
 ### 主机 RPC 数字 → AppError.code
@@ -285,17 +321,23 @@ Node sidecar 将提供商 SDK 错误映射到：
 
 精确的 `terminated` 提供商消息和等效的过早流关闭
 消息映射到 `STREAM_FAILED`。请求设置阶段或响应后的
-`PROVIDER_RATE_LIMITED` 使用共享的运行时预算：初始尝试之后最多五次重试，
+`PROVIDER_RATE_LIMITED` 使用共享的运行时预算：初始尝试之后最多 10 次重试，
 且设置和流式传输失败一起计数。非 429 瞬时故障——`STREAM_FAILED`、
 `NETWORK_ERROR`、`TIMEOUT` 以及可重试的 `PROVIDER_ERROR`（例如上游网关
-502/503/504）——共享它们自己的有界预算：初始尝试之后最多四次重试，同样
+502/503/504）——共享它们自己的有界预算：初始尝试之后最多 10 次重试，同样
 跨请求设置和流式传输一起计数，并且与 429 预算相互独立。两个预算都是
 可中止的。429 路径在客户端退避之前先遵循 `retry-after-ms`、`retry-after`
 秒和 HTTP 日期标头，并将等待上限设为 30 秒；非 429 路径应用相同的优先级，
 上限为 8 秒，在其他情况下依次等待 1 秒、2 秒、4 秒，然后是 8 秒。只有失败
 的请求会被重放；会话及其工具状态保持不变。来自格式错误的 400/422 请求的
 不可重试 `PROVIDER_ERROR` 永远不会进入任何预算。预算耗尽后的失败仍然是
-致命的。
+致命的。设置 `infiniteProviderRetry` 默认关闭；开启后只移除上述可重试网络/瞬时类别的次数上限，
+不会改变退避、`Retry-After`、取消或终止分类，并可能在用户停止回合前持续消耗 API 用量。
+
+**Synchronized update (#699):** A complete successful model response resets
+both budgets, including a tool-call response, in the main session and builtin
+subagents. Headers, partial output, and phase changes do not replenish them.
+Exhaustion reports `retryAttempt: 10` from the relevant budget counter.
 
 `NETWORK_ERROR` 以有界的 `details` 携带真正失败的传输层：
 `networkCategory`（`dns`、`tls`、`timeout`、`refused`、`unreachable`、
@@ -312,7 +354,9 @@ Node sidecar 将提供商 SDK 错误映射到：
 里的 errno 已经消失，裸 `fetch failed` 只能被记为 `networkCategory: unknown`；
 而 fetch 包装层仍持有原始 Error，并从它给出同一组经过校验的字段。捕获到的
 cause 同时确定了阶段：没有任何响应到达时故障记为 `phase: request`，这正是它
-与「响应中途断流」的区别。`networkRoute`（`direct`、`environment-proxy`、
+与「响应中途断流」的区别。发往 pi-ai Google 适配器的请求不带 fetch 包装、也不会到达 `onResponse`（issue #1072），因此这两个字段都不会上报：它只保留提供商自己的消息，`Retry-After` 退回有界阶梯，下面的重建对它不生效。
+
+`networkRoute`（`direct`、`environment-proxy`、
 `http-proxy`、`socks5-proxy`）指出请求实际走的链路，代理这一跳失败无需再从
 errno 猜测。
 
@@ -386,3 +430,31 @@ errors.<code>.action
    到期、计划拒绝和重新启动中断路径映射到稳定
    代码；仅允许记录的预转目录后备，并且不进行任何工作
    正在重播
+
+### 证书校验失败（issue #714）
+
+当 `details.networkCode` 是已识别的证书校验错误时，`NETWORK_ERROR` 不可重试，
+包括不受信任或自签名链、证书已过期或尚未生效，以及
+`ERR_TLS_CERT_ALTNAME_INVALID`。具体证书原因优先于通用 socket/proxy 包装错误。
+即使 adapter 已将错误扁平化，捕获的 fetch 原因仍会应用这条策略。未知 TLS 错误和
+非证书协议错误继续使用原有恢复行为。
+
+transcript 保留稳定错误码、传输 errno 和原始 details，但使用本地化的证书指引，
+而不是通用连接错误摘要。它会提示用户检查证书、系统时间以及安全软件或代理使用的
+信任根，并在修改信任设置后重启。文案不会断言一定是流量拦截，也不会提供关闭 TLS
+校验的绕过方式。修复原因后，用户仍可手动继续。
+
+## 本地请求准备错误
+
+上下文校验、估算或请求准备阶段产生的结构化 `LOCAL_REQUEST_ERROR`，映射为既有
+`INTERNAL` 且 `retriable: false`。在适配器把异常压成文字前保留本地来源与阶段；
+诊断可以保留原因类型，不向界面复制请求正文、搜索结果、凭据或任意底层异常文字。
+不能靠匹配异常句子或统一禁用所有 `TypeError` 重试来分类；网络故障和取消维持原有策略。
+
+历史恢复校验可能在运行时流创建前失败。此时使用既有 RPC 错误 `data`，携带
+`errorCode`、`retriable: false` 及安全的 `details`（来源、阶段、可选原因类型）。
+不得发出模型请求，sidecar 保持可用，也不改写存储记录；容器不是存储块列表时仍按此失败。
+
+单个存储块无法回放属于另一种情况：网关丢弃 id 时本应用本身就会存下仅供展示的块，
+因此该消息的整条 replay 降级为“没有 replay”，而不是让之后每一轮请求都失败。
+回合继续执行，展示轮次不变；诊断只记录块数与阶段，不复制搜索内容、结果或凭据。

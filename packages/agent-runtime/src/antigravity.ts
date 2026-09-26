@@ -385,7 +385,7 @@ export const stream = (
         projectId = lookupAntigravityProjectId(accountEmail);
       }
 
-      const contents = convertMessages(model as any, context);
+      const contents = convertMessages(model as any, context as any);
 
       const generationConfig: Record<string, any> = {};
       if (options?.temperature !== undefined) {

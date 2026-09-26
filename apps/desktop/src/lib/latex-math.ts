@@ -56,6 +56,13 @@ export function normalizeLatexMathDelimiters(source: string): string {
         if (isDelimiter(index, math.close)) {
           output[math.open] = output[math.open + 1] = "$";
           output[index] = output[index + 1] = "$";
+          // Retain the historical single-line bracket representation and
+          // source offsets. Dollar-fenced math bypasses this normalization
+          // and preserves its newlines; block splitting must use the math
+          // grammar rather than relying on flattened input.
+          for (let j = math.open + 2; j < index; j++) {
+            if (output[j] === "\n") output[j] = " ";
+          }
           math = null;
           i += 2;
         } else {

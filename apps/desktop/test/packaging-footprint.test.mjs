@@ -38,9 +38,11 @@ const pluginPanelPreloadSource = await readFile(
   "utf8",
 );
 
-test("packaging installs only the updater runtime dependency", () => {
+test("packaging keeps native voice modules as runtime dependencies", () => {
   assert.deepEqual(Object.keys(packageJson.dependencies).sort(), [
+    "@picovoice/pvrecorder-node",
     "electron-updater",
+    "transcribe-cpp",
   ]);
 
   for (const dependency of [
@@ -95,7 +97,7 @@ test("legacy font fallback stripping only removes redundant fallback sources", (
     'src:url(a.woff2) format("woff2");',
   );
 
-  // The bundled faces use woff2-variations and must survive untouched.
+  // A variable face declaring only woff2-variations must survive untouched.
   const variations = 'src: url("../f.woff2") format("woff2-variations");';
   assert.equal(strip(variations), variations);
 
@@ -119,11 +121,14 @@ test("legacy font fallback stripping only removes redundant fallback sources", (
   }
 });
 
-test("main bundles JavaScript dependencies and externalizes only runtime modules", () => {
+test("main bundles JavaScript dependencies and externalizes runtime modules", () => {
   assert.doesNotMatch(viteConfigSource, /externalizeDepsPlugin\s*\(/);
   // jiti is listed so the trusted-extension loader's lazy import never
   // enters the main bundle; main itself never loads it (spec 16 §4.2).
-  assert.match(viteConfigSource, /external:\s*\["electron-updater", "jiti", "jiti\/static"\]/);
+  assert.match(viteConfigSource, /external:\s*\[/);
+  for (const moduleName of ["@picovoice/pvrecorder-node", "transcribe-cpp"]) {
+    assert.match(viteConfigSource, new RegExp(`"${moduleName.replaceAll("/", "\\/")}"`));
+  }
   assert.doesNotMatch(viteConfigSource, /node-pty/);
   assert.doesNotMatch(JSON.stringify(packageJson.dependencies), /node-pty/);
 });
@@ -153,6 +158,8 @@ test("packaging keeps only shipped locales and excludes non-runtime artifacts", 
     "fr",
     "ko",
     "vi",
+    "pt-BR",
+    "pt_BR",
   ]);
   assert.ok(packageJson.build.files.includes("!**/*.map"));
   assert.ok(
@@ -235,41 +242,35 @@ test("macOS targets follow the native architecture selected by the runner", () =
   assert.doesNotMatch(packageJson.scripts["dist:mac"], /--(?:arm64|x64)/);
 });
 
-test("macOS installers expose DMG guidance and retain the ZIP helper", () => {
+test("macOS DMG is a two-icon install; ZIP keeps the unsigned helper", () => {
   assert.deepEqual(packageJson.build.mac.extraDistFiles, [
     "PI-Desktop-macOS-open.command",
     "PI-Desktop-macOS-opening-help.txt",
   ]);
   assert.equal(packageJson.build.dmg.background, "build/dmg-background.png");
-  assert.deepEqual(packageJson.build.dmg.window, { width: 720, height: 500 });
-  assert.equal(packageJson.build.dmg.iconSize, 96);
+  assert.equal(packageJson.build.dmg.icon, "build/icon.icns");
+  assert.deepEqual(packageJson.build.dmg.window, { width: 720, height: 440 });
+  assert.equal(packageJson.build.dmg.iconSize, 128);
   assert.equal(packageJson.build.dmg.iconTextSize, 12);
   assert.deepEqual(packageJson.build.dmg.contents, [
-    { x: 180, y: 240 },
-    { x: 540, y: 240, type: "link", path: "/Applications" },
-    {
-      x: 470,
-      y: 370,
-      type: "file",
-      name: "If app won't open, read this.txt",
-      path: "PI-Desktop-macOS-opening-help.txt",
-    },
+    { x: 180, y: 196 },
+    { x: 540, y: 196, type: "link", path: "/Applications" },
   ]);
   assert.doesNotMatch(
     JSON.stringify(packageJson.build.dmg.contents),
-    /PI-Desktop-macOS-open\.command|Open PI-Desktop\.command/,
-    "the DMG must not expose the command helper",
+    /PI-Desktop-macOS-open\.command|Open PI-Desktop\.command|opening-help|If app won't open/,
+    "the DMG must not expose the unsigned helper or opening note",
   );
   assert.deepEqual([...dmgBackground.subarray(0, 8)], [
     137, 80, 78, 71, 13, 10, 26, 10,
   ]);
   assert.equal(dmgBackground.readUInt32BE(16), 720);
-  assert.equal(dmgBackground.readUInt32BE(20), 500);
+  assert.equal(dmgBackground.readUInt32BE(20), 440);
   assert.deepEqual([...dmgBackgroundRetina.subarray(0, 8)], [
     137, 80, 78, 71, 13, 10, 26, 10,
   ]);
   assert.equal(dmgBackgroundRetina.readUInt32BE(16), 1440);
-  assert.equal(dmgBackgroundRetina.readUInt32BE(20), 1000);
+  assert.equal(dmgBackgroundRetina.readUInt32BE(20), 880);
   if (process.platform !== "win32") {
     assert.ok(macOpenScriptStat.mode & 0o111, "opening helper must be executable");
   }
@@ -289,9 +290,14 @@ test("macOS installers expose DMG guidance and retain the ZIP helper", () => {
   assert.doesNotMatch(macOpenScript, /xattr -cr/);
 });
 
-test("packaging does not include removed PTY native payload configuration", () => {
+test("packaging keeps voice native payloads unpacked and excludes removed PTY payloads", () => {
   assert.deepEqual(packageJson.build.asar, { smartUnpack: false });
-  assert.equal(packageJson.build.asarUnpack, undefined);
+  assert.deepEqual(packageJson.build.asarUnpack, [
+    "node_modules/transcribe-cpp/**/*.node",
+    "node_modules/transcribe-cpp/**/bin/**",
+    "node_modules/@picovoice/pvrecorder-node/**/*.node",
+    "node_modules/@picovoice/pvrecorder-node/**/lib/**",
+  ]);
   assert.doesNotMatch(JSON.stringify(packageJson.build.files), /node-pty/);
   assert.doesNotMatch(JSON.stringify(packageJson.build.extraResources), /node-pty/);
 });

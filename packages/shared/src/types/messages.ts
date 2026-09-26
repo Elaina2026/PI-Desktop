@@ -97,11 +97,12 @@ export type UiMessage = {
   /** 1-based active variant index for this user root turn. */
   activeRevision?: number;
   /**
-   * Typed slash invocation ("/name args") when this user message was
-   * produced by a prompt-template command; `content` holds the expanded
-   * text the model sees (D123). Transcript renders this as a chip.
+   * Original text for an expanded slash template or explicit Skill invocation;
+   * `content` holds the expanded text the model sees (D123, ADR 0219).
    */
   command?: string;
+  /** Validated Skill tokens in `command`, using UTF-16 offsets. */
+  skillMentions?: Array<{ start: number; end: number; id: string }>;
   toolName?: string;
   toolCallId?: string;
   toolStatus?: "running" | "success" | "error" | "denied";
@@ -121,6 +122,68 @@ export type UiMessage = {
   parentToolCallId?: string;
   /** Definition name of the subagent that produced this row. */
   agentName?: string;
+  /**
+   * Provider-hosted web search activity for this assistant turn, extracted
+   * from the vendor stream by the pi-ai adapters. Present only when the
+   * model binding opted into native web search and the provider actually
+   * searched.
+   */
+  hostedSearch?: HostedSearch;
+};
+
+/**
+ * Normalized provider-hosted web search activity for one assistant message.
+ * One message can run several search rounds server-side; each round is one
+ * provider call (`server_tool_use` pair / `web_search_call` item) and renders
+ * as its own transcript row.
+ */
+export type HostedSearch = {
+  /** Aggregate of `rounds`: failed if any round failed, else searching while
+   * any round is still in flight. */
+  status: "searching" | "completed" | "failed";
+  rounds: HostedSearchRound[];
+  /**
+   * Raw pi-ai hostedSearch content parts, in original block order. Display
+   * uses `rounds`; convertMessages replay after a restart uses this. Absent
+   * on transcripts written before the field existed — those rows still
+   * render, but later turns cannot ground on the old search.
+   */
+  replay?: HostedSearchReplayBlock[];
+};
+
+/** One adapter-captured search block, stripped of streaming scratch. */
+export type HostedSearchReplayBlock = {
+  type: "hostedSearch";
+  phase: string;
+  blockId?: string;
+  name?: string;
+  input?: unknown;
+  status?: string;
+  isError?: boolean;
+  wire?: unknown;
+};
+
+/** One provider search round, in the order the provider issued it. */
+export type HostedSearchRound = {
+  /** Stable key within the message: the provider block/item id when known. */
+  id: string;
+  status: "searching" | "completed" | "failed";
+  /**
+   * What the provider did this round. Responses `web_search_call` actions map
+   * `search`/`open_page`/`find_in_page` onto these; an Anthropic
+   * `web_fetch` server tool use is an `openPage`. Absent means a plain search.
+   */
+  kind?: "search" | "openPage" | "findInPage";
+  /** The search query (or the in-page pattern for `findInPage`). */
+  query?: string;
+  /** The page a round opened, for `openPage`/`findInPage`. */
+  url?: string;
+  sources: HostedSearchSource[];
+};
+
+export type HostedSearchSource = {
+  url: string;
+  title?: string;
 };
 
 /** Terminal outcome of one background subagent run. TaskStop adds its own

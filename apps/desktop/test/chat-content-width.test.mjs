@@ -51,3 +51,27 @@ test("a squeezed pane keeps min\(100%, preferred\) and does not force 640px", ()
     /\.thread-content\s*\{[\s\S]*?width:\s*min\(100%,\s*var\(--chat-content-max-width\)\)/,
   );
 });
+test("dragging the width also scales the per-message prose width", () => {
+  // The drag handler publishes the preferred width to every width consumer so
+  // the message rows track the band (see applyPreferredWidth). Previously the
+  // band widened while --chat-prose-max-width stayed frozen at the .main-pane
+  // default of 760px.
+  assert.match(
+    handleSource,
+    /setProperty\("--chat-content-max-width",\s*px\)/,
+  );
+  assert.match(
+    handleSource,
+    /setProperty\("--chat-composer-max-width",\s*px\)/,
+  );
+  assert.match(
+    handleSource,
+    /setProperty\("--chat-prose-max-width",\s*px\)/,
+  );
+  // The prose fallback must stay aligned with the banner default so a
+  // non-dragged surface still renders both at the same width.
+  assert.match(
+    styles,
+    /--chat-prose-max-width:\s*var\(--chat-content-max-width\)/,
+  );
+});

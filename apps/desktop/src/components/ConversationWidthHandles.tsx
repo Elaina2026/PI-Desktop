@@ -39,6 +39,11 @@ function applyPreferredWidth(surface: HTMLElement | null, width: number) {
   const px = `${width}px`;
   surface.style.setProperty("--chat-content-max-width", px);
   surface.style.setProperty("--chat-composer-max-width", px);
+  // The per-message prose width must track the band, otherwise the message
+  // rows stay frozen at the `.main-pane` default (760px) while the band it
+  // sits in widens (the bug this fixes: content no longer scales with it).
+  surface.style.setProperty("--chat-prose-max-width", px);
+
 }
 
 function setResizing(surface: HTMLElement | null, on: boolean) {

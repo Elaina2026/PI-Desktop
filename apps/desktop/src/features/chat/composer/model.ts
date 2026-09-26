@@ -3,15 +3,18 @@ import type {
   Mode,
   PermissionMode,
   ProviderPublic,
+  SessionThinkingLevel,
   ThinkingLevel,
   UnifiedModeId,
   resolveUnifiedMode,
   unifiedModeToSessionConfig,
 } from "@pi-desktop/shared";
 import {
-  modelIdsMatch,
+  isSessionThinkingLevel,
   PERMISSION_MODES,
+  sessionThinkingMenuLevels,
 } from "@pi-desktop/shared";
+import { sameComposerModelId } from "../../../lib/composer-models";
 import { providerThinkingLevels } from "../../../lib/session-thinking";
 
 export const COMPOSER_MIN_HEIGHT_PX = 28;
@@ -84,13 +87,7 @@ export const UNIFIED_MODES: readonly UnifiedModeDefinition[] = [
   },
 ] as const;
 
-export const PERMISSION_MODE_I18N_KEYS: Record<PermissionMode, string> = {
-  inherit: "chat.permissionInherit",
-  ask: "chat.permissionAsk",
-  "accept-edits": "chat.permissionAcceptEdits",
-  auto: "chat.permissionAuto",
-  bypass: "settings.permissionModeBypass",
-};
+export { PERMISSION_MODE_I18N_KEYS } from "../../../lib/permission-mode-labels";
 
 export const THINKING_LEVELS: readonly ThinkingLevel[] = [
   "off",
@@ -117,7 +114,7 @@ export type ComposerFileReference = {
   token?: string;
 };
 
-export type ComposerMenuView = "root" | "model" | "thinking";
+export type ComposerMenuView = "root" | "model";
 
 export type PromptEnhancementError = {
   message: string;
@@ -129,8 +126,8 @@ export function nextMode(mode: Mode): Mode {
   return MODE_CYCLE[(index + 1) % MODE_CYCLE.length] ?? "agent";
 }
 
-export function isThinkingLevel(value: unknown): value is ThinkingLevel {
-  return typeof value === "string" && THINKING_LEVELS.includes(value as ThinkingLevel);
+export function isThinkingLevel(value: unknown): value is SessionThinkingLevel {
+  return isSessionThinkingLevel(value);
 }
 
 export function isPermissionMode(value: unknown): value is PermissionMode {
@@ -146,10 +143,11 @@ export function isPermissionMode(value: unknown): value is PermissionMode {
  */
 export function thinkingLevelForProvider(
   provider: ProviderPublic | null | undefined,
-  current: ThinkingLevel,
-): ThinkingLevel {
+  current: SessionThinkingLevel,
+): SessionThinkingLevel {
   const available = providerThinkingLevels(provider);
   if (!provider?.supportsReasoning) return "off";
+  if (current === "omit") return "omit";
   if (available.includes(current)) return current;
   const requestedIndex = THINKING_LEVELS.indexOf(current);
   for (let index = requestedIndex; index < THINKING_LEVELS.length; index += 1) {
@@ -177,11 +175,11 @@ export function thinkingProviderForModel(
   modelCatalog: readonly ModelInfo[] | undefined,
 ): ProviderPublic | null | undefined {
   if (!provider || !modelId) return provider;
-  const model = modelCatalog?.find((candidate) => modelIdsMatch(candidate.modelId, modelId));
+  const model = modelCatalog?.find((candidate) => sameComposerModelId(candidate.modelId, modelId));
   if (!model) return provider;
 
   const binding = provider.models.find((candidate) =>
-    modelIdsMatch(candidate.id, model.modelId),
+    sameComposerModelId(candidate.id, model.modelId),
   );
   const configuredLevels = binding
     ? THINKING_LEVELS.filter((level) => binding.thinkingLevels.includes(level))
@@ -201,3 +199,5 @@ export function cssPixels(value: string): number {
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : 0;
 }
+
+export { sessionThinkingMenuLevels };

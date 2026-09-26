@@ -9,10 +9,13 @@ exactly one type: `length` (`unit: "px"`, numeric `min`, `max`, and `default`),
 (fixed safe `values` and default). Host-reserved prefixes are refused. Values
 are not CSS fragments.
 
-`contributes.settingsDestinations` declares sandboxed Settings entries with a
-stable `id`, localized `label`, closed icon token, optional localized keywords,
-and a plugin-relative `.html` `entry`. An entry requires `ui.settings`; it is
-rendered only in the host-owned Extensions group.
+`contributes.scenicThemes` declares a data-only host-rendered Settings entry:
+a stable `id`, localized label and description, `palette` icon token, localized
+keywords, and one to twelve ordered cards. Every card names a same-plugin
+theme, localized name/description, and a relative image asset declared by that
+theme. It requires both `ui.settings` and `ui.theme`. Plugins provide neither
+Settings HTML nor CSS or JavaScript: the host renders the Extensions entry,
+cards, range control, and Apply action in its normal React tree.
 
 ## 1. Purpose
 
@@ -128,6 +131,11 @@ Rules:
 4. The block is display metadata. A malformed one (not an object of locale →
    object) fails manifest validation; unknown locales and unknown fields inside
    an entry are ignored.
+5. The block is identity only (`name`, `description`, `safetyNotes`). Plugin-owned
+   copy — panels, views, widgets, generated settings, toasts, runtime command
+   titles — is not translated here. The host publishes the active language
+   (`pi.app.getLocale`, `appearance:changed`); the plugin localizes itself
+   (ADR 0280).
 
 ## 4. contributes
 
@@ -140,6 +148,7 @@ type PluginContributes = {
  providers?: PluginProviderContrib[]; // Host-owned provider rows; needs `provider.register` (spec 13)
  settings?: PluginSettingContrib[];
  themes?: PluginThemeContrib[];
+ scenicThemes?: PluginScenicThemesContrib;
  windowAppearance?: PluginWindowAppearanceContrib; // native window background; needs `ui.window.appearance`
  mcpServers?: PluginMcpServerContrib[];
   services?: PluginServiceContrib[];
@@ -169,7 +178,7 @@ type PluginAgentToolContrib = {
 
 type PluginSettingContrib = {
  key: string;
- title: string;
+ title: string; // author language; the generated sheet does not localize
  description?: string;
  type: "string" | "number" | "boolean" | "select" | "json" | "shortcut";
  default?: unknown;
@@ -206,8 +215,23 @@ type PluginThemeContrib = {
  label: string;
  path: string; // relative `.css` file
  base?: "light" | "dark"; // palette the overrides layer on, default `dark`
- assets?: string[]; // absolute png/jpg/jpeg/webp/avif/svg/woff2, 4 MB summed;
+ assets?: string[]; // package-relative or absolute png/jpg/jpeg/webp/avif/svg/woff2, 4 MB summed;
+                    // relative paths resolve inside plugin root; traversal/node_modules are rejected;
                     // each matching `url()` is rewritten to `plugin-asset://`
+};
+
+type PluginScenicThemesContrib = {
+ id: string;
+ label: { en: string; "zh-CN": string };
+ description: { en: string; "zh-CN": string };
+ keywords?: Array<{ en: string; "zh-CN": string }>;
+ icon: "palette";
+ themes: Array<{
+   themeId: string;
+   label: { en: string; "zh-CN": string };
+   description: { en: string; "zh-CN": string };
+   previewAsset: string;
+ }>;
 };
 
 type PluginWindowAppearanceContrib = {
@@ -270,8 +294,20 @@ type PluginProviderModelContrib = {
  contextWindow?: number;
  maxTokens?: number;
  supportsImages?: boolean;
+ /** Canonical thinking levels offered by this model, in declaration order. */
+ thinkingLevels?: string[];
+ /** New sessions use this level when it is present in `thinkingLevels`. */
+ defaultThinkingLevel?: string;
 };
 ```
+To materialize these fields, the Host trims entries, drops unknown canonical
+names, removes duplicates, and preserves the remaining declaration order. An
+absent or unusable list becomes an empty binding. `defaultThinkingLevel` is kept
+only when it names a normalized level in that model's list; otherwise it is
+dropped and normal binding normalization selects the first available level.
+Manifest validation rejects a non-array `thinkingLevels`, any non-string entry, or
+an explicitly non-string `defaultThinkingLevel`; unknown string names are
+accepted and dropped during normalization.
 
 ## 5. permissions enum
 
@@ -305,8 +341,10 @@ type PluginPermission =
  | "session.read.own"
  | "session.update.own"
  | "session.delete.own"
+ | "usage.read"
  | "audio.capture.background"
  | "audio.playback.background"
+ | "speech.adapter.register"
  | "keyboard.globalShortcut"
  | "net.websocket";
 ```
@@ -402,6 +440,12 @@ as rows in the native provider list, owned by the plugin ([ADR 0259](../../adr/0
   are the provider-config styles except `auto`
 - `authKind` is optional, either `api_key` (default) or `none`
 - `models` requires 1..64 entries with unique ids of 1..256 characters
+
+`thinkingLevels` is optional. The Host trims entries, drops unknown canonical
+names, removes duplicates, and preserves the remaining declaration order. An
+absent or unusable list becomes an empty binding. `defaultThinkingLevel` is kept
+only when it names a normalized level in that model's list; otherwise it is
+dropped and normal binding normalization selects the first available level.
 
 A non-empty `contributes.providers` needs the high-risk `provider.register`
 permission ([13-plugin-permissions-matrix.md](13-plugin-permissions-matrix.md)).

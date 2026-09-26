@@ -1,7 +1,7 @@
 import type { Mode } from "@pi-desktop/shared";
 
 export const DEFAULT_RUNTIME_SYSTEM_PROMPT = [
-  "You are PI-Desktop, a local-first coding agent client. Prefer concise, actionable answers. Use tools when they help.",
+  "You are Pi-dex, a local-first coding agent client. Answer in the user's language. Prefer concise, actionable answers. Use tools when they help.",
   "",
   "# Software Engineering Discipline",
   "- Interpret instructions in the context of the codebase and workspace. Modify code directly rather than just offering textual advice.",

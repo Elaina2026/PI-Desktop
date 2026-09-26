@@ -8,14 +8,27 @@
  *
  * Empty / omitted keeps adapter defaults. Authorization, Host, Content-Type,
  * and other hop-by-hop or auth keys are rejected so this cannot smash signing.
+ *
+ * Values are folded to half-width and trimmed before they enter the map (see
+ * `@pi-desktop/shared`'s `header-value.ts`), and a value that still cannot be
+ * a ByteString is dropped here rather than thrown by `Headers.set` at request
+ * time. Host persistence rejects the same rows with a named error, so this
+ * path only sees a stale store, a plugin, or an unsaved form value.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { FetchFunction, ProviderHeaders, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { HEADER_VALUE_MAX_BYTES, inspectHeaderValue } from "@pi-desktop/shared";
+import type {
+  Api,
+  FetchFunction,
+  ProviderHeaders,
+  SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
+import { adapterAcceptsCustomFetch } from "./provider-binding.js";
 
 export const PROVIDER_HEADERS_MAX = 32;
 export const PROVIDER_HEADER_KEY_MAX_BYTES = 256;
-export const PROVIDER_HEADER_VALUE_MAX_BYTES = 4096;
+export const PROVIDER_HEADER_VALUE_MAX_BYTES = HEADER_VALUE_MAX_BYTES;
 
 const FORBIDDEN_HEADER_KEYS = new Set([
   "authorization",
@@ -74,7 +87,13 @@ function overlayHeaders(
   }
 }
 
-/** Drop invalid rows. Host persistence rejects the same cases with an error. */
+/**
+ * Drop invalid rows. Host persistence rejects the same cases with an error.
+ *
+ * Fullwidth values fold to half-width; a value that still holds a character
+ * above U+00FF (or a control character) is dropped instead of reaching
+ * `Headers.set`, which would throw a ByteString TypeError mid-turn.
+ */
 export function normalizeProviderHeaders(
   value: unknown,
 ): Record<string, string> | undefined {
@@ -83,12 +102,13 @@ export function normalizeProviderHeaders(
   for (const [rawKey, rawValue] of Object.entries(value as Record<string, unknown>)) {
     if (typeof rawValue !== "string") continue;
     const key = rawKey.trim();
-    const headerValue = rawValue.trim();
+    const header = inspectHeaderValue(rawValue);
+    const headerValue = header.value;
     if (!key || !headerValue) continue;
+    if (header.fault) continue;
     if (key.length > PROVIDER_HEADER_KEY_MAX_BYTES) continue;
     if (headerValue.length > PROVIDER_HEADER_VALUE_MAX_BYTES) continue;
     if (key.includes("\r") || key.includes("\n")) continue;
-    if (headerValue.includes("\r") || headerValue.includes("\n")) continue;
     if (!validHeaderKey(key)) continue;
     const lower = key.toLowerCase();
     if (FORBIDDEN_HEADER_KEYS.has(lower)) continue;
@@ -169,15 +189,29 @@ export function withProviderHeadersFetch(
 export function withProviderHeaders(
   options: SimpleStreamOptions | undefined,
   headers: Record<string, string> | undefined,
+  api?: Api,
 ): SimpleStreamOptions {
+  const acceptsFetch = adapterAcceptsCustomFetch(api);
   const normalized = normalizeProviderHeaders(headers);
-  if (!normalized) return options ?? {};
+  if (!normalized) {
+    // The refusal is about the `fetch` alone, so it holds even when this row
+    // has no header override to merge.
+    if (acceptsFetch || !options || options.fetch === undefined) return options ?? {};
+    return { ...options, fetch: undefined };
+  }
   const merged = mergeProviderHeaders(options?.headers, normalized);
-  const fetch = withProviderHeadersFetch(options?.fetch, normalized);
+  // The wrapper is the last writer for adapters that read their headers from
+  // the request, but pi-ai's Google adapters reject any `fetch` that is not
+  // `globalThis.fetch` (issue #1072). They keep the merged `headers` above —
+  // which their adapter forwards to the SDK client verbatim — and inherit no
+  // fetch at all, so a caller-supplied one is cleared instead of wrapped.
+  const fetch = acceptsFetch
+    ? withProviderHeadersFetch(options?.fetch, normalized)
+    : undefined;
   return {
     ...(options ?? {}),
     ...(merged ? { headers: merged } : {}),
-    ...(fetch ? { fetch } : {}),
+    ...(acceptsFetch ? (fetch ? { fetch } : {}) : { fetch: undefined }),
   };
 }
 

@@ -116,11 +116,26 @@ describe("NativePiSessionService", () => {
     const lease = acquireNativePiSessionLease(f.file);
     const manager = SessionManager.open(f.file);
     guardNativePiSessionManager(manager, lease);
-    manager.appendMessage({ role: "user", content: [{ type: "text", text: "desktop turn" }], timestamp: Date.now() });
+    const userEntryId = manager.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "desktop turn" }],
+      timestamp: Date.now(),
+    });
+    manager.appendContextEdit(userEntryId, {
+      content: [{ type: "text", text: "edited model context" }],
+    });
+    expect(manager.buildSessionContext().messages).toContainEqual({
+      role: "user",
+      content: [{ type: "text", text: "edited model context" }],
+      timestamp: expect.any(Number),
+    });
     const afterOwnAppend = readFileSync(f.file, "utf8");
     expect(afterOwnAppend).toContain("desktop turn");
+    expect(afterOwnAppend).toContain('"type":"context_edit"');
     writeFileSync(f.file, `${afterOwnAppend}${JSON.stringify({ type: "custom", id: "foreign", parentId: manager.getLeafId(), timestamp: new Date().toISOString(), customType: "foreign" })}\n`);
-    expect(() => manager.appendMessage({ role: "user", content: [{ type: "text", text: "must not write" }], timestamp: Date.now() })).toThrow(/changed/i);
+    expect(() => manager.appendContextEdit(userEntryId, {
+      content: [{ type: "text", text: "must not write" }],
+    })).toThrow(/changed/i);
     expect(readFileSync(f.file, "utf8")).not.toContain("must not write");
     lease.release();
   });
@@ -327,7 +342,12 @@ describe("native continuation review regressions", () => {
     }`);
     const requests: { systemPrompt?: string; tools: unknown[]; messages: unknown }[] = [];
     vi.spyOn(ModelRuntime.prototype, "streamSimple").mockImplementation((_model, context) => {
-      requests.push({ systemPrompt: context.systemPrompt, tools: context.tools ?? [], messages: context.messages });
+      const systemMessage = context.messages.find((message) => message.role === "system");
+      requests.push({
+        systemPrompt: typeof systemMessage?.content === "string" ? systemMessage.content : undefined,
+        tools: context.tools ?? [],
+        messages: context.messages,
+      });
       return fauxStream();
     });
     const service = new NativePiSessionService(f);
@@ -523,8 +543,9 @@ describe("native fork children", () => {
       expect(after.match(/fixture reply/g)).toHaveLength(1);
       const reopened = SessionManager.open(childPath);
       const branch = reopened.getBranch().filter((entry) => entry.type === "message");
-      expect(branch.map((entry) => entry.message.role)).toEqual(["user", "user", "assistant"]);
-      expect(new Set(branch.map((entry) => entry.id)).size).toBe(3);
+      const visibleBranch = branch.filter((entry) => entry.message.role !== "system");
+      expect(visibleBranch.map((entry) => entry.message.role)).toEqual(["user", "user", "assistant"]);
+      expect(new Set(visibleBranch.map((entry) => entry.id)).size).toBe(3);
       expect(reopened.getSessionId()).toBe(childId);
       expect(readFileSync(f.file, "utf8")).toBe(parentBytes);
     } finally { service.disposeAll(); }

@@ -149,13 +149,14 @@ Bash 的方言。
 type ThinkingLevel =
   | "off" | "minimal" | "low" | "medium"
   | "high" | "xhigh" | "max";
+type SessionThinkingLevel = ThinkingLevel | "omit";
 
 type SessionConfigureRequest = {
   id: string;
   mode: "plan" | "goal" | "agent";
   providerId?: string;
   modelId?: string;
-  thinkingLevel: ThinkingLevel;
+  thinkingLevel: SessionThinkingLevel;
 };
 ```
 
@@ -269,6 +270,15 @@ type AgentCompactResponse = { accepted: boolean };
 会话。即使自动上下文保护被禁用，它也可用。
 缺少 provider/session 配置无法通过正常的 `AppError`
 信封；主动转向或压实返回 `AGENT_BUSY`。
+
+`agent.compact` 是阻塞式摘要请求，而不是状态轮询：sidecar 会把会话序列化成一个
+提示词、流式生成一次模型摘要，并且可能重试瞬时失败。因此它的传输超时由这份预算推导
+—— `(1 + 3) × 180 秒` 流空转看门狗 `+ 14 秒` 重试退避 `+ 10 秒` 余量 —— 而不是沿用
+扁平的 130 秒默认值；后者会在 sidecar 仍在总结大上下文时到期（**D614**，issue #795）。
+宿主也把传输超时视为“结果未知”而不是“失败”：调用超时后，它会重新读取该会话的持久化
+记录，若发现新检查点已落盘就报告成功，因为无论 Electron 是否收到回复，sidecar 都会
+通过 host-core 持久化。sidecar 自己给出的判定（例如 `CONTEXT_COMPACTION_FAILED`）
+绝不会用这种方式被改写。
 
 ### 5.5 Plan 和 Goal 检查点批准
 
@@ -439,7 +449,7 @@ type AgentActivity =
      reason: "manual" | "threshold" | "overflow" }
  | { phase: "recovering"; since: number }
  | { phase: "retrying"; since: number; attempt: number;
-     retryDelayMs?: number; error?: AgentActivityError }
+     infinite?: boolean; retryDelayMs?: number; error?: AgentActivityError }
  | { phase: "waiting-subagents"; since: number; subagentCount: number;
      agents?: AgentActivityAgent[] };
 
@@ -575,7 +585,8 @@ type AgentEvent =
      willRetry: boolean; fallback?: "retained_tail";
      mark?: { id: string; throughMessageId: string;
               generation: number; summaryTokens: number;
-              summarized: boolean };
+              summarized: boolean;
+              fallback?: "retained_tail" };
      error?: { code: string; message: string } }
  | { type: "error"; error: AppError }
  | { type: "status"; status: AgentStatus };
@@ -606,7 +617,8 @@ type AgentEvent =
 转录本行位于 `generation` 之后（此会话有多少个检查点
 已安装）、`summaryTokens`（摘要的估计上下文成本）以及
 `summarized`（当窗口滚动且未向模型询问时，`false`
-总结）。记录本身不被携带——它的摘要和保留尾部被携带
+总结）以及 `fallback`（摘要生成失败、检查点只带恢复说明和保留尾部时为
+`"retained_tail"`；转录行将其标为摘要生成失败，而不是 N tokens 的摘要）。记录本身不被携带——它的摘要和保留尾部被携带
 远远大于事件应有的大小——而是从
 `SessionDetail.compactions` 会话打开或分叉。
 
@@ -643,10 +655,13 @@ type AgentEvent =
 避免快速完成先于查看上下文更新。Electron 将此提示与 Main 拥有的窗口
 visibility/focus 结合起来，在终态事件边界进行判断。缺失、null 或不匹配的
 上下文都会安全地创建公告。它还调用
-`pi-desktop/notification/showNative({ id, sessionId, title, body, source? })` 之后
+`pi-desktop/notification/showNative({ id, sessionId, title, body, source?, createdAt? })` 之后
 本地化新记录。可选的 `source` 对终端任务结果使用 `"task"`，对 asktool、
 工具权限和 Plan 审批询问使用 `"interactive"`；省略或未知值默认为
-`"task"`。这个仅限 Electron 的请求永远不会进入主机 RPC 域。
+`"task"`。任务通知带有持久记录的 `createdAt` 时，Main 会在成功的“全部已读”
+或清空操作后使用 `dismissedBefore` 水位拒绝迟到的旧事件，单条已读则使用
+持久 ID tombstone；这样渲染器或主机重放不会再次弹出已处理的通知。这个仅限
+Electron 的请求永远不会进入主机 RPC 域。
 
 ```ts
 type AppNotification = {
@@ -688,6 +703,9 @@ Main 发送两个事件：
   并重新计算确切的未读计数。最终结果已经可见
   聚焦的当前聊天、重复的终端更新和中止的回合会发出
   什么也没有。
+- 持久 `id` 是 Renderer 和 Electron 本机投递的幂等键。对于本地列表中
+  已存在 id 的重复 `notification.changed` 负载必须无操作；已确认或已清除
+  行的延迟负载会被忽略，不得重新创建行或侧边栏结果。
 - 用户点击 Electron 后的 `pi-desktop/notification/event/activated`
   本机系统通知。 Renderer 遵循其现有的会话选择
   路径，包括项目绑定会话的项目激活。
@@ -720,6 +738,13 @@ Electron 主将 `net.aiuo.pi-desktop` 注册为进程 AppUserModelID
 包标识所以通知属性、通知设置、任务栏
 分组，安装的快捷方式解析为 `PI-Desktop`，而不是库存
 Electron 主机。
+
+任务本机对象按持久 notification id 保留，每个 id 最多一个活动对象。
+重放的 `showNative` 请求不得创建第二个对象。`notification.markRead`、
+`notification.markAllRead` 或 `notification.clear` 的主机变更成功后，关闭
+匹配的任务对象（并保留 id tombstone 一段时间以拒绝迟到投递）；主机变更
+失败时不得乐观地关闭对象。交互询问使用独立的临时注册表，不受任务收件箱
+变更影响。
 
 查看会话提示是建议性的和自动防故障的：丢失、陈旧、隐藏或
 未聚焦的渲染器状态会创建持久通知。发生抑制
@@ -790,9 +815,10 @@ type SessionDetail = SessionSummary & {
 
 Electron 主进程用该会话精确 provider/API URL 与 model 的本地 models.dev
 记录，丰富 session list/get/create/fork/configure 结果中的有效推理能力。
-未固定 `providerId`/`modelId` 的会话仅在此丰富步骤继承应用默认供应商/模型；
-持久化 id 保持为空，以便之后的默认模型变更仍然生效。快照中没有该 ID、或
-会话无法解析出默认目标时，得到 `supportsReasoning: false` 和 `off`；缓存/
+未固定 `providerId`/`modelId` 的会话仅在此丰富步骤继承应用默认供应商/模型。
+桌面创建会话时会把当时的默认（或 Composer 草稿覆盖）写入持久化 id；之后改
+默认模型不会改写已创建会话。没有会话的首页草稿仍跟随当前默认。快照中没有该
+ID、或会话无法解析出默认目标时，得到 `supportsReasoning: false` 和 `off`；缓存/
 供应商声明不能取代目录语义。Rust 主机仅对持久化的 `thinkingLevel` 权威。
 
 全局插件启动器使用仅 Electron 允许的通道：
@@ -853,8 +879,11 @@ Electron 主进程用该会话精确 provider/API URL 与 model 的本地 models
 `session/fork` 是一个协议 v5 通道，可创建独立的
 来自源会话当前活动记录的会话。当可选时
 `throughMessageId` 存在，复制的快照以该消息结束；一个
-未知 ID 返回 `NOT_FOUND`。 Electron 拒绝
-当该源会话处于活动状态时，使用 `AGENT_BUSY` 发出请求。
+Unknown ids return `NOT_FOUND`. A running Desktop source may fork a completed
+assistant prefix that contains no messages owned by a running turn. The host
+checks this under its RPC lock. Whole-session and active-turn forks remain
+`AGENT_BUSY`; native Pi keeps its idle/ownership guard. The source continues
+running without renderer history hydration replacing its live tail.
 Electron拥有本地化并提供面向用户的分支名称；主机
 后备标题是为非 UI 调用者保留的。
 主机分配新的会话 ID、消息 ID 和工具调用 ID；它复制
@@ -1172,7 +1201,9 @@ type PluginSummary = {
 项目级请求缺少 `projectPath` 时无效。`mcp.active` 会先按 ID 或不区分大小写
 的 label 让项目记录遮蔽全局记录，再过滤关闭项；因此关闭的项目记录仍然会
 遮蔽全局项。仅桌面的 `mcp/test` IPC 操作用于强制连接测试，并把状态返回
+MCP 编辑器。设置页的 `mcp.list` 在返回状态前会探测此前就绪的远程连接；服务器失联时，列表显示 `failed`，而不是保留过时的 `ready`。服务器恢复后，“测试连接”会重试。探测失败不会中断正在执行的工具调用；“测试连接”会先关闭旧客户端再重试。
 MCP 编辑器。
+停止会话会中止该会话正在执行的用户 MCP 工具调用，并向服务器发送 `notifications/cancelled`。其他会话共用的连接保持可用；已取消的调用不会重放。取消会结束本地等待，但服务器可能忽略通知并完成已经开始的副作用。
 
 ```ts
 type McpServerStatus = {
@@ -1216,7 +1247,7 @@ ASCII slug：frontmatter `name` 能 slugify 时用它，否则 `SKILL.md` 用技
 - `pi-desktop/skill/market/search` — `{ query, sources[] }` →
   `{ entries, failedSources, failureKinds, failureDetails }`。
   主进程聚合目录 JSON 与 GitHub 仓库 SKILL.md 扫描。源 URL 必须通过公网 HTTPS 策略（ADR 0243）。单源失败只丢掉该源。
-  `failureKinds` 把 `failedSources` 中的每个名字映射到 `policy`（守卫判定了目标自身的非公网地址并拒绝）、`fake-ip`（判定的是本地代理伪造的 fake-IP 占位地址,如 Clash 默认的 `198.18.0.0/15`；在直连或读不出线路时仍被拒绝,因为守卫在那里失败关闭、这个应用会自己去连该地址,但这是本地网络的状况而不是源的问题）、`unresolved`（本地 DNS 解析没有返回答案,因此没有判定任何地址）或 `network`。`failureDetails` 以同样的键携带真正失败的主机、解析到的地址、守卫自己的 `reason`、地址类别以及判定该地址的线路（`proxied`、`direct`,或传输层读不出线路时的 `unknown`,ADR 0272）；面板据此说明**被拒的是什么**（例如「代理把 github.com 应答为 198.18.0.1」）,而不只是哪个源没出结果。
+  `failureKinds` 把 `failedSources` 中的每个名字映射到 `policy`（守卫判定了目标自身的非公网地址并拒绝）、`fake-ip`（判定的是本地代理伪造的 fake-IP 占位地址，如 Clash 默认的 `198.18.0.0/15`；在直连或读不出线路时默认仍被拒绝，显式 `allowFakeIp` 只可为透明路由器/TUN 部署放行 benchmark 占位地址）、`unresolved`（本地 DNS 解析没有返回答案，因此没有判定任何地址）或 `network`。`failureDetails` 以同样的键携带真正失败的主机、解析到的地址、守卫自己的 `reason`、地址类别以及判定该地址的线路（`proxied`、`direct` 或传输层读不出线路时的 `unknown`，ADR 0272）；面板据此说明**被拒的是什么**，而不只是哪个源没出结果。
   判定型拒绝与 fake-IP 拒绝都以 `NETWORK_POLICY_BLOCKED` 暴露（两者都是守卫作出的拒绝）,解析器无应答以 `NETWORK_RESOLVE_FAILED` 暴露（spec 08 §3.1）；安装面板正是按这些错误码与结构化 `reason` 分类。
 - `pi-desktop/skill/market/fetch` — `{ entry }` → `{ name?, description?, body, resources? }`。
   主进程按同一策略拉取文档、拆 frontmatter，并可能附上 jsDelivr 目录中的兄弟 `.md`。渲染层通过现有 `skills.create` 安装。该策略即主进程公网网络客户端：语法 URL 防护、按承载 `net.fetch` 的会话线路判定的逐跳 DNS 分类（ADR 0272）、逐跳重定向复核与响应上限——渲染层绝不直接触网。目录 id 会净化为 host `valid_capability_id`。
@@ -1225,7 +1256,37 @@ ASCII slug：frontmatter `name` 能 slugify 时用它，否则 `SKILL.md` 用技
 桌面专用 MCP 市场通道（不是 host RPC）走 Electron IPC：
 
 - `pi-desktop/mcp/market/search` — `{ query?, sources[], more? }` →
-  `{ entries, failedSources, exhausted }`。Main 校验源 URL，固定每个解析出的公网地址，只跟随有界的 HTTPS 重定向，并为 browse 与服务端搜索保留 cursor 状态。单个源失败不会丢弃成功源；响应和缓存均有界。
+  `{ entries, failedSources, exhausted }`。Main 校验源 URL，并在每一跳向 Electron session 询问线路。完整代理线路使用 session 传输；直连和未知线路默认固定解析出的公网地址，显式 `allowFakeIp` 仅限 benchmark 占位地址。重定向仍是有界 HTTPS，browse 与服务端搜索保留 cursor 状态；单个源失败不会丢弃成功源，响应和缓存均有界。
+
+### MCP OAuth（ADR 0283）
+
+HTTP MCP 服务的基于浏览器的 OAuth 2.1 认证在 Electron 主进程中通过非阻塞 IPC 与事件流处理：
+
+- `pi-desktop/mcp/oauth/start({ id, level?, projectPath? }) -> { ok: true, loginId }`
+  启动 OAuth 元数据发现与 PKCE 授权码流程。立即返回，用户的浏览器交互与回调交换在后台异步执行。
+- `pi-desktop/mcp/oauth/cancel({ loginId?, id? }) -> { ok: boolean }`
+  中止正在进行的授权尝试，关闭本地回环 HTTP 服务并清理定时器。
+- `pi-desktop/mcp/oauth/event` 向渲染层推送 `McpOAuthLoginEvent`：
+
+```ts
+type McpOAuthLoginEvent = {
+  loginId: string;
+  serverId: string;
+} & (
+  | { kind: "authUrl"; url: string; instructions?: string; opened: boolean }
+  | { kind: "progress"; message: string }
+  | { kind: "done"; status: McpServerStatus }
+  | { kind: "error"; message: string }
+  | { kind: "cancelled" }
+);
+```
+
+#### 状态与凭证存储
+- `McpServerStatus` 包含：
+  - `hasOauth: boolean` — 服务是否在 host-core 加密凭据库存储有 OAuth 凭据（`secret:mcp:<serverId>:oauth`）。
+  - `authRequired: boolean` — 连接握手或 `tools/call` 是否收到 HTTP 401 Unauthorized，提示用户需要认证/重新授权。
+- OAuth 令牌（`accessToken`, `refreshToken`, `expiresAt`, `resource`, `clientId`, `redirectUris`）仅持久化在 host-core 的加密 secret 中（`secret:mcp:<serverId>:oauth`），绝不向渲染层暴露。授权服务器端点必须是 HTTPS（仅回环 HTTP 例外）。token 端点错误响应体只记入主进程日志，不进入渲染层事件。
+
 ## 12c. 子代理 API (D202)
 
 用户拥有的子代理仅是全局 Markdown 文档：`~/.agents/subagents/<id>.md`。
@@ -1479,6 +1540,26 @@ Electron 报告的右侧角）改变的是面板目标。Main 通过
 仅针对当前可见的会话设置此目标：背景工件
 无法更改可见的保留几何形状。
 
+### Tray session shortcuts (ADR tray-session-shortcuts)
+
+- `pi-desktop/tray/setSessionPreferences({ sessionMeta, archivedProjectPaths, sort })`
+  returns `{ ok: true }`. `sessionMeta` maps IDs to optional boolean `pinned`
+  and `archived` flags plus a non-negative safe integer `order`. `sort` is
+  `recent`, `created`, `oldest`, `name`, or `manual`; the renderer mirrors the
+  sidebar's effective sort. Main validates the payload, strips unrelated
+  metadata, and rejects senders other than the current main window. The setter
+  is excluded from the local MCP catalog and persists nothing.
+- Main emits `pi-desktop/tray/event/sessionActivated { sessionId: string | null }`
+  after restoring/focusing the window, waiting for post-bootstrap
+  `menu/rendererReady`, and checking that the session still exists and is not
+  archived. Renderer enters normal session selection, including cross-project
+  navigation and unread acknowledgement. A null ID closes search, returns to
+  the conversation page, and expands the sidebar for View more. Merely opening
+  the menu is read-only.
+- Main reads existing Host session/inbox APIs, observes root runtime events and
+  successful session/inbox mutations, and combines them with the ephemeral
+  organization copy. No host protocol or storage schema changes.
+
 ## 13c. Composer 输入 API（D123/D124/D197、ADR 0024/0059）
 
 仅电子通道支持输入框自动完成和剪贴板文件
@@ -1508,6 +1589,13 @@ type ComposerCommand = {
 `~/.pi/agent/prompts/*.md`（项目赢得名称冲突；短 TTL 缓存）。
 没有工作区，只有用户全局模板、内置函数和插件
 命令返回。
+
+读取失败的指令源不等于“指令列表为空”（**D613**，issue #795）。发送时的解析区分三种
+结果：已解析的内置 / 插件 / 扩展指令在本地分发；提示词模板、未知别名，以及没有可分发
+id 的指令条目仍走普通提示词路径；**无法读取指令源时则拒绝这次提交**。拒绝是刻意的
+——指令源不可用时，Composer 无法证明 `/compact` 不是内置指令，而把控制指令当作字面
+文本交给模型会被执行。拒绝会保留草稿、显示 `chat.slashCommandSourceUnavailable`，并且
+不写 TTL 缓存，因此下一次发送会重试该读取；缓存仍热时，一次数据源抖动不会影响解析。
 
 ### fs/index
 
@@ -1608,6 +1696,15 @@ prompt/enhance({
 这是一次独立的一次性补全，没有会话历史、工具或附件。Electron main 负责解析
 提供商/模型和凭据，因此渲染器永远拿不到密钥。空草稿、斜杠命令草稿、缺失模型
 以及提供商失败都返回通用的 `Result` 错误包络。
+
+### speech/getStatus、speech/transcribe、speech/synthesize
+```ts
+speech/getStatus() -> SpeechStatus
+speech/transcribe({ sessionId?, path, mimeType?, language? }) -> { text }
+speech/synthesize({ sessionId?, text, voice?, format? }) -> { path, mimeType, dataUrl? }
+```
+
+宿主语音独立于聊天。绑定在 `AppSettings.speech`。音频字节不进入渲染器。见 `20-speech.md`。
 
 ### app/openFeedback（D313）
 
@@ -1733,3 +1830,34 @@ MCP 调用方无法调用它们。
 | `WORKSPACE_REQUIRED` | 需要项目目录 |
 | `PATH_OUTSIDE_WORKSPACE` | 在明确的外部路径权限决策之前路径超出范围 |
 | `INTERNAL` | 未分类的内部错误 |
+
+### Provider ordering
+
+`pi-desktop/providers/reorder({ id, targetId, placement: "before" | "after" })`
+returns `{ ok: true }` and forwards to host `providers.reorder`. The sandboxed
+preload permits this channel through the shared IPC registry. Invalid placement
+or missing providers returns `INVALID_PARAMS`; configuration and defaults are
+unchanged. See [provider configuration](12-provider-config-schema.md).
+
+## 15. 云配置同步
+
+设置 → 云同步页面使用以下 Renderer-to-Main 通道；所有通道都会转发到 Host 所有的 `configSync.*` RPC 方法：
+
+| IPC 通道 | Host 方法 | 契约 |
+|---|---|---|
+| `pi-desktop/configSync/getState` | `configSync.getState` | 脱敏状态、类别选择、预览计数和待审批摘要 |
+| `pi-desktop/configSync/test` | `configSync.test` | 使用临时对象进行 WebDAV 能力探测；不持久化配置 |
+| `pi-desktop/configSync/configure` | `configSync.configure` | 校验 endpoint、保存加密的本地同步元数据并启用 vault |
+| `pi-desktop/configSync/syncNow` | `configSync.syncNow` | 执行一次由 Host 所有的协调周期 |
+| `pi-desktop/configSync/pause` | `configSync.pause` | 仅暂停或恢复本设备 |
+| `pi-desktop/configSync/unlock` | `configSync.unlock` | 为当前进程/设备解锁本地 vault |
+| `pi-desktop/configSync/approve` / `reject` | `configSync.approve` / `configSync.reject` | 记录绑定 digest 的本地激活决定 |
+| `pi-desktop/configSync/mapProject` | `configSync.mapProject` | 将一个不透明项目/组身份绑定到一个或多个明确选择的本地文件夹，并保留 primary-root 顺序 |
+| `pi-desktop/configSync/listHistory` | `configSync.listHistory` | 只列出脱敏的可达 revision 元数据 |
+| `pi-desktop/configSync/restore` | `configSync.restore` | 根据明确确认的历史 revision 创建新的传播 revision，并暂存本地审批/恢复信息 |
+| `pi-desktop/configSync/changePassword` | `configSync.changePassword` | CAS 重新包裹 vault key header，不返回 key 或秘密值 |
+| `pi-desktop/configSync/disconnect` | `configSync.disconnect` | 移除本地同步元数据和 key；不会删除远端 vault 数据 |
+
+输入密码只会被传给需要它的操作。原始秘密、vault key、解密资源或远端 archive 不会返回到 Renderer。`configSync.changed` 事件携带相同的脱敏状态，并由 Host 发起的变更（包括 Host scheduler）触发。Main 只是传输/生命周期协调器，不负责调度、合并、加密或应用配置。
+
+手动同步会在运行期间报告 `configSync.progress`：当前阶段（`capture`、`download`、`merge`、`upload`、`apply` 或 `cleanup`）、该阶段已完成与总量，以及已知时的字节数。因此上传大量资源对象时，界面不会无内容可显示。后台轮询不报告进度，因为只有手动路径有调用方在等待。

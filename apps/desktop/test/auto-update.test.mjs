@@ -24,6 +24,7 @@ const [
   appSource,
   stylesSource,
   pkgSource,
+  buildReleaseSource,
   releaseWorkflowSource,
   enSource,
   zhSource,
@@ -41,6 +42,7 @@ const [
   readAppSource(),
   loadStyles(),
   read("../package.json"),
+  read("../../../scripts/build-desktop-release.mjs"),
   read("../../../.github/workflows/release.yml"),
   read("../../../packages/i18n/src/locales/en/index.ts"),
   read("../../../packages/i18n/src/locales/zh-CN/index.ts"),
@@ -91,11 +93,16 @@ test("main process registers update handlers and the auto-check lifecycle", () =
 });
 
 test("updater gates delivery mode by platform and delivery policy", () => {
-  // macOS stays manual-delivery even for notarized artifacts; dev builds are
-  // disabled outright.
+  // Packaged macOS, Windows NSIS, and Linux AppImage use in-app delivery.
+  // Dev builds are disabled outright.
   assert.match(updaterSource, /if \(!isPackaged\) return "disabled"/);
   assert.match(updaterSource, /win32.*in-app|in-app.*win32/s);
-  assert.match(updaterSource, /PORTABLE_EXECUTABLE_FILE \? "manual"/);
+  assert.match(
+    updaterSource,
+    /PORTABLE_EXECUTABLE_FILE[\s\S]*distribution === "zip"/,
+  );
+  assert.match(updaterSource, /piDistribution/);
+  assert.match(updaterSource, /platform === "darwin"[\s\S]*return "in-app"/);
   assert.match(updaterSource, /APPIMAGE/);
   assert.match(updaterSource, /autoInstallOnAppQuit = true/);
   assert.match(
@@ -230,9 +237,14 @@ test("packaging publishes an electron-updater feed for GitHub Releases", () => {
   assert.ok(macTargets.includes("zip"), "mac zip target (Squirrel.Mac feed)");
   // electron-builder must never self-publish (implicit tag publishing would
   // fail on the missing token and race the softprops release step).
-  for (const script of ["dist", "dist:mac", "dist:win", "dist:linux"]) {
-    assert.match(pkg.scripts[script], /--publish never/, script);
+  for (const script of ["dist:mac", "dist:win", "dist:linux"]) {
+    assert.match(
+      pkg.scripts[script],
+      /--publish never|build-desktop-release\.mjs/,
+      script,
+    );
   }
+  assert.match(pkg.scripts.dist, /build-desktop-release\.mjs/);
   assert.equal(pkg.build.linux.executableName, "pi-desktop");
   const linuxTargets = pkg.build.linux.target.map((entry) => entry.target);
   assert.deepEqual(
@@ -257,12 +269,26 @@ test("packaging publishes an electron-updater feed for GitHub Releases", () => {
   // GitHub asset URLs mangle spaces; keep Windows artifact names space-free.
   assert.equal(pkg.build.nsis.artifactName, "PI-Desktop-Setup-${version}.${ext}");
   const winTargets = pkg.build.win.target.map((entry) => entry.target);
-  assert.deepEqual(winTargets, ["nsis", "portable"], "Windows release targets");
+  assert.deepEqual(winTargets, ["nsis", "zip", "portable"], "Windows release targets");
+  assert.equal(pkg.build.portable.artifactName, "PI-Desktop-Portable-${version}.${ext}", "portable artifact name");
   assert.equal(
-    pkg.build.portable.artifactName,
+    pkg.build.win.artifactName,
     "PI-Desktop-Portable-${version}.${ext}",
   );
-  assert.equal(pkg.build.portable.requestExecutionLevel, "user");
+  assert.equal(pkg.build.extraMetadata.piDistribution, "installed");
+  assert.match(pkg.scripts["dist:win"], /build-desktop-release\.mjs win/);
+  assert.match(buildReleaseSource, /"--win",\s*"nsis"/);
+  assert.match(buildReleaseSource, /"--win",\s*"zip"/);
+  assert.match(buildReleaseSource, /"--win",\s*"portable"/);
+  assert.match(buildReleaseSource, /piDistribution=portable/);
+  assert.match(buildReleaseSource, /"--publish",\s*"never"/);
+  assert.match(buildReleaseSource, /piDistribution=installed/);
+  assert.match(buildReleaseSource, /piDistribution=zip/);
+  assert.match(
+    buildReleaseSource,
+    /shell:\s*process\.platform === "win32"/,
+    "Windows must launch the pnpm.cmd shim through a shell",
+  );
   // The upload step must carry every updater feed, and the release publishes
   // all platforms unfiltered (D126/D285).
   assert.match(releaseWorkflowSource, /release\/\*\.zip/);
@@ -279,7 +305,7 @@ test("shared shipped-locale changelog is the in-app notes source of truth", () =
   assert.match(changelogSource, /version: "0\.2\.7"/);
   assert.match(
     mainSource,
-    /getLocale:\s*\(\)\s*=>\s*updaterLocale/,
+    /getLocale:\s*\(\)\s*=>\s*(?:updaterLocale|mainState\.updaterLocale)/,
     "Main supplies product locale to the updater for note selection",
   );
   assert.match(mainSource, /updater\.refreshReleaseNotes\(\)/);

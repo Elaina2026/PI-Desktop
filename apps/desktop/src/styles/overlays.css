@@ -316,7 +316,9 @@
 }
 
 .release-notes-overlay {
-  z-index: 80;
+  /* z-dialog, like every other overlay: leaf popups (60) and toasts (50) keep
+     painting above it. */
+  z-index: 40;
 }
 
 .release-notes-dialog {
@@ -735,10 +737,6 @@
 :root[data-platform="linux"] .page-frame,
 :root[data-platform="darwin"] .page-frame {
   padding-top: calc(var(--ds-toolbar-height) + 8px);
-}
-
-.route-page > .thread-scroll {
-  flex: 1;
 }
 
 .chat-error-layer {

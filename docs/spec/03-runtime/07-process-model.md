@@ -37,6 +37,13 @@ run pointed at its own `PI_DESKTOP_DATA_DIR` (E2E harnesses, the capture rig, a
 side-by-side profile) shares no database, outbox, or logs with the default
 installation and stays launchable while one is running (D236, ADR 0094).
 
+A development build is its own installation rather than a second process of
+the same one: it runs under `PI-Desktop Dev` in the OS application-data root
+and reads `~/.pi-desktop-dev`. `pnpm dev` therefore starts while a packaged app
+holds its lock, and the two never share a database, an outbox, or a log tree
+(D599, ADR 0094). An explicit `--user-data-dir` is honored instead, because the
+E2E harnesses point a build at a throwaway profile with it.
+
 1. Electron main starts
 2. Load English locale defaults
 3. Spawn Rust host-core
@@ -51,6 +58,19 @@ boot serves RPC, host-core transactionally marks prior pending approvals and
 queued/running `plan_approvals` execution states interrupted and aborts their
 running turns. This internal process-epoch fence is not serialized or sent over
 the protocol.
+
+The renderer bootstrap has no timeout of its own, so the renderer watches its own
+wait for the first state. At `STARTUP_SLOW_HINT_MS` (30s) the boot surface adds
+logs, diagnostics, and quit without calling the boot a failure; at
+`STARTUP_STALLED_MS` (180s) it becomes the recovery surface, which also offers a
+retry. Both bounds sit above the main↔host RPC ceiling
+(`DEFAULT_RPC_TIMEOUT_MS`, 130s), so a slow but successful boot is never reported
+as a failure. The watchdog never cancels the startup it watches: a boot that
+finishes replaces the surface with the shell, and the recovery surface replaces
+the splash. The renderer-drawn window controls stay above that surface, so a
+frameless Windows/Linux window can always be closed, and quitting from it goes
+through the renderer quit channel (`pi-desktop/app/quit`), which runs the same
+ordered shutdown as the Quit menu item.
 
 After host-core is up, Electron main reads `AppSettings.networkProxy` and
 applies it before spawning the agent sidecar (D340). Chromium sessions use
@@ -72,10 +92,23 @@ errors remain readable instead of becoming replacement characters.
 
 | Crash | Policy |
 |---|---|
-| Renderer crash | reload window, keep host/agent processes; same-host reload restores only live pending Plan/Goal approvals and their deadlines, not terminal cards |
+| Renderer crash | reload the current window after an unexpected renderer exit, unless the window is closing or the app is quitting; keep host/agent processes; same-host reload restores only live pending Plan/Goal approvals and their deadlines, not terminal cards |
 | Rust host crash | mark app degraded, interrupt pending/queued/running approval work, keep pending sessions in their contract mode (Plan or Goal) and already-approved sessions in Agent, attempt restart host, and fail active sessions closed |
 | Node agent crash | abort active turns and live approval waiters/queue entries, keep pending sessions in their contract mode, preserve already-approved Agent mode in Rust, restart sidecar, and never replay an execution |
 | Electron main crash | full app exit |
+
+Crashpad is started local-only (`uploadToServer: false`) before `ready`, and
+dumps are stored under `<data_dir>/crash-dumps` (D602) so a
+`PI_DESKTOP_DATA_DIR` profile does not share dumps with another installation.
+An unexpected renderer exit records its reason and exit code, then reloads the
+current main window when it is still live. A clean renderer exit and an accepted
+window close do not trigger recovery.
+The next launch that holds the single-instance lock writes one diagnostics
+line for dumps newer than `crash-dumps.json`. Crashpad records
+Chromium-process crashes (main, renderer, GPU, utility); a renderer crash the
+app already recovered still leaves a dump and is logged at warn. Host-core and
+sidecar crashes stay on the supervisor path in this section and the `host` /
+`agent` log channels.
 
 Broken stdout/stderr (`EPIPE`/`EIO`) is not a main-process crash. Main ignores
 those writes so a Linux AppImage or GUI launch without a live TTY keeps
@@ -123,9 +156,17 @@ start its local service. Windows 11 ARM64 systems run this x64 package through
 the operating system's x64 emulation; native Windows ARM64 artifacts are not
 currently published.
 
-Supervision parameters (implemented in Electron main):
+Supervision parameters (the transports, restart policy, and turn lifecycle are
+`packages/host-runtime`, ADR 0284; Electron main adapts them and owns the
+renderer-facing status):
 
 - Child exit rejects all in-flight RPCs for that child immediately (no 130s timeout wait).
+- Every RPC carries a finite transport deadline. Bash and desktop-dispatched
+  (`plugin_*` / `mcp_*`) tools add the waits host-core can spend before it
+  reports an outcome, and `agent.compact` adds the sidecar's own summary budget
+  — its stream watchdog per attempt plus its retry backoff (**D614**, issue
+  #795); everything else uses the 130s default. Never widen the default to cover
+  a slow method: that also hides a genuinely lost reply on every other call.
 - An NDJSON request line over 64 MiB is drained and answered with `LIMIT_EXCEEDED`; it does not end the stdin reader (ADR 0216). Electron rejects the same size before writing stdin (ADR 0217).
 - The Windows Alt+Space hook retains only a weak stdout sender. After stdin EOF, serve drops the last strong sender and host-core exits. A leaked sender cannot block shutdown for more than 5 s (ADR 0217).
 
@@ -246,8 +287,10 @@ sidecar/host shutdown sequence runs before the updater replaces the app.
 - renderer dependencies ship through Vite output rather than duplicate raw
   package trees; no interactive PTY native module is packaged
 - packaged builds use the Main-owned update controller. macOS, non-AppImage
-  Linux, and Windows portable runs are manual-delivery modes; Windows NSIS and
-  Linux AppImage use the in-app feeds published by D126 tag releases
+  Linux, and Windows ZIP runs are manual-delivery modes; legacy Windows
+  portable executables remain manual when `PORTABLE_EXECUTABLE_FILE` is set.
+  Windows NSIS and Linux AppImage use the in-app feeds published by D126 tag
+  releases
 
 ## 7. Remote target topology (post-MVP)
 
@@ -281,3 +324,17 @@ until a post-MVP implementation milestone explicitly amends this section.
 6. A queued/running execution that was already approved is interrupted without
    replay and its durable session remains Agent
 7. Bash timeout/abort shuts down the complete child process tree
+
+
+### Native tray session projection
+
+The tray service keeps Running, Unread, and Pinned groups current independently
+of renderer visibility or lifetime. Host remains authoritative for sessions and
+notifications; root agent events describe running state. Renderer mirrors only
+organization preferences through a main-window-only IPC. Read requests are
+coalesced; obsolete Host results cannot repopulate the menu, failures clear
+shortcuts, and quitting prevents further publication. A closed window retains
+only the last organization copy, which is replaced after renderer bootstrap.
+Menu command readiness is acknowledged after bootstrap's initial navigation,
+so a tray click cannot be overwritten by the startup draft or pending-plan
+selection. See [ADR tray-session-shortcuts](/adr/tray-session-shortcuts).

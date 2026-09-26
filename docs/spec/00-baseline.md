@@ -73,10 +73,12 @@
 > Settings Appearance card gains a searchable Font picker; the selection
 > persists as `AppSettings.fontFamily` and overrides `--font-sans`. Four
 > open-licensed (SIL OFL 1.1) families — Geist, Inter, Noto Sans SC, and
-> LXGW WenKai — ship locally with license texts, and installed system
+> LXGW WenKai — shipped locally with license texts, and installed system
 > families are enumerated by Electron main through the additive allowlisted
-> channel `pi-desktop/app/systemFonts`. No host protocol or storage schema
-> changes.
+> channel `pi-desktop/app/systemFonts`. D598 / ADR 0298 later removed the
+> bundled families: the app ships no font, the picker offers System default
+> plus installed system families, and every stack ends in the system-only CJK
+> fallback tier. No host protocol or storage schema changes.
 > `0.4.17` replaces the renderer-owned multi-folder tab projection with
 > ChatGPT-style host-owned logical project groups through ADR 0249. A group
 > owns its name, ordered local roots, shared instructions, shared memory, and
@@ -221,3 +223,6 @@ details:
 The frozen protocol remains v9 and storage schema remains v10. Future changes
 must preserve the automated M6 scenarios E2E-104 through E2E-117 or update the
 relevant decision record before changing the contract.
+> D623 / ADR 0064 amends the inline automatic compaction trigger to 90% of
+> the derived hard budget. The hard limit remains the final provider-request
+> guard; no background compaction or storage/protocol change is introduced.

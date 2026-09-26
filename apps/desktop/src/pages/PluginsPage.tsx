@@ -31,7 +31,7 @@ export function PluginsPage() {
   } = page;
 
   return (
-    <div className="thread-scroll">
+    <div className="route-scroll">
       <div className="page-frame plugins-page">
         <div className="page-header plugins-page-header">
           <div className="plugins-title-block">
@@ -86,6 +86,7 @@ export function PluginsPage() {
                       key={action.key}
                       type="button"
                       role="menuitem"
+                      data-action={action.key}
                       onClick={() => {
                         setHeaderMenu(false);
                         void action.run();

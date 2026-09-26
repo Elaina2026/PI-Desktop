@@ -74,6 +74,37 @@ entitled to it.
 - A custom model ID is always accepted, so a gateway without a `/models` route
   stays usable.
 
+### Settings: selected model order
+
+The AI service and OAuth vendor-account editors share the selected-model pane.
+Each selected row has a dedicated reorder handle: drag it before or after
+another visible row, or focus it and press the Up or Down arrow key to move it
+past the neighboring visible row. Reordering is disabled while the form is
+busy or fewer than two selected rows are visible. Dragging text still selects
+it for copying; checkbox, Advanced, and Remove actions keep their existing
+behavior and do not start a reorder.
+
+The complete `models` binding array owns the order. Filtering only hides rows:
+a move inserts the existing binding before or after the visible target in that
+complete array, preserving hidden bindings and their relative order. Model IDs,
+aliases, and advanced overrides travel with their bindings. A canceled drag or
+a drop outside a selected row does not change the draft.
+
+Saving persists the new order through the existing provider update flow, and
+reopening either editor displays it again. Canceling the editor discards its
+unsaved order. The provider's compatibility `defaultModelId` still mirrors the
+first binding on save, so moving a model to the head changes that provider
+default. When the edited service or account is the app's default provider,
+saving also synchronizes the app-level default model to that first binding,
+as the existing save flow does. The app default is unchanged when editing
+another provider, and an explicitly bound session keeps its stored model
+choice. Adding a provider is not a way to change either app default: the
+default model, and the default image model when the new service brings image
+models, move to it only while nothing resolves for the app — an empty
+selection, or one whose provider or model is gone. A default the user can
+still run stays where it is until they repoint it. No storage schema or IPC
+contract changes are required.
+
 ### Discovery precedence
 
 `providers.listModels` resolves in this order, and the order is load-bearing:
@@ -158,27 +189,33 @@ Each session stores:
 
 - `providerId`
 - `modelId`
-- `thinkingLevel` (`off|minimal|low|medium|high|xhigh|max`)
+- `thinkingLevel` (`off|minimal|low|medium|high|xhigh|max|omit`)
 
 Changing model or thinking level mid-session affects subsequent turns only.
 The stored thinking preference survives restart; the effective request level
 is clamped against the selected model binding's enabled levels at execution
-time. An empty binding or a binding containing only `off` resolves to `off`.
+time, except `omit`, which is preserved on a reasoning model and sends no
+thinking override. An empty binding or a binding containing only `off`
+resolves to `off`.
 
 For a newly created session, the renderer resolves the selected (or app-default)
 model's `ModelBinding`. A reasoning model starts at that binding's
-`defaultThinkingLevel`, clamped onto the enabled levels. When the default is
-unset it falls back to the highest enabled level seeded from published
-`supportedThinkingLevels`. A non-reasoning or unknown model starts at `off`
-until the user enables a non-`off` level. This is a creation default only and
-never rewrites an existing session's stored choice.
+`defaultThinkingLevel` (`omit` is preserved; other values are clamped onto the
+enabled levels). When the default is unset it falls back to the highest enabled
+level seeded from published `supportedThinkingLevels`. A non-reasoning or
+unknown model starts at `off` until the user enables a non-`off` level. This is
+a creation default only and never rewrites an existing session's stored choice.
 
 Unpinned sessions still advertise that inherited default model's reasoning
 capability on session list/get/create/fork/configure. Enrichment does not pin
-`providerId`/`modelId`. The Composer never treats a `supportsReasoning: false`
-or empty thinking-level snapshot as authoritative when the selected
-catalog/binding model exposes levels, so a mid-turn thinking or model pick
-cannot collapse the menu to Off-only.
+`providerId`/`modelId`; desktop session create does, by writing the then-current
+app default (or Composer draft override) into the durable ids. Later Settings
+default-model changes do not rewrite an already created session. Opening a
+legacy row whose ids are still empty snapshots the last used turn, else the
+current default, so it stops following Settings. The Composer never treats a
+`supportsReasoning: false` or empty thinking-level snapshot as authoritative
+when the selected catalog/binding model exposes levels, so a mid-turn thinking
+or model pick cannot collapse the menu to Off-only.
 
 ## 5. Capability warnings
 
@@ -198,10 +235,10 @@ current process's in-memory models.dev catalog and never writes user data.
 
 Repeated metadata lookups use a bounded process-local cache keyed by the
 configured vendor key, base URL, and case-insensitive, trimmed model ID. Both
-matches and misses are cached; the original provider preference, alias
-matching, and candidate ranking remain unchanged. Replacing the catalog after
-a successful bundled load or Settings refresh invalidates the cache. A failed
-refresh preserves the previous catalog and its results. Session capability
+matches and misses are cached; provider/API preference and candidate ranking
+still apply. Replacing the catalog after a successful bundled load or Settings
+refresh invalidates the cache. A failed refresh preserves the previous catalog
+and its results. Session capability
 enrichment resolves a matching catalog record once per session and then applies
 the current provider/model binding and session defaults, so user overrides are
 never retained as stale cached capabilities. Refreshing a large session list
@@ -280,27 +317,39 @@ field records a models.dev match; a provider cache stores only normalized
 selection fields and is re-decorated from the local raw catalog on the next
 read.
 
-### 9.1 Effective context window
+### 9.1 Effective model limits
 
 The runtime, the context inspector and the settings surface resolve one effective
-model window. Every binding records where its `contextWindow` came from
-(`contextWindowSource`):
+model window and output cap. Every binding records where its `contextWindow` came
+from (`contextWindowSource`), and the same marker governs `maxTokens`:
 
 - `catalog` — the number is a models.dev snapshot, so a later correction to the
-  published `limit.context` replaces it. A refreshed record such as
-  `gpt-5.6-luna` (`1,050,000` tokens) stops appearing as a 128k model, and a limit
-  that models.dev corrects reaches the binding without deleting and re-adding the
-  model.
+  published `limit.context` or `limit.output` replaces it. A refreshed record
+  such as `gpt-5.6-luna` (`1,050,000` tokens) stops appearing as a 128k model, a
+  row added while nothing published its id stops reporting the generic 8.2k
+  output once the record resolves, and a limit that models.dev corrects reaches
+  the binding without deleting and re-adding the model. Only a resolved
+  models.dev record counts as published: when the lookup misses and falls back to
+  the generic shape (for example a custom gateway URL serving an id several
+  publishers list), its `128,000` and `8,192` are not a correction, and the
+  stored catalog snapshot stays in force.
 - `user` — the number was entered through the per-model Advanced control (or the
   preset ladder in it) and is never replaced by the catalog, including the
-  `128,000` value that is otherwise the generic seed.
+  `128,000` and `8,192` values that are otherwise the generic seed.
 
 Bindings written before the marker name no source. They keep the historical rule,
 deterministically: a published `limit.context` replaces exactly the generic
-`128,000` seed, and every other stored value stays the explicit value. Unknown
-models still use the conservative 128k generic window and are never promoted from
+`128,000` seed and a published `limit.output` replaces exactly the generic
+`8,192`, and every other stored value stays the explicit value. Unknown models
+still use the conservative 128k / 8.2k generic limits and are never promoted from
 an ID pattern alone. The marker is optional in the persisted record, so a config
 written by an older version stays readable and a downgrade ignores it.
+
+The configured user value remains persisted and visible in Advanced settings, but
+provider safety does not trust an enlarged override beyond a known published
+window. Outbound output caps, automatic compaction, and overflow classification
+use the smaller of the configured and published windows; a smaller user value
+continues to narrow the runtime budget.
 
 ### 9.2 Conversation Composer scope
 
@@ -336,13 +385,23 @@ use the configured model alias or published model name.
 App-level default:
 - first successfully tested provider + its default/recommended model
 - the Settings default-model picker lists every configured model under its provider; selecting an entry persists both the owning provider and that exact model ID
+- saving that provider preserves the selected app-default model while it remains configured; removing it falls back to the first remaining binding
 - the picker supports local search across provider name and model ID; its result list scrolls within the floating surface and shows an explicit empty state when no model matches
 - the picker uses concise settings-specific search copy; each result gives visual priority to the model ID and keeps the provider as secondary metadata
 - results are grouped by provider so a provider name is shown once per group rather than repeated on every model row
+- a provider is named the same way here as in the Composer menu: an OAuth row
+  uses its non-secret account label when present, so two accounts of one vendor
+  stay distinguishable in the group heading, in the summary line that reports
+  the current default, and in each option's accessible name. Search matches the
+  account label and the vendor name, so either spelling reaches the row
+- the Settings prompt-enhancement model picker reuses this menu and resolves its
+  provider names the same way
 - if none configured, onboarding checklist requires provider setup before first agent run
 
 Session-level:
-- inherits app default at creation
+- inherits app default at creation and stores that `providerId`/`modelId` pair
+- later Settings default-model changes apply only to new sessions and the
+  unpersisted home draft, not to already created sessions
 - initializes thinking to the highest level enabled by the inherited model's
   binding; published levels seed a new binding, while an empty or `off`-only
   binding starts at `off`
@@ -361,10 +420,9 @@ Warnings are non-blocking unless execution is impossible.
 
 ### 11.1 Reasoning capability resolution
 
-1. Resolve the models.dev metadata for the matching provider/API URL and exact
-   `modelId`. Matching also accepts a catalog vendor prefix when the configured
-   provider uses an unprefixed ID (for example `deepseek-v4` matches
-   `deepseek/deepseek-v4` only under the matching provider identity).
+1. Resolve models.dev metadata under the matching provider/API URL using the
+   metadata-only ID lookup described in §11.3. This lookup does not change
+   configured model binding identity.
 2. The models.dev record is authoritative for published `reasoning` and
    `reasoning_options`; cached/provider capability claims cannot replace it.
 3. The provider's exact `ModelBinding.thinkingLevels` is authoritative for the
@@ -416,6 +474,72 @@ manual token entry. The enrichment lookup is:
 3. The lookup does not send API keys to models.dev. Runtime model resolution
    uses the same models.dev record and the selected pi-ai transport adapter.
 
+Catalog enrichment uses `catalogModelIdsMatch`, not the shared
+`modelIdsMatch` used to resolve an exact configured binding. Binding identity
+accepts case-insensitive exact IDs, full slash-path suffixes, known vendor
+`-`/`.` prefixes and a one-sided `@region` alias; it does not collapse two
+different regions, arbitrary routing prefixes or endpoint/thinking suffixes.
+Metadata lookup additionally accepts a complete bare leaf ID through a generic
+route such as `proxy/` or `custom/`, subject to known-vendor conflicts; two
+different full route paths never match solely because they share a leaf. It
+narrowly strips trailing `-` or `:` `thinking`, `think`, `agent` or `latest`
+tokens (including before `@region`). It does not strip arbitrary
+dash-separated proxy prefixes or effort tokens such as `low`, `high` or `max`.
+
+When nothing matches outright, the lookup falls back to the whole published ID
+the served name reduces to: the ID behind one route prefix (`test/mimo-v2.5`) and
+that ID without one deployment marker (`mimo-v2.5-pro-test`, `gemini-2.5-pro-1m`).
+Only a marker that names a variant of a published model is read that way —
+`-test`, `-preview`, `-beta`, `-1m`, `-128k`; `-asr`, `-tts` and `-pro` name
+models of their own, so an unpublished ID carrying one of those stays unknown
+instead of inheriting a sibling's limits. This fallback reads a whole published
+ID and never follows a chain of aliases.
+The catalog index uses bounded candidate keys for these aliases, then checks
+the matcher; a known catalog provider selected by vendor key or API URL limits
+the lookup to that provider, never borrowing another provider's capabilities.
+These aliases attach published metadata only: they do not alter the configured
+wire model ID or prove that a suffix enables reasoning. An unmatched free-form
+ID remains an unknown generic model with no inferred capabilities; only a
+published record or explicit binding settings can supply them.
+
+#### 11.3.1 Cross-provider exact-id fallback
+
+models.dev indexes a gateway's copy of a model under the vendor that owns the
+weights, so an endpoint serving `Vendor/Model` ids can have no record of its own
+while several other publishers state the identical id. When the row resolves to
+a catalog provider whose own record is missing, `findModel` consults the other
+publishers of the **exact** id instead of leaving the model on the generic
+128k text-only shape (issue #938), and reads a whole published id the served name
+reduces to when no publisher states the id itself.
+
+The borrow is bounded:
+
+- It runs only for a row with a known catalog provider identity, and only after
+  that provider's own lookup missed. A provider record, or a supported alias of
+  it, stays authoritative.
+- A provider sharing the row's own endpoint is an alias for the row, so its
+  silence is an answer about this deployment and nothing is borrowed past it.
+- Only a case-insensitive identical id transfers, or a whole published id the
+  served name reduces to (`test/mimo-v2.5-pro-test` → `mimo-v2.5-pro`). A record
+  the index reaches through an alias is a different id and keeps its own limits.
+- The publishers this app ships a provider for answer before arbitrary resellers
+  do, in the same order the unanchored borrow uses: an id a shipped publisher
+  states describes the model, while a reseller's copy describes its own
+  deployment of it. Within that tier a record under exactly this id outranks one
+  reached through another spelling of it, so a copy carrying only the text half
+  cannot narrow what the model's own record states about vision.
+- Tool support follows the majority of the publishers that state it, because a
+  wrong `true` puts tool declarations on the wire that the endpoint may reject,
+  while one dissenting reseller must not void a record a hundred of them agree
+  on; an even split claims nothing. Reasoning, image/PDF input and attachment are
+  the intersection, so a borrow may only under-claim; a user who knows the
+  endpoint does more still enables it in Advanced. Limits are the medians the
+  publishers state, never one host's cap.
+- An id no publisher states stays an unknown generic model.
+
+This changes metadata only. The configured wire id, provider identity, and the
+binding precedence in §11.3 are unchanged.
+
 ## 12. Refresh strategy
 
 - manual refresh button in settings/model picker
@@ -457,6 +581,11 @@ same model to the check mark, the toggle and the duplicate guard.
       output-token entry; overrides stay behind a per-model Advanced disclosure
 - [ ] the API-key path and the OAuth vendor-account path use the same live model
       list and the same binding shape
+- [ ] selected models can be reordered by drag handle or Up/Down arrow keys in
+      both editors; saving and reopening preserves the order, aliases, and
+      overrides, and a filtered move preserves hidden bindings and their order
+- [ ] canceling a drag or the editor preserves the previous applicable order;
+      busy forms disable reordering, and text-copy and row actions still work
 - [ ] an unsaved provider can be probed from the form before it is persisted,
       and a saved one reuses its stored secret without a retyped key
 - [ ] custom model id path works without catalog hit
@@ -466,6 +595,7 @@ same model to the check mark, the toggle and the duplicate guard.
       refresh keeps the cached picker populated
 - [ ] capability badges visible
 - [ ] session model change applies to next turn only
+- [ ] a newly created session stores the then-current default provider/model, and later default-model changes do not rewrite that session
 - [ ] a new session defaults a reasoning-capable inherited model to that
       binding's stored default thinking level (clamped onto the enabled set;
       strongest-enabled only when unset) and otherwise defaults to `off`
@@ -491,3 +621,10 @@ same model to the check mark, the toggle and the duplicate guard.
 - [ ] compact limit text never reads above the published value, keeps the
       neighbouring 1M-line windows apart (`1M` / `1.05M` / `1.1M`), and never
       renders a `K` mantissa at or above 1000
+
+## Image model binding
+
+The default conversation model has a separate **Image generation model** row below
+it. Model Advanced can select that unique binding; provider form Save commits it,
+Cancel discards it, and replacing it leaves the conversation default unchanged.
+See [image generation and editing](21-image-generation.md) for the tool and batch contract.

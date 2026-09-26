@@ -2,6 +2,55 @@ import type { ChangelogEntry } from "./changelog.js";
 
 export const trEntries: ChangelogEntry[] = [
   {
+    "version": "0.15.6",
+    "date": "2026-09-23",
+    "highlights": [
+      "Kayıtlı bağlantı ayarlarını değiştirmeden mevcut DeepSeek, xAI ve OpenAI hizmetlerinde yerel aramayı etkinleştirin.",
+      "OpenAI ve ChatGPT/Codex model kataloglarında GPT-6 Astra, Sol ve Luna desteği eklenir.",
+    ],
+  },
+
+  {
+    "version": "0.15.5",
+    "date": "2026-09-23",
+    "highlights": [
+      "OpenAI ve ChatGPT/Codex model kataloglarında GPT-6 Astra, Sol ve Luna desteği eklenir.",
+    ],
+  },
+
+  {
+    "version": "0.15.2",
+    "date": "2026-09-21",
+    "highlights": [
+      "Sohbette görsel oluşturun ve düzenleyin; tek bir görsel modeli ve yerleşik imagegen becerisiyle toplu üretim yapın.",
+      "Araç etkinlikleri konuşma genişliğini izler ve uzun etkinlik etiketleri düzgünce sığdırılır.",
+      "Oturum değiştirdikten sonra yapıştırma tamamlansa bile yapıştırılan dosya ekleri korunur.",
+      "Sağlayıcıları düzenlerken seçili varsayılan model korunur; model kaldırılırsa güvenli bir yedek kullanılır.",
+      "İç içe düşünme ve araç etkinliği bölümlerini okumak, gezinmek ve kurtarmak kolaylaşır.",
+      "Composer düzenleri, akıl yürütme kontrolleri ve çalışma alanı tema tutarlılığı iyileştirilir.",
+      "Ayarlara, ağ ve geçici sağlayıcı hatalarını başarılı olana kadar yeniden deneyen isteğe bağlı bir anahtar ekler.",
+    ],
+  },
+
+  {
+    "version": "0.15.1",
+    "date": "2026-09-19",
+    "highlights": [
+      "Ayarlar'dan SSH ile uzak ana bilgisayarları eşleyin ve yönetin; parola girişi, kurulum ve açılışta yeniden bağlanma dahildir.",
+      "Yapay zeka ayar kartından istem geliştirmeyi (şablon, model ve akıl yürütme) yapılandırın.",
+      "Seçili modelleri sürükleyerek yeniden sıralayın; sağlayıcıya düşünme düzeyi göndermeyen bir atlama düzeyi ekleyin.",
+      "Kenar çubuğunu boyutlandırın veya daraltın; çift tıklayınca kenar çubuğu veya panel varsayılan genişliğine döner.",
+      "Projeleri gruplu bir arşiv ve denetçiyle yönetin; her türü kendi çalışma tezgahından içe aktarın.",
+      "Diğer ajan araçlarındaki skill ve MCP sunucularını tarayıp toplu içe aktarın.",
+      "macOS menü çubuğu eklentisi yerel bir durum öğesinde kalır; tepside sınırlı oturum kısayolları vardır.",
+      "Resmi macOS derlemeleri imzalanır, noter onaylanır ve uygulama içi güncellemeyi destekler.",
+      "İmzalı macOS DMG iki simgeyle kurulur; imzasız açılış notu yalnızca ZIP'te kalır.",
+      "Review yalnızca siz isteyince açılır; oturum açınca en son tura iner.",
+      "Takılı bir gönderim kuyruğunu kurtarır ve sahte steering kökenlerini yok sayar.",
+    ],
+  },
+
+  {
     "version": "0.15.0",
     "date": "2026-09-17",
     "highlights": [

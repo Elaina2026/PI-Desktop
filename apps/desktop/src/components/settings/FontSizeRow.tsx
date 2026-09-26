@@ -7,7 +7,8 @@ import {
   FONT_SCALE_STEP,
   resolveFontScale,
 } from "@pi-desktop/shared";
-import { cx } from "../ui";
+import { SegmentedControl } from "../ui";
+import { SettingsRow } from "../../features/settings/primitives";
 
 const PRESETS = [
   { scale: FONT_SCALE_PRESETS.small, key: "settings.fontSizeSmall" },
@@ -38,55 +39,37 @@ export function FontSizeRow({
   };
 
   return (
-    <div className="settings-row">
-      <div className="settings-row-copy">
-        <div className="settings-row-title">{t("settings.fontSize")}</div>
-        <div className="settings-row-desc">{t("settings.fontSizeDesc")}</div>
-      </div>
-      <div className="settings-row-control">
-        <div className="settings-font-size">
-          <div
-            className="settings-segment"
-            role="radiogroup"
-            aria-label={t("settings.fontSize")}
-          >
-            {PRESETS.map((preset) => (
-              <button
-                key={preset.scale}
-                type="button"
-                role="radio"
-                aria-checked={current === preset.scale}
-                className={cx(
-                  "settings-segment-item",
-                  current === preset.scale && "active",
-                )}
-                onClick={() => commit(preset.scale)}
-              >
-                {t(preset.key)}
-              </button>
-            ))}
-          </div>
-          <div className="settings-font-size-slider">
-            <input
-              type="range"
-              min={MIN_FONT_SCALE}
-              max={MAX_FONT_SCALE}
-              step={FONT_SCALE_STEP}
-              value={current}
-              aria-label={t("settings.fontSizeScale")}
-              aria-valuetext={t("settings.fontSizePercent", {
-                value: Math.round(current * 100),
-              })}
-              onChange={(event) => commit(Number(event.target.value))}
-            />
-            <span className="settings-font-size-percent">
-              {t("settings.fontSizePercent", {
-                value: Math.round(current * 100),
-              })}
-            </span>
-          </div>
+    <SettingsRow
+      title={t("settings.fontSize")}
+      description={t("settings.fontSizeDesc")}
+    >
+      <div className="settings-font-size">
+        <SegmentedControl
+          value={String(current)}
+          onChange={(value) => commit(Number(value))}
+          options={PRESETS.map((preset) => ({ value: String(preset.scale), label: t(preset.key) }))}
+          label={t("settings.fontSize")}
+        />
+        <div className="settings-font-size-slider">
+          <input
+            type="range"
+            min={MIN_FONT_SCALE}
+            max={MAX_FONT_SCALE}
+            step={FONT_SCALE_STEP}
+            value={current}
+            aria-label={t("settings.fontSizeScale")}
+            aria-valuetext={t("settings.fontSizePercent", {
+              value: Math.round(current * 100),
+            })}
+            onChange={(event) => commit(Number(event.target.value))}
+          />
+          <span className="settings-font-size-percent">
+            {t("settings.fontSizePercent", {
+              value: Math.round(current * 100),
+            })}
+          </span>
         </div>
       </div>
-    </div>
+    </SettingsRow>
   );
 }

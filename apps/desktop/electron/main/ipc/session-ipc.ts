@@ -12,7 +12,7 @@ import {
   type ActivationScope,
   type ModelConfigImportDraft,
   type Mode,
-  type ThinkingLevel,
+  type SessionThinkingLevel,
 } from "@pi-desktop/shared";
 import {
   convertSession,
@@ -35,7 +35,7 @@ type RuntimeSession = {
   projectPath?: string | null;
   providerId?: string;
   modelId?: string;
-  thinkingLevel?: ThinkingLevel;
+  thinkingLevel?: SessionThinkingLevel;
   [key: string]: unknown;
 };
 
@@ -210,7 +210,7 @@ export function registerSessionIpc({
           errorCode: ErrorCodes.INVALID_ARGUMENT,
         });
       }
-      if (activeTurns.has(sessionId)) {
+      if (activeTurns.has(sessionId) && !String(input.throughMessageId ?? "").trim()) {
         throw Object.assign(new Error("Cannot fork a running session"), {
           errorCode: ErrorCodes.AGENT_BUSY,
         });
@@ -532,7 +532,7 @@ export function registerSessionIpc({
         mode: Mode;
         providerId?: string;
         modelId?: string;
-        thinkingLevel?: ThinkingLevel;
+        thinkingLevel?: SessionThinkingLevel;
         permissionMode?: "inherit" | "ask" | "accept-edits" | "auto" | "bypass";
       },
     ) => {
@@ -579,14 +579,16 @@ export function registerSessionIpc({
   );
 
   handle(IPC.invoke.sessionImportScan, async () => {
-    const sessions = await scanAllSources();
+    const { sessions, truncated } = await scanAllSources();
     scannedImportSessions = new Map(
       sessions.map((session) => [`${session.source}:${session.externalId}`, session]),
     );
     return {
       sessions: sessions.map(({ filePath: _filePath, ...candidate }) => candidate),
+      ...(Object.keys(truncated).length > 0 ? { truncated } : {}),
     };
   });
+
   handle(
     IPC.invoke.sessionImportRun,
     async (selections: unknown) => {

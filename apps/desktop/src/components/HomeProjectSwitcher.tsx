@@ -2,10 +2,12 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { allowInsecureUserEndpoints } from "@pi-desktop/shared";
 import { parseGitCloneUrl } from "../lib/git-clone-url";
 import {
   filterSwitcherProjects,
@@ -42,6 +44,7 @@ export function HomeProjectSwitcher({
   const openProject = useAppStore((state) => state.openProject);
   const cloneProject = useAppStore((state) => state.cloneProject);
   const showToast = useAppStore((state) => state.showToast);
+  const settings = useAppStore((state) => state.settings);
 
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<"list" | "clone">("list");
@@ -49,6 +52,7 @@ export function HomeProjectSwitcher({
   const [cloneUrl, setCloneUrl] = useState("");
   const [highlight, setHighlight] = useState(0);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
 
   const projects = useMemo(
     () =>
@@ -66,7 +70,9 @@ export function HomeProjectSwitcher({
     [projects, query],
   );
   const activeKey = normalizeProjectPath(activeProjectPath ?? path);
-  const cloneTarget = parseGitCloneUrl(cloneUrl);
+  const cloneTarget = parseGitCloneUrl(cloneUrl, {
+    allowInsecureHttp: allowInsecureUserEndpoints(settings),
+  });
 
   const close = useCallback(() => {
     setOpen(false);
@@ -86,16 +92,18 @@ export function HomeProjectSwitcher({
 
   const selectProject = useCallback(
     async (nextPath: string) => {
-      if (busy) return;
+      if (busy || busyRef.current) return;
       const nextKey = normalizeProjectPath(nextPath);
       close();
       if (!nextKey || nextKey === activeKey) return;
+      busyRef.current = true;
       setBusy(true);
       try {
         await newSession({ projectPath: nextPath });
       } catch (error) {
         reportError(error);
       } finally {
+        busyRef.current = false;
         setBusy(false);
       }
     },
@@ -103,7 +111,8 @@ export function HomeProjectSwitcher({
   );
 
   const startClone = useCallback(async () => {
-    if (busy || !cloneTarget) return;
+    if (busy || busyRef.current || !cloneTarget) return;
+    busyRef.current = true;
     setBusy(true);
     try {
       const previous = normalizeProjectPath(
@@ -119,13 +128,15 @@ export function HomeProjectSwitcher({
     } catch (error) {
       reportError(error);
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   }, [busy, cloneProject, cloneTarget, close, newSession, reportError]);
 
   const pickFolder = useCallback(async () => {
-    if (busy) return;
+    if (busy || busyRef.current) return;
     close();
+    busyRef.current = true;
     setBusy(true);
     try {
       const previous = normalizeProjectPath(
@@ -140,6 +151,7 @@ export function HomeProjectSwitcher({
     } catch (error) {
       reportError(error);
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   }, [busy, close, newSession, openProject, reportError]);

@@ -16,6 +16,13 @@ which PI-Desktop adopts alongside the `pi-ai` and `pi-agent-core` kernel
 contributes. D388 folded the earlier standalone "trusted extensions"
 registry into this contribution; the engine below is unchanged.
 
+This contract describes extensions attached to Desktop Agent sessions. The
+Desktop adapter implements the explicit subset in §5–6; new upstream events do
+not become actionable here automatically. Native Pi continuation runs the
+coding-agent SDK's own extension lifecycle and can use its 0.87.1 boundary
+hooks, subject to the separate native-session lease and trust rules in
+[ADR 0254](../../adr/0254-native-pi-session-continuation.md).
+
 Provider declarations are a separate manifest surface rather than part of this
 contract: `contributes.providers` materializes Host-owned provider rows
 ([02-plugin-manifest-schema.md](02-plugin-manifest-schema.md) §5.4, ADR 0259),
@@ -78,11 +85,19 @@ manifest that lists entries without the permission is invalid
 Plugins → "Import pi extension" opens a native picker (main owns the path,
 D344) for an explicit local file or directory. Main copies the selected
 source under `<dataDir>/plugins/imported/<slug>/src/`, writes a generated
-no-op `main.js` and a manifest with id `imported.<slug>` (a unique suffix is
+CommonJS no-op `main.cjs` and a manifest with id `imported.<slug>` (a unique suffix is
 added for repeated imports), and registers the directory through the existing
 local-plugin flow. The confirmation before the picker remains the trust
 decision; the generated manifest declares the permissions needed by its actual
-contributions.
+contributions. The manifest's `main` points to `main.cjs` regardless of the
+source package's `type`; both copied package declarations retain their module
+semantics. Loading an imported plugin whose `main` is the generated CommonJS
+`main.js` wrapper rewrites that file in place to `main.cjs` and updates the
+manifest; copied package files, grants, and activation scope stay as they are.
+The rewrite matches only the generated no-op (including the original comment
+text). A customized `main.js` is left untouched. Re-importing without removal
+creates a separate plugin with a unique suffix; it does not copy grants or
+activation scope from the older copy.
 
 For extension files and packages without `pi.skills`, entry discovery keeps
 the existing `pi-coding-agent` rules: `package.json` `pi.extensions`, otherwise
@@ -102,6 +117,51 @@ registry-only because npm may inspect all four; the git resolver is disabled.
 No lifecycle script runs. Failed installs remove partial dependencies/cache and
 are reported to the renderer without blocking the import. The confirm discloses
 the npm step alongside the skills disclosure.
+
+If npm or its Node.js runtime is unavailable, the installer returns a structured
+unavailable error. Only this category opens a native Main-owned message box with
+"Choose npm" and "Cancel"; ordinary registry, network, dependency-policy, or
+installation errors never open an executable-path prompt. The message explains
+that npm must come from a trusted Node.js installation, that the choice is
+remembered for future imports, and that Node.js must be installed first if absent.
+Choosing npm opens a native executable picker with `showHiddenFiles`, allowing
+navigation into installations such as `~/.nvm`. On macOS, `noResolveAliases`
+preserves the selected `bin/npm` symlink rather than returning its internal CLI
+target, so the sibling `node` remains discoverable. Selected paths never come
+from renderer text input.
+
+Main validates the selected executable and its Node.js runtime with bounded
+version checks before saving or installing. The checks share the installation
+budget and stop at a bounded ceiling, because a slow machine must not report a
+working npm as unavailable and send the user back to the picker. Invalid
+selections (including npm without usable Node.js) show a localized native
+warning and let the user choose again or cancel; the guidance is to choose npm
+in the same directory as `node`.
+Only a validated selection is persisted, atomically, in Main-owned
+`<dataDir>/npm-path.json`, not renderer settings or Host SQLite. Future imports
+reuse it after validation; a stale saved path returns to the recovery prompt.
+If persistence fails, a native warning explains that the choice could not be
+saved but the current import can still use the validated executable.
+
+The selected executable's directory is added only to the install child's `PATH`
+so npm can find `node`; no shell startup probing or global environment mutation
+is permitted. Version checks and installation retain a minimal environment with
+no inherited credentials. The registry-only proxy, isolated npm configuration,
+bounded two-step install, disabled git resolution, and disabled lifecycle scripts
+remain unchanged. Configured Windows `.cmd`/`.bat` launchers use the adjacent
+`node.exe` and `node_modules/npm/bin/npm-cli.js` directly, without shell
+interpolation; a nonstandard launcher missing this layout is rejected with
+recovery guidance. Recovery retries dependency installation in the already-generated
+plugin directory: it never recopies the source or allocates another plugin id.
+After recovery succeeds, is cancelled (including closing the picker), or ends in
+a dependency error, the generated plugin is loaded and registered exactly once;
+dependency errors remain visible without blocking registration.
+
+All native recovery labels use the active locale's flat `plugins.npmMissingTitle`,
+`npmMissingBody`, `npmChoose`, `npmPickerTitle`, `npmInvalidTitle`, `npmInvalidBody`,
+`npmSaveFailedTitle`, and `npmSaveFailedBody` keys, plus existing `common.cancel`.
+Bodies are standalone localized text without interpolation placeholders; Main
+appends any dynamic diagnostic on a new line.
 
 | Source | Becomes |
 |---|---|
@@ -139,15 +199,14 @@ and removes a partial copy on failure. The generated destination is created
 atomically and must not be inside the selected source.
 
 This is an explicit local import, not a pi CLI package manager. It never
-automatically scans or imports `~/.pi`, does not read the CLI's installed
-package registry, and does not run npm lifecycle scripts. When dependencies
+automatically imports `~/.pi`, does not read the CLI's installed package
+registry, and does not run npm lifecycle scripts. The Skills page separately
+discovers global npm skill candidates as described below. When dependencies
 are declared, the bounded installer accepts only registry version specs and
 registry-resolved npm lockfiles, rejects unsafe package locations and nested
 dependency specs, disables git resolution, and isolates npm's config/cache from
 the user's credentials and proxy settings. Importing a package does not promise
 that every third-party extension dependency can execute.
-
-## 4. Loading and runtime
 
 ## 4. Loading and runtime
 
@@ -159,12 +218,22 @@ never in Electron main, the renderer, or a plugin host process.
 ### 4.2 Loader
 
 - The sidecar pins `@earendil-works/pi-coding-agent` at exactly the version
-  pinned for `pi-ai` and `pi-agent-core`, as a types-only dependency. The
-  three versions must match; CI fails when they drift.
+  pinned for `pi-ai` and `pi-agent-core`. The three versions must match; CI
+  fails when they drift. Native Pi sessions run its extension loader
+  in process, so the pin is a bundled runtime dependency and not a
+  types-only contract.
 - The loader mirrors the `pi-coding-agent` discovery rules and uses
   `jiti/static` with `virtualModules`, so the babel transform is bundled
   and no path resolution happens at runtime. The bundling step is verified
   by a contract test that runs the bundle outside the repository (E2E-245).
+- The bundle is built with `--define:PI_BUNDLED_NODE=true`. The
+  `pi-coding-agent` extension loader embeds the kernel modules and
+  `typebox` for a compiled binary, for a bundled Node distribution, and
+  for its own TypeScript-source runtime; every other Node build resolves
+  them from the importing file, which a packaged install
+  (`resources/agent-runtime/`) cannot satisfy. An entry point that
+  bundles pi's session or extension loader in process needs the same
+  define.
 - Import aliases: `pi-ai`, `pi-agent-core`, and `typebox` resolve to the
   sidecar's copies; `@earendil-works/pi-coding-agent` resolves to a runtime
   shim that exports `defineTool` and the tool-result type guards. `@earendil-works/pi-tui`
@@ -240,9 +309,9 @@ are honored where the event type defines a result.
 | `session_info_changed` | Session rename through `setSessionName` | No |
 | `project_trust` | v1 note: not emitted; enablement per project is the trust decision | No |
 | `resources_discover` | v1 note: not emitted; skills and prompt discovery stay in Electron main | n/a |
-| `before_agent_start` | Before the first provider request of a turn | Yes, system prompt and message edits |
+| `before_agent_start` | Before the first provider request of a turn | Yes, system prompt replacement only |
 | `context` | `prepareNextTurn` | Yes, replacement message list |
-| `before_provider_request`, `before_provider_headers`, `after_provider_response` | Provider call wrapper | Yes for request and headers |
+| `before_provider_request`, `before_provider_headers`, `after_provider_response` | Provider call wrapper | Request return value; headers mutate the payload in place |
 | `agent_start`, `agent_end`, `agent_settled` | Agent loop boundaries | No |
 | `turn_start`, `turn_end` | Turn boundaries | No |
 | `message_start`, `message_update`, `message_end` | Agent message events | v1 note: no, pi-agent-core offers no post-hoc replacement |
@@ -255,9 +324,54 @@ are honored where the event type defines a result.
 | `input` | v1 note: not emitted; Host queue admission is not wired yet | n/a |
 | `user_bash`, `session_before_switch`, `session_before_tree`, `session_tree`, `ui_prompt_start`, `ui_prompt_end` | Not emitted in v1 | n/a |
 
-A handler that throws is logged as a diagnostic and treated as returning
-`undefined`. A handler that exceeds 30 s for a result-bearing event is
-abandoned with a diagnostic and the turn proceeds with the unmodified value.
+Desktop event capabilities are maintained in
+`packages/agent-runtime/src/extensions/event-capabilities.ts`: result,
+mutation, notification, or deferred. Registering a deferred event remains
+accepted but emits an `unsupported_api` diagnostic in the existing plugin
+diagnostics; it does not prevent supported handlers from loading.
+
+Every event handler, including startup, shutdown, and notifications, has a
+30-second **per-handler** wait budget. Module loading and factory initialization
+also have separate 30-second wait budgets, reported as load/factory errors.
+A handler that throws or times out produces a diagnostic and counts as
+`undefined`; subsequent handlers still run in registration order. Existing
+result folding and fail-open semantics are unchanged. This is not a mandatory
+security-check mechanism. Multiple stalled handlers can each consume their budget.
+
+Abort retires pending event dispatches. Disposal first rejects new dispatches
+and cancels existing waits, then runs shutdown once even under concurrent
+disposal. Old dispatches return no result and never invoke their remaining
+handlers; late settlements do not add diagnostics or overwrite results. A
+factory finishing after disposal cannot publish tools or commands. Runtime
+shutdown cancels agent work before waiting for extension shutdown. Stopping
+during preflight hooks prevents the provider request and retains the user
+message; a later prompt can run normally.
+
+Each invocation now owns an abort signal exposed as `ctx.signal`. Finishing,
+timing out, stopping or disposing retires that invocation. SDK calls from its
+late callbacks are rejected, including commands waiting for idle, session creation,
+fork or queue admission. An already admitted Host transaction is not rolled back;
+late completion cannot start a subsequent queue-priority update or mutate runtime
+model state. Commands and tool executions have no event-style 30-second limit:
+they may run until completion, their supplied signal aborts, Stop, or disposal.
+Tool updates/results after retirement are discarded; accepted updates and results
+are detached before publication so later extension mutations cannot rewrite them.
+SDK `exec` owns its process group/tree and terminates it on scope retirement or
+its explicit timeout;
+disposal waits for tracked process cleanup, with cleanup failures diagnosed.
+Processes deliberately escaping the group and direct Node API spawns are outside
+this ownership contract.
+
+Result-bearing hook inputs and outputs are detached copies. Header mutations
+are committed only after a handler succeeds within its budget. Late in-place
+mutations cannot alter the caller's payload or another handler's input.
+
+These are cooperative lifecycle boundaries, not forced execution isolation:
+trusted code may still block the JS thread or use direct Node APIs for external
+side effects. Native Pi sessions use the upstream SDK lifecycle and are outside
+this Desktop change. See ADR `trusted-extension-operation-ownership`.
+The 30-second event budget also applies when a handler waits for a UI prompt;
+the UI broker's own prompt timeout does not extend that budget.
 
 ## 7. Tools
 
@@ -307,6 +421,11 @@ Rules:
 - One pending interactive prompt per session. A second call queues behind
   the first.
 - Aborting the turn cancels pending prompts with the abort values above.
+- Every new sidecar UI request has an invocation-owned request ID. Cancellation
+  targets that ID plus the session/extension identity, drops queued requests,
+  and sends retirement for the exact visible prompt to the renderer. Stale
+  cancellation cannot close a later request. Legacy requests without IDs retain
+  session-wide cancellation. Settled queue tails are released.
 - Under remote control (Post-MVP) the prompt fails immediately with
   `UNSUPPORTED` until the remote protocol routes it; that routing is v3.
 - Prompts show the extension label and source path so the user knows who is

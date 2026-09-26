@@ -2,6 +2,55 @@ import type { ChangelogEntry } from "./changelog.js";
 
 export const frEntries: ChangelogEntry[] = [
   {
+    "version": "0.15.6",
+    "date": "2026-09-23",
+    "highlights": [
+      "Activez la recherche native dans vos services DeepSeek, xAI et OpenAI existants sans modifier leurs paramètres de connexion.",
+      "Prend en charge GPT-6 Astra, Sol et Luna dans les catalogues de modèles OpenAI et ChatGPT/Codex.",
+    ],
+  },
+
+  {
+    "version": "0.15.5",
+    "date": "2026-09-23",
+    "highlights": [
+      "Prend en charge GPT-6 Astra, Sol et Luna dans les catalogues de modèles OpenAI et ChatGPT/Codex.",
+    ],
+  },
+
+  {
+    "version": "0.15.2",
+    "date": "2026-09-21",
+    "highlights": [
+      "Générez et modifiez des images dans le chat, choisissez un modèle et créez des lots avec la compétence intégrée imagegen.",
+      "L'activité des outils suit la largeur de la conversation et contient proprement les libellés longs.",
+      "Les pièces jointes collées sont conservées même si le collage se termine après un changement de session.",
+      "Le modèle par défaut sélectionné est conservé lors de la modification des fournisseurs, avec un repli sûr s'il est supprimé.",
+      "Les sections imbriquées de réflexion et d'activité des outils sont plus faciles à lire, parcourir et restaurer.",
+      "Améliore les mises en page du Composer, les contrôles de raisonnement et la cohérence des thèmes de l'espace de travail.",
+      "Ajoute un interrupteur optionnel dans Réglages pour réessayer les erreurs réseau et temporaires jusqu’à réussite.",
+    ],
+  },
+
+  {
+    "version": "0.15.1",
+    "date": "2026-09-19",
+    "highlights": [
+      "Appariez et gérez des hôtes distants en SSH depuis les Réglages, avec mot de passe, installation et reconnexion au lancement.",
+      "Configurez l'amélioration de prompt (gabarit, modèle et raisonnement) depuis la carte Réglages IA.",
+      "Réordonnez les modèles sélectionnés par glisser-déposer, et ajoutez un niveau « omettre la réflexion » sans surcharge fournisseur.",
+      "Redimensionnez ou réduisez la barre latérale, et rétablissez la largeur par défaut d'une barre ou d'un panneau d'un double-clic.",
+      "Gérez les projets dans une archive groupée avec inspecteur, et importez chaque type depuis son propre établi.",
+      "Analysez et importez en lot les skills et serveurs MCP d'autres outils d'agent.",
+      "L'extra de la barre de menus macOS reste sur un status item natif, avec des raccourcis de session limités dans le plateau.",
+      "Les builds macOS officiels sont signés, notariés, et gèrent les mises à jour in-app.",
+      "La DMG macOS signée s'installe en deux icônes ; la note d'ouverture non signée reste uniquement dans le ZIP.",
+      "Review ne s'ouvre que sur action explicite, et l'ouverture d'une session atterrit sur le dernier tour.",
+      "Une file d'envoi bloquée se rétablit, et les origines de steering falsifiées sont ignorées.",
+    ],
+  },
+
+  {
     "version": "0.15.0",
     "date": "2026-09-17",
     "highlights": [

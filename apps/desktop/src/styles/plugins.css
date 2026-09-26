@@ -851,9 +851,16 @@
   flex: 1 1 auto;
 }
 
+/* One plugin setting list mixes string/number rows (field-height inputs),
+   switches and enum rows, so an enum dropdown takes the same field metric as
+   the input in the row above it instead of the Settings-row pill size. */
 .plugins-setting-control > .settings-menu-select-anchor {
   min-width: 0;
   max-width: 100%;
+}
+
+.plugins-setting-control .settings-menu-select-trigger {
+  height: var(--ds-field-height);
 }
 
 .plugins-setting-json {
@@ -1030,6 +1037,12 @@
   text-align: left;
 }
 
+/* Keep the keyboard focus ring inside the tile's overflow clip. */
+.plugins-card-hit:focus-visible {
+  outline-offset: -3px;
+  border-radius: var(--radius-lg);
+}
+
 .plugins-card-head {
   display: flex;
   align-items: center;
@@ -1190,6 +1203,13 @@
   min-width: 0;
 }
 
+/* Same list, same right column: the provider dropdown sits directly above the
+   custom-URL input row, so it takes the shared field metric rather than the
+   compact Settings-row pill size. */
+.plugins-market-settings-control .settings-menu-select-trigger {
+  height: var(--ds-field-height);
+}
+
 @media (max-width: 720px) {
   .plugins-market-settings-head,
   .plugins-market-settings-row {
@@ -1241,7 +1261,8 @@
 .plugins-sheet-layer {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  /* z-dialog: the sheet is a dialog surface, so it stays under leaf popups. */
+  z-index: 40;
   display: flex;
   justify-content: flex-end;
 }
@@ -1295,11 +1316,10 @@
   app-region: no-drag;
 }
 
-/* The route surface keeps a transform after its entry animation, so this
-   fixed layer stacks inside it and the opaque titlebar band still paints over
-   the top of the sheet. Reserve the band on every platform: on macOS it would
-   otherwise clip the title row, and on Windows/Linux the conversation pane owns
-   the band's top-right 120px — exactly where the close button lands. */
+/* The sheet keeps `--ds-toolbar-height` at the top on every platform: on
+   Windows/Linux the renderer-drawn window controls own that corner at
+   z-index 200 and stay above any overlay; on macOS the same reserve keeps
+   the title row out of the native traffic-light cluster. */
 .plugins-sheet {
   padding-top: var(--ds-toolbar-height);
 }
@@ -1735,7 +1755,8 @@
 .plugins-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  /* z-dialog: leaf popups (z-index 60) and toasts (50) stay above the veil. */
+  z-index: 40;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1786,6 +1807,7 @@
 }
 
 .plugins-modal-title {
+  overflow-wrap: anywhere;
   margin: 0;
   color: var(--ds-text-primary);
   font-size: var(--text-base-plus);
@@ -1794,6 +1816,7 @@
 }
 
 .plugins-modal-subtitle {
+  overflow-wrap: anywhere;
   margin: 3px 0 0;
   color: var(--ds-text-muted);
   font-size: var(--text-sm-plus);
@@ -1969,6 +1992,7 @@
 }
 
 .plugins-install-outcome {
+  overflow-wrap: anywhere;
   margin: 0;
   color: var(--ds-text-primary);
   font-size: var(--text-md);

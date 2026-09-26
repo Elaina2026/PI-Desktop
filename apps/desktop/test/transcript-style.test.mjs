@@ -56,8 +56,9 @@ test("tool rows render structured blocks instead of dumping JSON", async () => {
   assert.doesNotMatch(transcriptSource, /getToolSections|hasToolSections/);
   assert.doesNotMatch(permissionSource, /JSON\.stringify|formatToolValue/);
   assert.match(transcriptSource, /buildToolPresentation\(message, \{\n\s+hideSummaryArg: true,/);
-  // Blocks stay behind the open guard so streaming ticks stay cheap.
-  assert.match(transcriptSource, /open && hasDetails\s*\?\s*buildToolPresentation/);
+  // Formatting remains lazy and the cached blocks are read only while visible.
+  assert.match(transcriptSource, /if \(variant !== "topology" && open && hasDetails && disclosure\.parentVisible/);
+  assert.match(transcriptSource, /const blocks = variant !== "topology" && open && hasDetails \? presentation\.current\?\.blocks : null/);
   assert.match(transcriptSource, /<ToolChips chips=\{chips\} \/>/);
   assert.match(transcriptSource, /<ToolDetailBlocks blocks=\{blocks\} plain=\{runHead\} \/>/);
   assert.match(permissionSource, /<ToolDetailBlocks blocks=\{argBlocks\} \/>/);
@@ -91,6 +92,11 @@ test("tool block bodies stay bounded and role-coded", () => {
   assert.ok(fileItem);
   assert.match(fileItem, /display:\s*block;/);
   assert.match(fileItem, /width:\s*100%;/);
+  // A column flex list with a height cap shrinks every row whose overflow
+  // is not visible: the automatic minimum size is zero, so a long result is
+  // pressed into a sliver and the paths are clipped away. Rows keep their
+  // content height and the list scrolls instead.
+  assert.match(fileItem, /flex:\s*none;/);
   // stderr and error notes carry the error hue, host notices stay neutral.
   assert.match(stylesSource, /\.tool-row-content\.is-error \{[\s\S]*?var\(--ds-error\)/);
   assert.match(stylesSource, /\.tool-chip\.is-error \{[\s\S]*?var\(--ds-error\)/);
@@ -114,6 +120,89 @@ test("tool details do not add a second visual indent", () => {
   // Thinking and topology have separate visual hierarchies and keep their
   // dedicated layout rules rather than inheriting the flat tool detail rule.
   assert.match(stylesSource, /\.subagent-topology-node > \.tool-row-body,[\s\S]*?margin-left:\s*38px;/);
+});
+
+/*
+ * The width regression this guards: a content-sized `inline-flex` disclosure
+ * header stopped at its own label, so a tool call never used the conversation
+ * width — it stayed narrower than the prose, ignored the dragged band width,
+ * and let a long label overrun the chip. The header row now claims the band at
+ * every level, the label ellipsizes, and the caret trails the row.
+ */
+test("tool-call disclosure headers span the conversation band", () => {
+  const header = stylesSource.match(/\n\.tool-activity-header \{([^}]*)\}/)?.[1];
+  assert.ok(header);
+  assert.match(header, /display:\s*flex;/);
+  assert.match(header, /width:\s*100%;/);
+  assert.match(header, /min-width:\s*0;/);
+  // A chip default (content width) or a max-width cap would freeze the row.
+  assert.doesNotMatch(header, /inline-flex|max-width/);
+
+  const label = stylesSource.match(/\n\.tool-activity-label \{([^}]*)\}/)?.[1];
+  assert.ok(label);
+  assert.match(label, /text-overflow:\s*ellipsis;/);
+  assert.match(label, /min-width:\s*0;/);
+  assert.match(label, /white-space:\s*nowrap;/);
+
+  const caret = stylesSource.match(/\n\.tool-activity-caret \{([^}]*)\}/)?.[1];
+  assert.ok(caret);
+  assert.match(caret, /margin-inline-start:\s*auto;/);
+
+  // No level keeps its own width or label override: every disclosure header
+  // resolves through the single base row.
+  assert.doesNotMatch(
+    stylesSource,
+    /\.(process-activity-group|turn-process) > \.tool-activity-header[^{]*\{[^}]*width:/,
+  );
+  assert.doesNotMatch(
+    stylesSource,
+    /\.tool-activity-group\.has-subagents \.tool-activity-header \{[^}]*width:/,
+  );
+
+  // A tool row itself owns the column so no parent display mode can shrink it.
+  const row = stylesSource.match(/\n\.tool-row \{([^}]*)\}/)?.[1];
+  assert.ok(row);
+  assert.match(row, /width:\s*100%;/);
+  assert.match(row, /min-width:\s*0;/);
+});
+
+test("delegation node copy wraps within the responsive card", () => {
+  const metrics = stylesSource.match(
+    /\.subagent-activity-metrics \{([^}]*)\}/,
+  )?.[1];
+  assert.ok(metrics);
+  assert.match(metrics, /overflow-wrap:\s*anywhere;/);
+  assert.match(metrics, /white-space:\s*normal;/);
+
+  const titleRow = stylesSource.match(
+    /\.subagent-topology-node-title-row \{([^}]*)\}/,
+  )?.[1];
+  assert.ok(titleRow);
+  assert.match(titleRow, /flex-wrap:\s*wrap;/);
+
+  const title = stylesSource.match(
+    /\.subagent-topology-node-title \{([^}]*)\}/,
+  )?.[1];
+  assert.ok(title);
+  assert.match(title, /-webkit-line-clamp:\s*2;/);
+  assert.match(title, /overflow-wrap:\s*anywhere;/);
+  assert.match(title, /white-space:\s*normal;/);
+  assert.doesNotMatch(title, /white-space:\s*nowrap;/);
+
+  const summary = stylesSource.match(
+    /\.subagent-topology-node-summary \{([^}]*)\}/,
+  )?.[1];
+  assert.ok(summary);
+  assert.match(summary, /-webkit-line-clamp:\s*2;/);
+  assert.match(summary, /overflow-wrap:\s*anywhere;/);
+  assert.match(summary, /white-space:\s*normal;/);
+
+  const steps = stylesSource.match(
+    /\.subagent-topology-node-steps \{([^}]*)\}/,
+  )?.[1];
+  assert.ok(steps);
+  assert.match(steps, /overflow-wrap:\s*anywhere;/);
+  assert.match(steps, /white-space:\s*normal;/);
 });
 
 test("assistant turns stay transparent full-width prose", () => {
@@ -143,6 +232,31 @@ test("assistant turns stay transparent full-width prose", () => {
     stylesSource,
     /\.tool-activity-group\.has-subagents\s*\{[^}]*background:\s*var\(--ds-tile\)/,
   );
+});
+test("assistant error cards follow the responsive transcript column", () => {
+  const errorCard = stylesSource.match(/\n\.message-error \{([^}]*)\}/)?.[1];
+  assert.ok(errorCard);
+  assert.match(errorCard, /width:\s*100%;/);
+  assert.doesNotMatch(errorCard, /max-width\s*:/);
+  assert.match(
+    stylesSource,
+    /\.message-row\.assistant \.message-col,\s*\.message-row\.system \.message-col,\s*\.message-row\.tool \.message-col \{\s*width:\s*min\(100%,\s*var\(--chat-prose-max-width,\s*720px\)\);/,
+  );
+});
+
+test("decision and outcome cards follow the responsive transcript band", () => {
+  const cardRules = [
+    stylesSource.match(/\n\.permission-card \{([^}]*)\}/)?.[1],
+    stylesSource.match(/\n\.asktool-card \{([^}]*)\}/)?.[1],
+    stylesSource.match(/\n\.turn-outcome-card \{([^}]*)\}/)?.[1],
+  ];
+  for (const rule of cardRules) {
+    assert.ok(rule);
+    assert.match(
+      rule,
+      /width:\s*min\(100%,\s*var\(--chat-prose-max-width,\s*720px\)\);/,
+    );
+  }
 });
 
 test("transcript density and hover actions are quiet", () => {
@@ -314,7 +428,7 @@ test("message toolbars are icon-only with hover tooltips", () => {
 });
 
 test("streaming assistant turns hide answer copy until idle", () => {
-  assert.ok(transcriptSource.includes("{complete ? ("));
+  assert.ok(transcriptSource.includes("{complete && actionMessage ? ("));
   assert.ok(
     transcriptSource.includes(
       '<CopyButton text={content} label={t("chat.copy")} />',
@@ -346,7 +460,7 @@ test("assistant context inspector keeps a compact summary and retry action wired
   assert.match(inspectorSource, /contextOccupancyTokens\(usage\)/);
   assert.match(inspectorSource, /usage\.cacheReadTokens/);
   assert.doesNotMatch(inspectorSource, /turnUsage\.cacheReadTokens/);
-  assert.match(inspectorSource, /createPortal\(popover, document\.body\)/);
+  assert.match(inspectorSource, /portalToBody\(popover\)/);
   assert.match(inspectorSource, /getBoundingClientRect\(\)/);
   assert.match(inspectorSource, /addEventListener\("scroll", handleViewportChange, true\)/);
   assert.match(inspectorSource, /ResizeObserver\(updatePopoverPosition\)/);

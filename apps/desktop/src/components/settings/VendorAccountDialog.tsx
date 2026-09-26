@@ -6,7 +6,8 @@
  * entitlements, so this dialog shows what the account can actually run rather
  * than every model the vendor publishes. Choosing among those rows is
  * `ModelSelectionPanes`, the same picker the AI service dialog renders, so an
- * account is not a reduced version of a service.
+ * account is not a reduced version of a service: the account's own list and the
+ * models it may run are both on screen from the first paint (D625).
  */
 import { useEffect, useState } from "react";
 import {
@@ -138,6 +139,12 @@ export function VendorAccountDialog({
             listTitle={t("settings.accountModels")}
             busy={saving}
             onReload={discovery.reload}
+            lookupContext={{
+              baseUrl: provider.baseUrl,
+              vendorKey: provider.vendorKey,
+              providerId: provider.id,
+            }}
+            apiStyle={provider.apiStyle ?? ""}
           />
         </div>
 

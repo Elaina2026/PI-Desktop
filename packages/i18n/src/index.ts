@@ -1,4 +1,4 @@
-export { en, type EnglishCatalog } from "./locales/en/index.js";
+export { en, type EnglishCatalog, type FullEnglishCatalog } from "./locales/en/index.js";
 export { default as enDefault } from "./locales/en/index.js";
 export { zhCN } from "./locales/zh-CN/index.js";
 export { default as zhCNDefault } from "./locales/zh-CN/index.js";
@@ -16,8 +16,10 @@ export { ko } from "./locales/ko/index.js";
 export { default as koDefault } from "./locales/ko/index.js";
 export { vi } from "./locales/vi/index.js";
 export { default as viDefault } from "./locales/vi/index.js";
+export { ptBR } from "./locales/pt-BR/index.js";
+export { default as ptBRDefault } from "./locales/pt-BR/index.js";
 
-import { en, type EnglishCatalog } from "./locales/en/index.js";
+import { en, type EnglishCatalog, type FullEnglishCatalog } from "./locales/en/index.js";
 import { zhCN } from "./locales/zh-CN/index.js";
 import { zhTW } from "./locales/zh-TW/index.js";
 import { tr } from "./locales/tr/index.js";
@@ -26,6 +28,7 @@ import { fr } from "./locales/fr/index.js";
 import { de } from "./locales/de/index.js";
 import { ko } from "./locales/ko/index.js";
 import { vi } from "./locales/vi/index.js";
+import { ptBR } from "./locales/pt-BR/index.js";
 
 export const defaultLocale = "en";
 
@@ -43,12 +46,13 @@ export const supportedLocales = [
   { id: "fr", nativeName: "Français", englishName: "French" },
   { id: "ko", nativeName: "한국어", englishName: "Korean" },
   { id: "vi", nativeName: "Tiếng Việt", englishName: "Vietnamese" },
+  { id: "pt-BR", nativeName: "Português (Brasil)", englishName: "Portuguese (Brazil)" },
 ] as const;
 
 export type AppLocale = (typeof supportedLocales)[number]["id"];
 export type AppLanguageSetting = "auto" | AppLocale;
 
-export const catalogs: Record<AppLocale, EnglishCatalog> = {
+export const catalogs: Record<AppLocale, FullEnglishCatalog> = {
   en,
   "zh-CN": zhCN,
   "zh-TW": zhTW,
@@ -58,7 +62,8 @@ export const catalogs: Record<AppLocale, EnglishCatalog> = {
   fr,
   ko,
   vi,
-};
+  "pt-BR": ptBR,
+} as unknown as Record<AppLocale, FullEnglishCatalog>;
 
 export function isAppLocale(value: string | null | undefined): value is AppLocale {
   return supportedLocales.some((locale) => locale.id === value);
@@ -107,11 +112,13 @@ export function resolveLocale(input?: string | null): AppLocale {
   if (lower === "fr" || lower.startsWith("fr-")) return "fr";
   if (lower === "ko" || lower.startsWith("ko-")) return "ko";
   if (lower === "vi" || lower.startsWith("vi-")) return "vi";
+  if (lower === "pt" || lower.startsWith("pt-")) return "pt-BR";
   const exact = supportedLocales.find((locale) => locale.id.toLowerCase() === lower);
   if (exact) return exact.id;
   const prefix = supportedLocales.find(
     (locale) =>
-      locale.id !== "zh-CN" && lower.startsWith(`${locale.id.toLowerCase()}-`),
+      lower.startsWith(`${locale.id.toLowerCase()}-`) ||
+      locale.id.toLowerCase().startsWith(`${lower}-`),
   );
   if (prefix) return prefix.id;
   return "en";
@@ -132,3 +139,4 @@ export function flattenCatalog(
   }
   return out;
 }
+
