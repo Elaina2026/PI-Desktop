@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import type {
   AppSettings,
   GlobalPermissionMode,
+  Mode,
   PluginScenicThemesDestinationMeta,
   ShortcutPlatform,
 } from "@pi-desktop/shared";
@@ -533,11 +534,13 @@ export function SettingsPage() {
                     aria-hidden="true"
                     aria-label={t("settings.mode")}
                   >
-                    {[
-                      { value: "agent", label: t("settings.modeAgent") },
-                      { value: "plan", label: t("settings.modePlan") },
-                      { value: "goal", label: t("settings.modeGoal") },
-                    ].map(({ value, label }) => (
+                    {(
+                      [
+                        { value: "agent", label: t("settings.modeAgent") },
+                        { value: "plan", label: t("settings.modePlan") },
+                        { value: "goal", label: t("settings.modeGoal") },
+                      ] as const satisfies readonly { value: Mode; label: string }[]
+                    ).map(({ value, label }) => (
                       <button
                         key={value}
                         type="button"

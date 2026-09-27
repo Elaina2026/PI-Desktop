@@ -1,4 +1,4 @@
-# ADR 0224: Settings Usages Dashboard with Token Heatmap and Model Pricing
+# ADR 0308: Settings Usages Dashboard with Token Heatmap and Model Pricing
 
 - Status: Accepted (amends ADR 0173)
 - Date: 2026-09-13

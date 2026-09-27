@@ -81,9 +81,6 @@ pub(crate) fn plan_directory(
     kind: &'static str,
     create: bool,
 ) -> Result<(PathBuf, PathBuf)> {
-    if create && !workspace_root.exists() {
-        let _ = fs::create_dir_all(workspace_root);
-    }
     let root = workspace_root
         .canonicalize()
         .map_err(|_| plan_error("PLAN_WORKSPACE_REQUIRED"))?;
