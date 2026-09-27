@@ -604,7 +604,7 @@ export function matchNamedPreset(input: {
   const url = normalizeEndpointUrl(input.baseUrl);
   if (url) {
     const byUrl = presetByUrl(url);
-    if (byUrl) return byUrl;
+    if (byUrl && byUrl.authKind !== "oauth") return byUrl;
   }
   if (input.apiStyle === OPENCODE_GO_API_STYLE) {
     return NAMED_ENDPOINT_PRESETS.find((preset) => preset.id === OPENCODE_GO_API_STYLE);
@@ -612,7 +612,9 @@ export function matchNamedPreset(input: {
   const key = normalizedVendorKey(input.vendorKey);
   if (!key || key === "custom") return undefined;
   return NAMED_ENDPOINT_PRESETS.find(
-    (preset) => preset.vendorKey === key || preset.aliases?.includes(key) || preset.id === key,
+    (preset) =>
+      preset.authKind !== "oauth" &&
+      (preset.vendorKey === key || preset.aliases?.includes(key) || preset.id === key),
   );
 }
 
