@@ -459,7 +459,7 @@ export function SettingsPage() {
 
           {tab === "ai" && settings && (
             <div className="settings-stack">
-              <SettingsCard title={t("mode.modes", "Modes")}>
+              <SettingsCard title={t("settings.mode", "Mode")}>
                 <SettingsRow
                   title={t("settings.mode", "Mode")}
                   description={t("settings.modeDesc", "Default mode and permission level for new tasks")}
@@ -469,7 +469,7 @@ export function SettingsPage() {
                     open={defaultModeMenuOpen}
                     onClose={() => setDefaultModeMenuOpen(false)}
                     menuClassName="settings-theme-menu"
-                    label={t("mode.modes", "Modes")}
+                    label={t("settings.mode", "Mode")}
                     align="end"
                     trigger={(ref) => (
                       <button
@@ -478,7 +478,7 @@ export function SettingsPage() {
                         className="settings-theme-trigger"
                         aria-haspopup="listbox"
                         aria-expanded={defaultModeMenuOpen}
-                        aria-label={t("mode.modes", "Modes")}
+                        aria-label={t("settings.mode", "Mode")}
                         onClick={() => setDefaultModeMenuOpen((open) => !open)}
                       >
                         <span className="settings-theme-trigger-label">

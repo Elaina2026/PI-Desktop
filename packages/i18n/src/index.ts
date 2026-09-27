@@ -52,17 +52,36 @@ export const supportedLocales = [
 export type AppLocale = (typeof supportedLocales)[number]["id"];
 export type AppLanguageSetting = "auto" | AppLocale;
 
+function withFallback<T extends Record<string, unknown>>(
+  catalog: T,
+  fallback: Record<string, unknown>,
+): T {
+  const result: Record<string, unknown> = { ...fallback, ...catalog };
+  for (const [key, value] of Object.entries(fallback)) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const child = catalog[key];
+      result[key] = withFallback(
+        child && typeof child === "object" && !Array.isArray(child)
+          ? (child as Record<string, unknown>)
+          : {},
+        value as Record<string, unknown>,
+      );
+    }
+  }
+  return result as T;
+}
+
 export const catalogs: Record<AppLocale, FullEnglishCatalog> = {
   en,
-  "zh-CN": zhCN,
-  "zh-TW": zhTW,
-  tr,
-  de,
-  es,
-  fr,
-  ko,
-  vi,
-  "pt-BR": ptBR,
+  "zh-CN": withFallback(zhCN, en),
+  "zh-TW": withFallback(zhTW, en),
+  tr: withFallback(tr, en),
+  de: withFallback(de, en),
+  es: withFallback(es, en),
+  fr: withFallback(fr, en),
+  ko: withFallback(ko, en),
+  vi: withFallback(vi, en),
+  "pt-BR": withFallback(ptBR, en),
 } as unknown as Record<AppLocale, FullEnglishCatalog>;
 
 export function isAppLocale(value: string | null | undefined): value is AppLocale {
