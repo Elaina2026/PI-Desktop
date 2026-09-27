@@ -1,6 +1,5 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { APP_NAME } from "@pi-desktop/shared";
 
 /**
  * The two directories that define an installation, and the development split
@@ -23,7 +22,10 @@ import { APP_NAME } from "@pi-desktop/shared";
  */
 
 /** `userData` directory of a development installation, beside the shipped one. */
-export const DEVELOPMENT_INSTALLATION_NAME = `${APP_NAME} Dev`;
+// ponytail: hardcoded — the userData directory name is a stable filesystem
+// path that must not follow brand renames, otherwise existing developer state
+// would be stranded in the old directory.
+export const DEVELOPMENT_INSTALLATION_NAME = "PI-Desktop Dev";
 
 /** Data directory of a shipped installation, below the user's home. */
 export const INSTALLATION_DATA_DIR_NAME = ".pi-desktop";

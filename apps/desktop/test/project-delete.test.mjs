@@ -225,9 +225,9 @@ test("the sidebar menu item arms first and only a live task reaches the dialog",
   assert.match(props, /\.map\(\(session\) => session\.id\)/, "Sidebar passes session ids");
 });
 
-test("projects page delete action opens the confirmation dialog directly", () => {
+test("projects page delete action routes through the two-step handler", () => {
   const handler = deleteHandler(projectsSource);
-  assert.match(handler, /setDeleteFor\(\{/, "ProjectsPage opens confirmation dialog on click");
+  assert.match(handler, /requestDeleteProject\(/, "ProjectsPage routes the click through the two-step handler");
   assert.match(projectsSource, /t\("project\.delete"\)/, "ProjectsPage keeps delete label");
 
   const props = dialogProps(projectsSource);

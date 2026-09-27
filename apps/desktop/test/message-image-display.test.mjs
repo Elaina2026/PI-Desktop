@@ -44,7 +44,7 @@ test("user message image attachments render as thumbnails", () => {
   assert.match(transcript, /className="message-attachment-image"/);
   assert.match(
     transcript,
-    /openFileInWorkPanel\(attachment\.ref, attachment\.mimeType\)/,
+    /openLightbox\(dataUrl, attachment\.name\)/,
   );
   assert.match(
     transcript,

@@ -20,11 +20,14 @@ export const tr = {
   },
   /** Verbs and states that mean the same thing wherever they appear. */
   common: {
+    refresh: "Yenile",
     close: "Kapat",
     cancel: "İptal",
     save: "Kaydet",
     saving: "Kaydediliyor…",
     loading: "Yükleniyor…",
+    copy: "Kopyala",
+    copied: "Kopyalandı",
   },
   window: {
     minimize: "Simge durumuna küçült",
