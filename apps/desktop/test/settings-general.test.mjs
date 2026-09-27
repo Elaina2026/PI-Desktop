@@ -169,10 +169,10 @@ test("Basics and AI tabs expose their respective app and AI controls", () => {
   assert.doesNotMatch(settingsPageSource, /commandShellConfigured/);
   assert.match(
     aiSource,
-    /defaultPermissionMode: mode as GlobalPermissionMode/,
+    /defaultPermissionMode: targetConfig\.permissionMode as GlobalPermissionMode/,
   );
-  assert.match(aiSource, /<SettingsMenuSelect\b/);
-  assert.match(aiSource, /"accept-edits"/);
+  assert.match(aiSource, /<AnchoredMenu\b/);
+  assert.match(aiSource, /UNIFIED_MODES/);
   // The AI tab keeps the Settings picker control: a native <select> popup is
   // platform-drawn and cannot carry the shared menu surface or its check mark.
   assert.doesNotMatch(aiSource, /<select/);
