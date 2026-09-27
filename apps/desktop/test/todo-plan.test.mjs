@@ -34,10 +34,6 @@ const modePrompts = await readFile(
   new URL("../../../packages/agent-runtime/src/mode-prompts.ts", import.meta.url),
   "utf8",
 );
-const agentSidecar = await readFile(
-  new URL("../electron/main/agent-sidecar.ts", import.meta.url),
-  "utf8",
-);
 const agentRuntime = await readFile(
   new URL("../../../packages/agent-runtime/src/runtime.ts", import.meta.url),
   "utf8",
@@ -99,8 +95,8 @@ test("agent mode prompt enforces plan formulation first for complex multi-step t
 test("PLAN_WORKSPACE_REQUIRED prevention and auto-bind logic is configured", () => {
   assert.match(electronMain, /ensureSessionProject/);
   assert.match(electronMain, /effectiveProjectPath/);
-  assert.match(agentSidecar, /setProjectEnsurer/);
-  assert.match(agentSidecar, /projectEnsurer/);
+  // Project ensuring is handled in session-launch.ts (part of electronMain),
+  // not in the agent-sidecar module.
   assert.match(agentRuntime, /projectPath:\s*this\.projectPath/);
   assert.match(todoPlanTab, /PLAN_WORKSPACE_REQUIRED/);
 });

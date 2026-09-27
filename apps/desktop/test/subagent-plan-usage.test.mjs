@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { readMainSource } from "./helpers/main-source.mjs";
-import { resolveOpenablePath } from "../electron/main/fs-panel.ts";
+import { resolveOpenablePath } from "../../../packages/host-runtime/src/workspace-files.ts";
 
 test("resolveOpenablePath resolves ~/.agents and subagent extra roots", () => {
   const agentsRoot = join(homedir(), ".agents");

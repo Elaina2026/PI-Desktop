@@ -23,7 +23,7 @@ import {
  * isolated as the detached panel window it shares a session partition with.
  */
 
-const read = (path) => readFileSync(resolve(path), "utf8");
+const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const panelSource = read("src/components/workpanel/WorkPanel.tsx");
 const viewTabSource = read("src/components/workpanel/PluginViewTab.tsx");
 const viewHostSource = read("electron/main/plugin-view-host.ts");
