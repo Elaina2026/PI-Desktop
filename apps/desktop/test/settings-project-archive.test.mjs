@@ -208,11 +208,9 @@ test("pinned projects use a distinct star glyph", () => {
 });
 
 test("project archive row menu closes on escape and outside press", () => {
-  assert.match(projectsPageSource, /addEventListener\("mousedown", onPointerDown\)/);
-  assert.match(projectsPageSource, /addEventListener\("keydown", onKeyDown\)/);
-  assert.match(projectsPageSource, /removeEventListener\("mousedown", onPointerDown\)/);
-  assert.match(projectsPageSource, /removeEventListener\("keydown", onKeyDown\)/);
-  assert.match(projectsPageSource, /"Escape"[^]*setMenuFor\(null\)/);
+  // ProjectsPage delegates dismissal to AnchoredMenu via onClose callback.
+  assert.match(projectsPageSource, /<AnchoredMenu\b/);
+  assert.match(projectsPageSource, /onClose=\{?\(\) => setMenuFor\(null\)/);
 });
 
 test("project archive styles group archived rows instead of hiding them", () => {

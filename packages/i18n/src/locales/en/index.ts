@@ -8,8 +8,8 @@ export const en = {
   },
   startup: {
     slowTitle: "Still starting…",
-    slowBody: "PI-Desktop is taking longer than usual to reach your local service. It may still finish on its own — you can wait, or collect the logs first.",
-    stalledTitle: "PI-Desktop couldn't finish starting",
+    slowBody: "Pi-dex is taking longer than usual to reach your local service. It may still finish on its own — you can wait, or collect the logs first.",
+    stalledTitle: "Pi-dex couldn't finish starting",
     stalledBody: "This window never received your chats and settings, so there is nothing to show yet. Nothing was deleted — your data is still on disk.",
     retrying: "Trying again…",
     copyDiagnostics: "Copy diagnostics",
@@ -603,7 +603,7 @@ export const en = {
   settings: {
     power: "Power",
     keepAwakeWhileRunning: "Keep computer awake",
-    keepAwakeWhileRunningDesc: "Prevent idle system sleep while PI-Desktop is running. The display may turn off; manual sleep and closing the lid still work.",
+    keepAwakeWhileRunningDesc: "Prevent idle system sleep while Pi-dex is running. The display may turn off; manual sleep and closing the lid still work.",
     imageModel: "Image generation model",
     imageModelUnset: "Not configured",
     imageModelUnavailable: "Currently unavailable",
@@ -701,7 +701,7 @@ sklm: {
       "This provider comes from the plugin \"{{plugin}}\", which supplies its endpoint and models. Enable or disable it on the Plugins page.",
     pluginProviderKey: "API key",
     pluginProviderKeyHint:
-      "Stored in PI-Desktop and used by the runtime. The plugin never receives it.",
+      "Stored in Pi-dex and used by the runtime. The plugin never receives it.",
     pluginProviderKeyRemove: "Remove key",
     pluginProviderKeySaved: "API key saved",
     pluginProviderKeyRemoved: "API key removed",
@@ -1802,7 +1802,7 @@ sklm: {
     draft: "Draft",
   },
   scheduled: {
-    description: "Run recurring agent tasks while PI-Desktop is open.",
+    description: "Run recurring agent tasks while Pi-dex is open.",
     edit: "Edit task",
     hourlyHint: "Runs every hour, starting one hour after saving or enabling. Restarting the app starts a new interval.",
     morning: "Morning",
@@ -1816,7 +1816,7 @@ sklm: {
     legacyHint: "Edit and save a schedule to enable automatic runs.",
     time: "Time",
     weekday: "Day of the week",
-    localTimeHint: "Uses this computer’s local timezone. Keep PI-Desktop running; missed runs are skipped.",
+    localTimeHint: "Uses this computer’s local timezone. Keep Pi-dex running; missed runs are skipped.",
     projectHint: "The current project is saved with this schedule. Runs use the default model.",
     autoPermissionHint: "Auto can run restricted actions without asking. Use it only for tasks you trust.",
     unavailableModel: "{{provider}} / {{model}} (unavailable)",
@@ -2291,9 +2291,9 @@ importConfirm: "Imported extensions run inside the agent process with the same a
         "Can spend your model quota on a one-shot completion. The plugin never receives your API keys.",
       "agent.extension": "Runs ExtensionAPI modules inside the agent process with the same access as the agent's own tools. Enable only code you trust.",
       "provider.register":
-        "Adds the providers this plugin defines to Settings' provider list. The plugin supplies the endpoint and models; your API key stays in PI-Desktop.",
+        "Adds the providers this plugin defines to Settings' provider list. The plugin supplies the endpoint and models; your API key stays in Pi-dex.",
       "desktop.control":
-        "Lets the plugin invoke the reviewed PI-Desktop control catalog. Destructive operations still require confirm=true; the MCP bearer token is never exposed.",
+        "Lets the plugin invoke the reviewed Pi-dex control catalog. Destructive operations still require confirm=true; the MCP bearer token is never exposed.",
       "models.list": "Can see which models you have signed in for. It does not receive keys.",
       "session.read":
         "Can read the conversation the current tool call is operating on, including tool results.",
@@ -2308,7 +2308,7 @@ importConfirm: "Imported extensions run inside the agent process with the same a
       "audio.capture.background": "Captures the microphone while the plugin runs in the background, with no panel open.",
       "audio.playback.background": "Plays audio the plugin streams, even when no panel is open.",
       "speech.adapter.register": "Can add a transcription or speech protocol that uses your existing provider keys. The plugin never sees the key.",
-      "keyboard.globalShortcut": "Registers system-wide keyboard shortcuts that trigger this plugin's own commands while PI-Desktop is not focused.",
+      "keyboard.globalShortcut": "Registers system-wide keyboard shortcuts that trigger this plugin's own commands while Pi-dex is not focused.",
       "net.websocket": "Opens real-time two-way connections to the hostnames the plugin declared.",
       "bus.publish": "Can send messages on the topics it declared.",
       "bus.subscribe": "Can receive messages on the topics it declared.",
@@ -2542,7 +2542,7 @@ importConfirm: "Imported extensions run inside the agent process with the same a
     unsupportedGlibc:
       "This Linux build needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36+).",
     dbSchemaTooNew:
-      "This PI-Desktop is older than your local data (data schema {{found}}, this build supports {{supported}}). Install the newer PI-Desktop that last opened this data, or a later version.",
+      "This Pi-dex is older than your local data (data schema {{found}}, this build supports {{supported}}). Install the newer Pi-dex that last opened this data, or a later version.",
     archMismatch:
       "This is the {{buildArch}} build running on a {{machineArch}} machine, so it runs through translation and is slower. Install the {{machineArch}} build instead.",
     dismissArchMismatch: "Dismiss",

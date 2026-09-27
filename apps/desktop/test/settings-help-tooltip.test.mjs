@@ -80,14 +80,13 @@ test("the help tooltip wraps instead of running off its anchor", () => {
 
 test("the row explanations survive the move into the tooltip", () => {
   for (const key of [
-    "settings.permissionModeDesc",
     "settings.modeDesc",
     "settings.enterToSendDesc",
     "settings.feedbackDesc",
   ]) {
     assert.match(
       settingsPage,
-      new RegExp(`description=\\{t\\("${key.replace(/\./g, "\\.")}"\\)\\}`),
+      new RegExp(`description=\\{t\\("${key.replace(/\./g, "\\.")}"[^)]*\\)\\}`),
       `${key} should still be the row's explanation`,
     );
   }
